@@ -1,0 +1,18 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/Cord.Core/Cord.Core.csproj">
+      <Platform Project="Any CPU" />
+    </Project>
+    <Project Path="src/Cord.Windows/Cord.Windows.csproj">
+      <Platform Project="x64" />
+    </Project>
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Cord.Core.Tests/Cord.Core.Tests.csproj">
+      <Platform Project="Any CPU" />
+    </Project>
+  </Folder>
+</Solution>

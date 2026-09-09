@@ -1,0 +1,9 @@
+.local/
+**/bin/
+**/obj/
+artifacts/
+.vs/
+*.user
+TestResults/
+*.log
+.DS_Store

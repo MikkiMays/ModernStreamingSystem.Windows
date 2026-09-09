@@ -1,0 +1,16 @@
+{
+  "compiler": {
+    "version": "7.1.0",
+    "file": "innosetup-7.1.0-x64.exe",
+    "url": "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe",
+    "sha256": "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f",
+    "publisher": "Pyrsys B.V."
+  },
+  "webview2": {
+    "retrievedAt": "2026-09-08",
+    "file": "MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+    "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/a8f5ad97-0b01-41e5-9245-e8fc9ba9b311/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+    "sha256": "e7fa35755196ad9223596ef021a1ce6799509142eaa40ba35f634026be50b831",
+    "publisher": "Microsoft Corporation"
+  }
+}

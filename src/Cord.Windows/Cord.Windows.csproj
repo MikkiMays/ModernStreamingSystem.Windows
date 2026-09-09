@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSdkDeploymentManagerInitialize>false</WindowsAppSdkDeploymentManagerInitialize>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>Cord</AssemblyName>
+    <RootNamespace>Cord.Windows</RootNamespace>
+    <ApplicationIcon>Assets\Cord.ico</ApplicationIcon>
+    <Product>Cord</Product>
+    <Version>0.2.1</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4191.47" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
+    <ProjectReference Include="../Cord.Core/Cord.Core.csproj" />
+    <Content Include="Assets\Cord.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <!-- Unpackaged WinUI's MRT Core path currently omits app PRI/XBF from dotnet publish.
+       https://github.com/microsoft/WindowsAppSDK/issues/6720 -->
+  <Target Name="CordPublishXamlResources" AfterTargets="Publish" DependsOnTargets="$(GenerateProjectPriFile)">
+    <Error Condition="!Exists('$(ProjectPriFullPath)')" Text="The Cord resource index was not generated. Refusing an incomplete Windows publication." />
+    <ItemGroup>
+      <_CordXbf Include="$(TargetDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="$(ProjectPriFullPath)" DestinationFiles="$(PublishDir)$(ProjectPriFileName)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_CordXbf)" DestinationFiles="@(_CordXbf->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

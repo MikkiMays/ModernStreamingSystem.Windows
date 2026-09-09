@@ -1,0 +1,33 @@
+name: Verify and publish Windows client
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install pinned SDK and verify checksum
+        run: .\scripts\bootstrap.ps1
+      - name: Restore locked dependencies
+        run: .\.local\dotnet\dotnet.exe restore Cord.slnx --locked-mode -p:Platform=x64
+      - name: Verify formatting
+        run: .\.local\dotnet\dotnet.exe format whitespace Cord.slnx --verify-no-changes --no-restore
+      - name: Test and publish
+        run: .\scripts\build.ps1 -Publish
+      - name: Verify unpackaged WinUI resources
+        run: .\scripts\verify-publication.ps1
+      - name: Build offline installer
+        run: .\scripts\build-installer.ps1 -SkipPublish
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: Cord-win-x64
+          path: |
+            artifacts/Cord-win-x64.zip
+            artifacts/Cord-Setup-*.exe
+            artifacts/Cord-Setup-*.sha256
+          retention-days: 14
