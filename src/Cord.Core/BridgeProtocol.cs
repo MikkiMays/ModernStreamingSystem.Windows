@@ -10,10 +10,11 @@ public static class BridgeProtocol
         try
         {
             var message = JsonSerializer.Deserialize(json, CordJson.Default.WebMessage);
-            if (message is not { Version: 1 } || message.Type is not ("state" or "favorites.changed" or "close-ready")) return null;
+            if (message is not { Version: 1 } || message.Type is not ("state" or "favorites.changed" or "close-ready" or "hotkey.configure")) return null;
             if (message.Type == "state" && message.Page is not ("home" or "prejoin" or "room")) return null;
             if (message.Name?.Length > 40 || message.Room?.Title?.Length > 80) return null;
             if (message.Room is { } room && (!Guid.TryParseExact(room.RoomId, "D", out _) || string.IsNullOrWhiteSpace(room.Title) || room.Code is null || room.Code.Length != 9 || room.Code.Any(c => !char.IsAsciiDigit(c)))) return null;
+            if (message.Hotkey is not null && !message.Hotkey.IsValid) return null;
             return message;
         }
         catch (JsonException) { return null; }
