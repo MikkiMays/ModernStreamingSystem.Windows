@@ -6,7 +6,7 @@ public sealed record FavoriteRoom(string RoomId, string Title, string Code, long
 {
     public string DisplayCode => Code.Length == 9 ? $"{Code[..3]}-{Code[3..6]}-{Code[6..]}" : Code;
 }
-public sealed record DesktopSettings(string ServerUrl = "http://localhost:5173/", string Theme = "system", bool CompactSidebar = false);
+public sealed record DesktopSettings(string ServerUrl = "https://meet.nikg.tech/", string Theme = "system", bool CompactSidebar = false);
 public sealed record WebRoom(string RoomId, string Title, string Code);
 public sealed record WebMessage(int Version, string Type, string? Page, string? Name, string? Theme, WebRoom? Room);
 public sealed record HostMessage(string Type, string? Page = null, string? RoomId = null, string? Theme = null, int Version = 1);
