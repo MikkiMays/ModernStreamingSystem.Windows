@@ -70,7 +70,7 @@ try {
         if ($valid) {
           $deadline = [DateTime]::UtcNow.AddSeconds(15)
           while (!(Test-Path -LiteralPath $ready) -and !$helper.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
-          if (!(Test-Path -LiteralPath $ready)) { throw 'Update helper did not become ready.' }
+          if (!(Test-Path -LiteralPath $ready)) { throw ('Update helper did not become ready. ' + $(if (Test-Path $result) { Get-Content $result -Raw } else { 'No result file.' })) }
           if (Test-Path $result) { throw 'Update ran while the parent app was alive.' }
           $parent.Kill(); $parent.WaitForExit()
         }

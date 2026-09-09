@@ -1,6 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$PlanFile)
 $ErrorActionPreference = 'Stop'
-$plan = Get-Content -LiteralPath $PlanFile -Raw | ConvertFrom-Json
+$plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding UTF8 | ConvertFrom-Json
 $ok = $false
 $detail = ''
 try {
