@@ -1,15 +1,21 @@
 param([Parameter(Mandatory=$true)][string]$PlanFile)
 $ErrorActionPreference = 'Stop'
 $plan = Get-Content -LiteralPath $PlanFile -Raw -Encoding UTF8 | ConvertFrom-Json
+function Get-PackageHash([string]$Path) {
+  $stream = [IO.File]::OpenRead($Path)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '') }
+  finally { $algorithm.Dispose(); $stream.Dispose() }
+}
 $ok = $false
 $detail = ''
 try {
-  $hash = (Get-FileHash -LiteralPath $plan.Package -Algorithm SHA256).Hash
+  $hash = Get-PackageHash $plan.Package
   if ($hash -ne $plan.Sha256) { throw 'Installer SHA-256 mismatch.' }
   Set-Content -LiteralPath $plan.ReadyFile -Value 'ready' -Encoding ASCII
   $cordProcess = Get-Process -Id $plan.ProcessId -ErrorAction SilentlyContinue
   if ($cordProcess -and -not $cordProcess.WaitForExit(60000)) { throw 'Cord did not exit within 60 seconds.' }
-  $hash = (Get-FileHash -LiteralPath $plan.Package -Algorithm SHA256).Hash
+  $hash = Get-PackageHash $plan.Package
   if ($hash -ne $plan.Sha256) { throw 'Installer SHA-256 mismatch.' }
   $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCANCEL', '/CLOSEAPPLICATIONS', ('/DIR="' + $plan.InstallDirectory.TrimEnd('\') + '"'), ('/LOG="' + (Join-Path $plan.UpdateDirectory 'installer.log') + '"'))
   $setup = Start-Process -FilePath $plan.Package -ArgumentList $installArgs -PassThru -Wait
