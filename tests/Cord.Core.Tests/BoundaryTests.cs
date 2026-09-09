@@ -31,6 +31,25 @@ public sealed class BoundaryTests
     public void OriginComparisonIncludesSchemeHostAndPort(string value) => Assert.False(ServerEndpoint.Parse("https://meet.example.com").Owns(value));
 
     [Fact]
+    public void MicrophoneHotkeyValidatesBridgeAndNativeModifiers()
+    {
+        var endpoint = ServerEndpoint.Parse("https://meet.nikg.tech");
+        var allowed = BridgeProtocol.Read(endpoint, endpoint.Origin.AbsoluteUri,
+            """{"version":1,"type":"hotkey.configure","hotkey":{"code":"KeyM","ctrl":true,"alt":false,"shift":true,"meta":false}}""");
+        Assert.NotNull(allowed?.Hotkey);
+        Assert.True(allowed.Hotkey.TryNative(out var modifiers, out var key));
+        Assert.Equal(0x4006u, modifiers);
+        Assert.Equal(0x4du, key);
+        Assert.False(new MicrophoneHotkey("KeyM", false, false, false, false).TryNative(out _, out _));
+        Assert.False(new MicrophoneHotkey("F12", true, false, false, false).TryNative(out _, out _));
+        Assert.False(new MicrophoneHotkey("KeyM", false, false, false, true).TryNative(out _, out _));
+        Assert.Null(BridgeProtocol.Read(endpoint, endpoint.Origin.AbsoluteUri,
+            """{"version":1,"type":"hotkey.configure","hotkey":{"code":"Escape","ctrl":true}}"""));
+        Assert.Null(BridgeProtocol.Read(endpoint, "https://another.example",
+            """{"version":1,"type":"hotkey.configure","hotkey":{"code":"KeyM","ctrl":true}}"""));
+    }
+
+    [Fact]
     public void RejectsSpoofedBridgeCommandsAndMalformedMessages()
     {
         var endpoint = ServerEndpoint.Parse("https://meet.example.com");

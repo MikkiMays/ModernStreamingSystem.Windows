@@ -8,8 +8,8 @@ public sealed record FavoriteRoom(string RoomId, string Title, string Code, long
 }
 public sealed record DesktopSettings(string ServerUrl = "https://meet.nikg.tech/", string Theme = "system", bool CompactSidebar = false);
 public sealed record WebRoom(string RoomId, string Title, string Code);
-public sealed record WebMessage(int Version, string Type, string? Page, string? Name, string? Theme, WebRoom? Room);
-public sealed record HostMessage(string Type, string? Page = null, string? RoomId = null, string? Theme = null, int Version = 1);
+public sealed record WebMessage(int Version, string Type, string? Page, string? Name, string? Theme, WebRoom? Room, MicrophoneHotkey? Hotkey = null);
+public sealed record HostMessage(string Type, string? Page = null, string? RoomId = null, string? Theme = null, int Version = 1, string? Name = null, string? Detail = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(List<FavoriteRoom>))]

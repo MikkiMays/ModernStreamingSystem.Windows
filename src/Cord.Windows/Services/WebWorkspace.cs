@@ -68,13 +68,6 @@ public sealed class WebWorkspace(ServerEndpoint endpoint, ProfileStore profiles,
             core.PostWebMessageAsJson(JsonSerializer.Serialize(message, CordJson.Default.HostMessage));
     }
 
-    public async Task ResetDevicePermissionsAsync()
-    {
-        if (_disposed || View.CoreWebView2 is not { } core) return;
-        foreach (var kind in new[] { CoreWebView2PermissionKind.Camera, CoreWebView2PermissionKind.Microphone })
-            await core.Profile.SetPermissionStateAsync(kind, Endpoint.Origin.GetLeftPart(UriPartial.Authority), CoreWebView2PermissionState.Default);
-    }
-
     private async void PermissionRequested(CoreWebView2 sender, CoreWebView2PermissionRequestedEventArgs args)
     {
         using var deferral = args.GetDeferral();

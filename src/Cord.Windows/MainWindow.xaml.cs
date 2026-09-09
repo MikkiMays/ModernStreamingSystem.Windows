@@ -18,6 +18,8 @@ public sealed partial class MainWindow : Window
     private readonly SemaphoreSlim _dialogs = new(1, 1);
     private DesktopSettings _settings = new();
     private WebWorkspace? _workspace;
+    private GlobalMicrophoneHotkey? _microphoneHotkey;
+    private MicrophoneHotkey? _requestedHotkey;
     private TaskCompletionSource? _closeReady;
     private bool _closing;
     private bool _closed;
@@ -35,6 +37,10 @@ public sealed partial class MainWindow : Window
         if (validateResourcesOnly) return;
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragRegion);
+        _microphoneHotkey = new GlobalMicrophoneHotkey(WinRT.Interop.WindowNative.GetWindowHandle(this), () =>
+        {
+            if (Model.InCall && !_closed) _workspace?.Post(new("microphone.toggle"));
+        });
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Cord.ico"));
         SystemBackdrop = new MicaBackdrop();
         var workArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
@@ -82,6 +88,8 @@ public sealed partial class MainWindow : Window
         try
         {
             SetMediaFullScreen(false);
+            _microphoneHotkey?.Configure(null);
+            _requestedHotkey = null;
             _workspace?.Dispose();
             var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
             var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme) { RequestPermission = RequestPermissionAsync };
@@ -122,6 +130,7 @@ public sealed partial class MainWindow : Window
             case "state":
                 if (message.Page == "home") _homeReady.TrySetResult();
                 Model.InCall = message.Page == "room";
+                _microphoneHotkey?.Configure(Model.InCall ? _requestedHotkey : null);
                 Model.Status = message.Room?.Title ?? (message.Page == "prejoin" ? "Перед разговором" : "На одной волне");
                 Model.Name = string.IsNullOrWhiteSpace(message.Name) ? "Ваше пространство" : message.Name;
                 if (message.Theme is "light" or "dark" or "system")
@@ -134,6 +143,11 @@ public sealed partial class MainWindow : Window
                     }
                 }
                 Title = message.Room is null ? "Cord" : $"{message.Room.Title} · Cord";
+                break;
+            case "hotkey.configure":
+                _requestedHotkey = message.Hotkey;
+                var status = _microphoneHotkey?.Configure(Model.InCall ? _requestedHotkey : null);
+                _workspace?.Post(new("hotkey.status", Detail: status));
                 break;
             case "favorites.changed": Run(RefreshFavoritesAsync); break;
             case "close-ready": _closeReady?.TrySetResult(); break;
@@ -157,7 +171,7 @@ public sealed partial class MainWindow : Window
     private async Task<bool> RequestPermissionAsync(string device) => await DialogAsync(new ContentDialog
     {
         Title = $"Разрешить доступ к {device}?",
-        Content = "Cord проверит устройство для предпросмотра. Передача во встречу начнётся только после вашего нажатия на кнопку включения.",
+        Content = "Вы включили устройство в Cord. В диагностике проверка останется локальной; во встрече устройство будет передавать звук или видео участникам.",
         PrimaryButtonText = "Разрешить",
         CloseButtonText = "Не сейчас",
         DefaultButton = ContentDialogButton.Primary
@@ -185,14 +199,8 @@ public sealed partial class MainWindow : Window
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 210, 70, 70)) };
         var content = new StackPanel { Spacing = 18, MaxWidth = 420 };
         content.Children.Add(address); content.Children.Add(theme); content.Children.Add(note); content.Children.Add(error);
-        var reset = new Button { Content = "Запросить доступ к устройствам заново", HorizontalAlignment = HorizontalAlignment.Stretch };
-        reset.Click += (_, _) => Run(async () =>
-        {
-            if (_workspace is null) return;
-            await _workspace.ResetDevicePermissionsAsync();
-            note.Text = "При следующем открытии предпросмотра Cord снова спросит доступ к камере и микрофону.";
-        });
-        content.Children.Add(reset);
+        var name = new TextBox { Header = "Имя по умолчанию", Text = Model.Name == "Ваше пространство" ? "" : Model.Name, MaxLength = 40 };
+        content.Children.Insert(0, name);
         var dialog = new ContentDialog { Title = "Ваше пространство", Content = content, PrimaryButtonText = "Сохранить", CloseButtonText = "Отмена", DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, args) =>
         {
@@ -208,7 +216,11 @@ public sealed partial class MainWindow : Window
         await _profiles.SaveAsync(_settings, _lifetime.Token);
         ApplyTheme(_settings.Theme);
         if (changed) { Model.InCall = false; Model.ReplaceFavorites([]); await OpenWorkspaceAsync(); }
-        else _workspace?.Post(new("theme.changed", Theme: _settings.Theme));
+        else
+        {
+            _workspace?.Post(new("theme.changed", Theme: _settings.Theme));
+            _workspace?.Post(new("profile.changed", Name: name.Text.Trim()));
+        }
     }
     private void ApplyTheme(string theme)
     {
@@ -243,6 +255,7 @@ public sealed partial class MainWindow : Window
     {
         _closed = true;
         NetworkChange.NetworkAddressChanged -= NetworkChanged;
+        _microphoneHotkey?.Dispose();
         _networkTimer?.Dispose(); _lifetime.Cancel(); _workspace?.Dispose(); _http.Dispose();
     }
     private void UpdateSidebar()
