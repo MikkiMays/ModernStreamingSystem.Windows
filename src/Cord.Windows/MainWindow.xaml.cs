@@ -84,6 +84,19 @@ public sealed partial class MainWindow : Window
         var rendered = await workspace.View.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('.desktop-home'))");
         if (rendered != "true") throw new InvalidOperationException("The shared desktop interface was not rendered.");
         await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token);
+        var size = AppWindow.Size;
+        var position = AppWindow.Position;
+        var webView = workspace.View.CoreWebView2;
+        SetMediaFullScreen(true);
+        await Task.Delay(250, _lifetime.Token);
+        if (TitlebarHost.Visibility != Visibility.Collapsed || NavigationSplit.IsPaneOpen || WorkspaceFrame.BorderThickness.Left != 0)
+            throw new InvalidOperationException("Fullscreen did not hide the native shell.");
+        SetMediaFullScreen(false);
+        await Task.Delay(250, _lifetime.Token);
+        if (AppWindow.Size.Width != size.Width || AppWindow.Size.Height != size.Height || AppWindow.Position.X != position.X || AppWindow.Position.Y != position.Y || TitlebarHost.Visibility != Visibility.Visible)
+            throw new InvalidOperationException("Fullscreen did not restore the window bounds.");
+        if (workspace != _workspace || webView != workspace.View.CoreWebView2 || WorkspaceHost.Content != workspace.View)
+            throw new InvalidOperationException("Fullscreen replaced the running WebView.");
     }
 
     private async Task OpenWorkspaceAsync()
