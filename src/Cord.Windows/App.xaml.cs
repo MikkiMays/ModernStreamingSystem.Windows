@@ -10,9 +10,10 @@ public partial class App : Application
         InitializeComponent();
         UnhandledException += (_, args) => { if (_window is null) ReportStartupFailure(args.Exception); };
     }
-    protected override void OnLaunched(LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
         var verifyResources = Environment.GetCommandLineArgs().Contains("--verify-resources", StringComparer.Ordinal);
+        var verifyService = Environment.GetCommandLineArgs().Contains("--verify-service", StringComparer.Ordinal);
         try
         {
             _window = new MainWindow(verifyResources);
@@ -23,11 +24,17 @@ public partial class App : Application
                 return;
             }
             _window.Activate();
+            if (verifyService)
+            {
+                await ((MainWindow)_window).VerifyServiceAsync();
+                _window.Close();
+                Exit();
+            }
         }
         catch (Exception error)
         {
             ReportStartupFailure(error);
-            if (verifyResources) Environment.Exit(1);
+            if (verifyResources || verifyService) Environment.Exit(1);
             throw;
         }
     }

@@ -26,6 +26,7 @@ public sealed partial class MainWindow : Window
     private System.Threading.Timer? _networkTimer;
     private AppWindowPresenter? _windowedPresenter;
     private bool _viewReady;
+    private readonly TaskCompletionSource _homeReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public MainWindow(bool validateResourcesOnly = false)
     {
@@ -53,6 +54,23 @@ public sealed partial class MainWindow : Window
         ApplyTheme(_settings.Theme);
         UpdateSidebar();
         await OpenWorkspaceAsync();
+    }
+
+    /// <summary>Release acceptance: real WebView2, trusted origin, React bridge and native API.</summary>
+    public async Task VerifyServiceAsync()
+    {
+        await _homeReady.Task.WaitAsync(TimeSpan.FromSeconds(45));
+        var workspace = _workspace ?? throw new InvalidOperationException("The web workspace did not initialize.");
+        if (workspace.Endpoint.Origin.AbsoluteUri != "https://meet.nikg.tech/")
+            throw new InvalidOperationException("A fresh installation must use the production service.");
+        using var response = await _http.GetAsync(new Uri(workspace.Endpoint.Origin, "api/v1/capabilities"), _lifetime.Token);
+        response.EnsureSuccessStatusCode();
+        using var capabilities = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(_lifetime.Token));
+        if (capabilities.RootElement.GetProperty("maxParticipants").GetInt32() != 10)
+            throw new InvalidOperationException("Unexpected production capabilities.");
+        var rendered = await workspace.View.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('.desktop-home'))");
+        if (rendered != "true") throw new InvalidOperationException("The shared desktop interface was not rendered.");
+        await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token);
     }
 
     private async Task OpenWorkspaceAsync()
@@ -102,6 +120,7 @@ public sealed partial class MainWindow : Window
         switch (message.Type)
         {
             case "state":
+                if (message.Page == "home") _homeReady.TrySetResult();
                 Model.InCall = message.Page == "room";
                 Model.Status = message.Room?.Title ?? (message.Page == "prejoin" ? "Перед разговором" : "На одной волне");
                 Model.Name = string.IsNullOrWhiteSpace(message.Name) ? "Ваше пространство" : message.Name;
