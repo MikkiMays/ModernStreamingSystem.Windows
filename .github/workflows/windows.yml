@@ -21,6 +21,9 @@ jobs:
         run: .\scripts\build.ps1 -Publish
       - name: Verify unpackaged WinUI resources
         run: .\scripts\verify-publication.ps1
+      - name: Verify the native app connects to the deployed service
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: .\scripts\verify-service.ps1
       - name: Build offline installer
         run: .\scripts\build-installer.ps1 -SkipPublish
       - name: Verify installation, upgrade and uninstall
