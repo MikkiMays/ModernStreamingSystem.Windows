@@ -37,6 +37,9 @@ SolidCompression=yes
 SetupLogging=yes
 CloseApplications=yes
 RestartApplications=no
+AlwaysRestart=no
+UsePreviousAppDir=yes
+UsePreviousTasks=yes
 AppComments=Звонки, экран и разговоры в одном пространстве.
 InfoBeforeFile=About-installation.txt
 

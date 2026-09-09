@@ -16,6 +16,9 @@ public sealed partial class MainWindow : Window
     private readonly HttpClient _http = new(new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(2) }) { Timeout = TimeSpan.FromSeconds(8) };
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _dialogs = new(1, 1);
+    private ApplicationUpdater? _updater;
+    private System.Threading.Timer? _updateTimer;
+    private bool _applyingUpdate;
     private DesktopSettings _settings = new();
     private WebWorkspace? _workspace;
     private GlobalMicrophoneHotkey? _microphoneHotkey;
@@ -60,6 +63,10 @@ public sealed partial class MainWindow : Window
         ApplyTheme(_settings.Theme);
         UpdateSidebar();
         await OpenWorkspaceAsync();
+        _updater = new ApplicationUpdater(_profiles.Root);
+        if (_updater.LastResult() is { } error) Model.Report(error);
+        Run(CheckUpdateAsync);
+        _updateTimer = new System.Threading.Timer(_ => DispatcherQueue.TryEnqueue(() => Run(CheckUpdateAsync)), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
     }
 
     /// <summary>Release acceptance: real WebView2, trusted origin, React bridge and native API.</summary>
@@ -129,7 +136,8 @@ public sealed partial class MainWindow : Window
         {
             case "state":
                 if (message.Page == "home") _homeReady.TrySetResult();
-                Model.InCall = message.Page == "room";
+                Model.InCall = message.InCall ?? message.Page == "room";
+                _workspace?.Post(new("preferences.changed", ShowPing: _settings.ShowPing, NotificationSounds: _settings.NotificationSounds));
                 _microphoneHotkey?.Configure(Model.InCall ? _requestedHotkey : null);
                 Model.Status = message.Room?.Title ?? (message.Page == "prejoin" ? "Перед разговором" : "На одной волне");
                 Model.Name = string.IsNullOrWhiteSpace(message.Name) ? "Ваше пространство" : message.Name;
@@ -142,7 +150,16 @@ public sealed partial class MainWindow : Window
                         Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
                     }
                 }
-                Title = message.Room is null ? "Cord" : $"{message.Room.Title} · Cord";
+                Title = "Cord";
+                if (!Model.InCall) Run(ApplyUpdateIfReadyAsync);
+                break;
+            case "call-state":
+                if (message.InCall is { } inCall) Model.InCall = inCall;
+                if (!Model.InCall) Run(ApplyUpdateIfReadyAsync);
+                break;
+            case "preferences.changed":
+                _settings = _settings with { ShowPing = message.ShowPing ?? _settings.ShowPing, NotificationSounds = message.NotificationSounds ?? _settings.NotificationSounds };
+                Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
                 break;
             case "hotkey.configure":
                 _requestedHotkey = message.Hotkey;
@@ -201,6 +218,9 @@ public sealed partial class MainWindow : Window
         content.Children.Add(address); content.Children.Add(theme); content.Children.Add(note); content.Children.Add(error);
         var name = new TextBox { Header = "Имя по умолчанию", Text = Model.Name == "Ваше пространство" ? "" : Model.Name, MaxLength = 40 };
         content.Children.Insert(0, name);
+        var sounds = new ToggleSwitch { Header = "Звуки уведомлений", IsOn = _settings.NotificationSounds };
+        var ping = new ToggleSwitch { Header = "Показывать задержку / PING", IsOn = _settings.ShowPing };
+        content.Children.Add(sounds); content.Children.Add(ping);
         var dialog = new ContentDialog { Title = "Ваше пространство", Content = content, PrimaryButtonText = "Сохранить", CloseButtonText = "Отмена", DefaultButton = ContentDialogButton.Primary };
         dialog.PrimaryButtonClick += (_, args) =>
         {
@@ -212,7 +232,7 @@ public sealed partial class MainWindow : Window
         bool changed = endpoint.Origin.AbsoluteUri != ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
         if (changed && Model.InCall && !await ConfirmLeaveAsync()) return;
         if (changed && Model.InCall) await LeaveWebAsync();
-        _settings = _settings with { ServerUrl = endpoint.Origin.AbsoluteUri, Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system" };
+        _settings = _settings with { ShowPing = ping.IsOn, NotificationSounds = sounds.IsOn, ServerUrl = endpoint.Origin.AbsoluteUri, Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system" };
         await _profiles.SaveAsync(_settings, _lifetime.Token);
         ApplyTheme(_settings.Theme);
         if (changed) { Model.InCall = false; Model.ReplaceFavorites([]); await OpenWorkspaceAsync(); }
@@ -220,6 +240,7 @@ public sealed partial class MainWindow : Window
         {
             _workspace?.Post(new("theme.changed", Theme: _settings.Theme));
             _workspace?.Post(new("profile.changed", Name: name.Text.Trim()));
+            _workspace?.Post(new("preferences.changed", ShowPing: _settings.ShowPing, NotificationSounds: _settings.NotificationSounds));
         }
     }
     private void ApplyTheme(string theme)
@@ -256,6 +277,7 @@ public sealed partial class MainWindow : Window
         _closed = true;
         NetworkChange.NetworkAddressChanged -= NetworkChanged;
         _microphoneHotkey?.Dispose();
+        _updateTimer?.Dispose(); _updater?.Dispose();
         _networkTimer?.Dispose(); _lifetime.Cancel(); _workspace?.Dispose(); _http.Dispose();
     }
     private void UpdateSidebar()
@@ -307,6 +329,48 @@ public sealed partial class MainWindow : Window
         _settings = _settings with { CompactSidebar = !_settings.CompactSidebar };
         UpdateSidebar(); Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
     }
+    private async Task CheckUpdateAsync()
+    {
+        if (_updater is null || Model.UpdateBusy || _closed) return;
+        try
+        {
+            await _updater.CheckAsync(_lifetime.Token);
+            Model.UpdateAvailable = _updater.Available is not null;
+            if (Model.UpdateAvailable) { Model.UpdateButton = "Обновить"; Model.UpdateStatus = "Доступна версия " + _updater.Available!.Version; }
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException)
+        {
+            if (!_closed) { Model.UpdateStatus = "Не удалось проверить обновления"; Model.UpdateAvailable = true; Model.UpdateButton = "Повторить"; }
+        }
+    }
+    private async Task DownloadUpdateAsync()
+    {
+        if (_updater is null || Model.UpdateBusy) return;
+        if (_updater.Available is null) { await CheckUpdateAsync(); return; }
+        Model.UpdateBusy = true;
+        Model.UpdateAvailable = false;
+        try
+        {
+            Model.UpdateStatus = "Скачиваем обновление…";
+            await _updater.DownloadAsync(new Progress<double>(value => Model.UpdateProgress = value * 100), _lifetime.Token);
+            Model.UpdateStatus = Model.InCall ? "Обновим после завершения встречи" : "Применяем обновление…";
+            await ApplyUpdateIfReadyAsync();
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException)
+        {
+            if (!_closed) { Model.UpdateStatus = e is InvalidDataException ? e.Message : "Загрузка не завершена. Повторите попытку."; Model.UpdateAvailable = true; Model.UpdateButton = "Повторить"; }
+        }
+        finally { Model.UpdateBusy = false; }
+    }
+    private async Task ApplyUpdateIfReadyAsync()
+    {
+        if (_closed || _applyingUpdate || Model.InCall || _updater?.Package is null) return;
+        _applyingUpdate = true;
+        try { if (await _updater.ApplyAsync(_lifetime.Token, () => !Model.InCall && !_closed)) { _closing = true; Close(); } else _applyingUpdate = false; }
+        catch { _applyingUpdate = false; Model.UpdateStatus = "Не удалось запустить обновление"; Model.UpdateAvailable = true; throw; }
+    }
+    private void Update_Click(object sender, RoutedEventArgs e) => Run(DownloadUpdateAsync);
+    private void FavoriteSettings_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) _workspace?.Post(new("favorite.settings", RoomId: id)); }
     private void Home_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("home"));
     private void Create_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("create"));
     private void Favorite_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) Run(() => NavigateAsync("favorite", id)); }
