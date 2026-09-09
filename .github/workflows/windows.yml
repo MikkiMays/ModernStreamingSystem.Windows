@@ -25,6 +25,14 @@ jobs:
         run: .\scripts\build-installer.ps1 -SkipPublish
       - name: Verify installation, upgrade and uninstall
         run: .\scripts\test-installer.ps1
+      - name: Require complete distribution checksums
+        run: |
+          foreach ($file in @((Get-Item artifacts/Cord-Setup-*.exe), (Get-Item artifacts/Cord-win-x64.zip))) {
+            $expected = ((Get-Content -LiteralPath "$($file.FullName).sha256" -Raw).Trim() -split '\s+', 2)[0]
+            if ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+              throw "Distribution checksum mismatch: $($file.Name)"
+            }
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Cord-win-x64

@@ -26,7 +26,9 @@ try {
     $archive = Join-Path $projectRoot 'artifacts\Cord-win-x64.zip'
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive }
     [System.IO.Compression.ZipFile]::CreateFromDirectory($output, $archive)
-    Get-FileHash -LiteralPath $archive -Algorithm SHA256 | Select-Object Hash, Path
+    $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$archive.sha256" -Value "$hash  $([IO.Path]::GetFileName($archive))" -Encoding ascii
+    Write-Output "Portable ZIP SHA-256: $hash"
   } else {
     & $dotnet build src/Cord.Windows/Cord.Windows.csproj -c Release -p:Platform=x64
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
