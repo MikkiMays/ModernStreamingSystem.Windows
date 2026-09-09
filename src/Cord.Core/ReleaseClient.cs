@@ -12,6 +12,7 @@ public sealed partial class ReleaseClient(HttpClient http)
 {
     public const string Repository = "MikkiMays/ModernStreamingSystem.Windows";
     public static readonly Uri Latest = new($"https://api.github.com/repos/{Repository}/releases/latest");
+    public static readonly Uri MirrorLatest = new("https://meet.nikg.tech/downloads/windows/latest.json");
     [GeneratedRegex(@"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")]
     private static partial Regex StableVersion();
     [GeneratedRegex(@"^[a-fA-F0-9]{64}$")]
@@ -42,8 +43,28 @@ public sealed partial class ReleaseClient(HttpClient http)
         return null;
     }
 
+    public static CordRelease? ParseMirror(string json, Version current, string architecture)
+    {
+        using var document = JsonDocument.Parse(json);
+        if (document.RootElement.GetProperty("repository").GetString() != Repository)
+            throw new InvalidDataException("Неверный источник релиза.");
+        var release = Parse(json, current, architecture);
+        return release is null ? null : release with
+        {
+            Package = new Uri(MirrorLatest, $"v{release.Version}/Cord-Setup-{release.Version}-x64.exe")
+        };
+    }
+
     public async Task<CordRelease?> CheckAsync(Version current, string architecture, CancellationToken token)
     {
+        // The upstream repository is private. Its verified release is mirrored by the
+        // deployment publisher; GitHub credentials never enter the installed client.
+        using var mirror = await GetAsync(MirrorLatest, token);
+        if (mirror.StatusCode != HttpStatusCode.NotFound)
+        {
+            mirror.EnsureSuccessStatusCode();
+            return ParseMirror(await mirror.Content.ReadAsStringAsync(token), current, architecture);
+        }
         using var response = await GetAsync(Latest, token);
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
@@ -55,7 +76,8 @@ public sealed partial class ReleaseClient(HttpClient http)
     {
         for (var redirects = 0; redirects < 6; redirects++)
         {
-            if (uri.Scheme != "https" || !new[] { "api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com" }.Contains(uri.IdnHost))
+            var mirror = uri.IdnHost == MirrorLatest.IdnHost && uri.AbsolutePath.StartsWith("/downloads/windows/", StringComparison.Ordinal) && uri.Query.Length == 0;
+            if (uri.Scheme != "https" || !uri.IsDefaultPort || uri.UserInfo.Length != 0 || (!mirror && !new[] { "api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com" }.Contains(uri.IdnHost)))
                 throw new InvalidDataException("Недопустимый адрес загрузки.");
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.UserAgent.ParseAdd("Cord-Windows-Updater/1.0");

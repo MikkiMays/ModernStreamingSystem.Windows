@@ -9,6 +9,7 @@ public class ReleaseTests
 {
     private static string Release(string tag = "v0.4.0", bool draft = false, bool prerelease = false, string? digest = null, long size = 4, string? url = null) => JsonSerializer.Serialize(new
     {
+        repository = ReleaseClient.Repository,
         tag_name = tag,
         draft,
         prerelease,
@@ -29,6 +30,27 @@ public class ReleaseTests
     {
         Assert.Throws<InvalidDataException>(() => ReleaseClient.Parse(Release(url: "https://example.org/setup.exe"), new(0, 3, 0), "x64"));
         Assert.Throws<InvalidDataException>(() => ReleaseClient.Parse(Release(digest: ""), new(0, 3, 0), "x64"));
+    }
+    [Fact]
+    public async Task PrivateUpstreamUsesVerifiedPublicMirrorWithoutCredentials()
+    {
+        var requested = new List<Uri>();
+        using var http = new HttpClient(new Handler(request =>
+        {
+            requested.Add(request.RequestUri!);
+            Assert.Null(request.Headers.Authorization);
+            return new(HttpStatusCode.OK) { Content = new StringContent(Release()) };
+        }));
+        var release = await new ReleaseClient(http).CheckAsync(new(0, 3, 0), "x64", default);
+        Assert.Equal([ReleaseClient.MirrorLatest], requested);
+        Assert.Equal(new Uri("https://meet.nikg.tech/downloads/windows/v0.4.0/Cord-Setup-0.4.0-x64.exe"), release!.Package);
+        Assert.Equal(new string('a', 64), release.Sha256);
+    }
+    [Fact]
+    public void MirrorMustNameExactUpstreamAndAssets()
+    {
+        Assert.Throws<InvalidDataException>(() => ReleaseClient.ParseMirror(Release().Replace(ReleaseClient.Repository, "someone/else"), new(0, 3, 0), "x64"));
+        Assert.Throws<InvalidDataException>(() => ReleaseClient.ParseMirror(Release(url: "https://meet.nikg.tech/arbitrary.exe"), new(0, 3, 0), "x64"));
     }
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
