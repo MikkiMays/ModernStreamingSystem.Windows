@@ -47,6 +47,48 @@ try {
   Invoke-SetupProcess $Installer ($arguments + "/LOG=`"$(Join-Path $testRoot 'upgrade.log')`"")
   & (Join-Path $PSScriptRoot 'verify-publication.ps1') -Publication $installRoot
   if (!(Test-Path -LiteralPath $sentinel)) { throw 'Upgrade removed a user file.' }
+  # Exercise the same helper embedded in Cord, with an installation path containing spaces and Cyrillic.
+  $helperScript = Join-Path $projectRoot 'src\Cord.Windows\Services\Update.ps1'
+  $parseErrors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile($helperScript, [ref]$null, [ref]$parseErrors) | Out-Null
+  if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
+  $previousProfile = $env:CORD_PROFILE_DIRECTORY
+  $env:CORD_PROFILE_DIRECTORY = Join-Path $testRoot 'profile'
+  New-Item -ItemType Directory -Force $env:CORD_PROFILE_DIRECTORY | Out-Null
+  $profileSentinel = Join-Path $env:CORD_PROFILE_DIRECTORY 'preserved.json'
+  Set-Content -LiteralPath $profileSentinel -Value '{"favorites":["room"],"showPing":true}'
+  try {
+    foreach ($valid in @($false, $true, $true)) {
+      $parent = Start-Process powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 120"' -WindowStyle Hidden -PassThru
+      $ready = Join-Path $testRoot "ready-$([guid]::NewGuid())"
+      $result = Join-Path $testRoot 'result.json'
+      if (Test-Path $result) { Remove-Item -LiteralPath $result }
+      $planFile = Join-Path $testRoot 'update-plan.json'
+      @{ ProcessId = $parent.Id; Package = $Installer; Sha256 = $(if ($valid) { (Get-FileHash $Installer -Algorithm SHA256).Hash } else { '0' * 64 }); InstallDirectory = $installRoot; UpdateDirectory = $testRoot; ReadyFile = $ready } | ConvertTo-Json | Set-Content -LiteralPath $planFile -Encoding UTF8
+      $helper = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$helperScript`"", '-PlanFile', "`"$planFile`"") -WindowStyle Hidden -PassThru
+      try {
+        if ($valid) {
+          $deadline = [DateTime]::UtcNow.AddSeconds(15)
+          while (!(Test-Path -LiteralPath $ready) -and !$helper.HasExited -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+          if (!(Test-Path -LiteralPath $ready)) { throw ('Update helper did not become ready. ' + $(if (Test-Path $result) { Get-Content $result -Raw } else { 'No result file.' })) }
+          if (Test-Path $result) { throw 'Update ran while the parent app was alive.' }
+          $parent.Kill(); $parent.WaitForExit()
+        }
+        if (!$helper.WaitForExit(90000)) { throw 'Update helper timed out.' }
+        $outcome = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
+        if ($outcome.ok -ne $valid) { throw "Unexpected update result: $($outcome.detail)" }
+        if (!$valid -and $parent.HasExited) { throw 'Invalid package terminated the running app.' }
+        if ((Get-Content -LiteralPath $profileSentinel -Raw).Trim() -ne '{"favorites":["room"],"showPing":true}') { throw 'Update changed the profile.' }
+        if ((Get-ItemProperty -LiteralPath $uninstallKey).InstallLocation.TrimEnd('\') -ne $installRoot) { throw 'Update changed the installation directory.' }
+      } finally {
+        if (!$parent.HasExited) { $parent.Kill() }
+        if (!$helper.HasExited) { $helper.Kill() }
+        # Close only Cord instances started from this test installation.
+        Get-Process Cord -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $installRoot 'Cord.exe') } | Stop-Process -Force
+      }
+    }
+  } finally { $env:CORD_PROFILE_DIRECTORY = $previousProfile }
+
 } finally {
   if ($installed) {
     # This exact uninstaller belongs to the verified path beneath .local; no wildcard deletion.
