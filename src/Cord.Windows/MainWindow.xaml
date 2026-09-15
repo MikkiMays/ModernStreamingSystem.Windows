@@ -98,8 +98,18 @@
                     <ColumnDefinition Width="36" />
                     <ColumnDefinition Width="*" />
                   </Grid.ColumnDefinitions>
+                  <!-- The picture belongs to the page and arrives with the state message.
+                       An ellipse with no image draws nothing, so the placeholder behind it
+                       stays visible and the picture is round without clipping tricks. -->
                   <Border Background="{ThemeResource AccentFillColorTertiaryBrush}" CornerRadius="18" Width="36" Height="36">
-                    <FontIcon Glyph="" FontSize="17" />
+                    <Grid>
+                      <FontIcon Glyph="" FontSize="17" />
+                      <Ellipse Width="36" Height="36">
+                        <Ellipse.Fill>
+                          <ImageBrush ImageSource="{x:Bind Model.Avatar, Mode=OneWay}" Stretch="UniformToFill" />
+                        </Ellipse.Fill>
+                      </Ellipse>
+                    </Grid>
                   </Border>
                   <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
                     <TextBlock Text="{x:Bind Model.Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="12" />

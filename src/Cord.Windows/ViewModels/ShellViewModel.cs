@@ -1,12 +1,15 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Cord.Core;
+using Microsoft.UI.Xaml.Media;
 
 namespace Cord.Windows.ViewModels;
 
 public partial class ShellViewModel : ObservableObject
 {
     [ObservableProperty] public partial string Name { get; set; } = "Ваше пространство";
+    /// <summary>The picture the page keeps for this server. Null shows the placeholder behind it.</summary>
+    [ObservableProperty] public partial ImageSource? Avatar { get; set; }
     [ObservableProperty] public partial string ServerLabel { get; set; } = "Подключаемся…";
     [ObservableProperty] public partial string Status { get; set; } = "На одной волне";
     [ObservableProperty] public partial string Error { get; set; } = "";
