@@ -38,8 +38,7 @@ public sealed class ServerAccessClient(HttpClient http)
             throw new ServerRefusedException("Сервер не принял пароль. Проверьте его у того, кто дал адрес.");
         if (response.StatusCode == HttpStatusCode.TooManyRequests)
             throw new ServerRefusedException("Слишком много попыток подряд. Подождите минуту и повторите.");
-        if (response.StatusCode == HttpStatusCode.NotFound)
-            throw new ServerRefusedException("По этому адресу отвечает не Cord: нужного API там нет.");
+        if (response.StatusCode == HttpStatusCode.NotFound) throw new NoDoorException();
         response.EnsureSuccessStatusCode();
         var session = await response.Content.ReadFromJsonAsync(CordJson.Default.ServerSession, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException("Сервер не выдал сессию.");
@@ -62,6 +61,21 @@ public sealed class ServerAccessClient(HttpClient http)
         {
             return new(true, "", await ConnectAsync(endpoint, password, cancellationToken).ConfigureAwait(false));
         }
+        catch (NoDoorException)
+        {
+            // A Cord older than the handshake has no /session at all. That is not a refusal and
+            // not a wrong address: it is a server with no door, and walking in is correct. A
+            // 404 from something that is not Cord has to stay distinguishable, so we ask.
+            try
+            {
+                var described = await DescribeAsync(endpoint, cancellationToken).ConfigureAwait(false);
+                return new(true, "", new ServerSession("", 0, described.Name, false));
+            }
+            catch (Exception e) when (e is HttpRequestException or InvalidDataException or System.Text.Json.JsonException)
+            {
+                return new(false, "По этому адресу отвечает не Cord: нужного API там нет.");
+            }
+        }
         catch (ServerRefusedException e) { return new(false, e.Message); }
         catch (InvalidDataException e) { return new(false, e.Message); }
         catch (HttpRequestException e)
@@ -81,3 +95,6 @@ public sealed class ServerAccessClient(HttpClient http)
 
 /// <summary>The server answered, and the answer was no. Distinct from "could not be reached".</summary>
 public sealed class ServerRefusedException(string message) : Exception(message);
+
+/// <summary>This server has no handshake endpoint: either an older Cord, or not Cord at all.</summary>
+public sealed class NoDoorException() : Exception("Сервер не знает о рукопожатии.");

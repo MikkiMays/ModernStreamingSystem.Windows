@@ -136,7 +136,6 @@ public sealed class BoundaryTests
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized, "не принял пароль")]
     [InlineData(HttpStatusCode.TooManyRequests, "Слишком много попыток")]
-    [InlineData(HttpStatusCode.NotFound, "отвечает не Cord")]
     [InlineData(HttpStatusCode.BadGateway, "ещё запускается")]
     public async Task EveryRefusalSaysSomethingAPersonCanActOn(HttpStatusCode status, string expected)
     {
@@ -146,6 +145,32 @@ public sealed class BoundaryTests
         Assert.False(result.Ok);
         Assert.Contains(expected, result.Detail, StringComparison.Ordinal);
         Assert.Null(result.Session);
+    }
+
+    /// <summary>
+    /// A Cord older than the handshake has no /session at all. Refusing to open it would mean a
+    /// new client cannot talk to a server nobody has updated yet, which is not a decision this
+    /// client gets to make. A 404 from something that is not Cord still has to look different.
+    /// </summary>
+    [Fact]
+    public async Task AServerWithNoDoorIsWalkedIntoAndAnythingElseWithA404IsNot()
+    {
+        using var older = new StubHttp(request => request.RequestUri!.AbsolutePath == "/api/v1/session"
+            ? new(HttpStatusCode.NotFound)
+            : new(HttpStatusCode.OK) { Content = new StringContent("""{"name":"Старый Cord","passwordRequired":false,"maxParticipants":10}""", Encoding.UTF8, "application/json") });
+        using var olderClient = new HttpClient(older);
+        var walked = await new ServerAccessClient(olderClient).TryConnectAsync("https://meet.example.com", "", TestContext.Current.CancellationToken);
+        Assert.True(walked.Ok, walked.Detail);
+        Assert.Equal("", walked.Session!.Token);
+        Assert.Equal("Старый Cord", walked.Session.Name);
+        // An empty pass is not a pass: the page must not be handed one.
+        Assert.Contains("removeItem('cord:session:v1')", BridgeProtocol.Bootstrap(ServerEndpoint.Parse("https://meet.example.com"), new string('A', 43), "system", false, true, walked.Session), StringComparison.Ordinal);
+
+        using var stranger = new StubHttp(_ => new(HttpStatusCode.NotFound));
+        using var strangerClient = new HttpClient(stranger);
+        var refused = await new ServerAccessClient(strangerClient).TryConnectAsync("https://meet.example.com", "", TestContext.Current.CancellationToken);
+        Assert.False(refused.Ok);
+        Assert.Contains("отвечает не Cord", refused.Detail, StringComparison.Ordinal);
     }
 
     [Fact]

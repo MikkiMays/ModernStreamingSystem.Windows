@@ -597,7 +597,12 @@ public sealed partial class MainWindow : Window
         return true;
     }
 
-    private void PostSession() => _workspace?.Post(new("session.token", Token: _session?.Token, ExpiresAt: _session?.ExpiresAt, ServerName: _session?.Name));
+    /// <summary>A server with no door has nothing to hand over, and an empty pass is not one.</summary>
+    private void PostSession()
+    {
+        if (_session is not { Token.Length: > 0 }) return;
+        _workspace?.Post(new("session.token", Token: _session.Token, ExpiresAt: _session.ExpiresAt, ServerName: _session.Name));
+    }
 
     /// <summary>
     /// A lapsed session is repaired here, with the password Windows is keeping for us, and the

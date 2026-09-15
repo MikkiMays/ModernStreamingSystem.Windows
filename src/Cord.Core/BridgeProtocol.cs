@@ -39,7 +39,7 @@ public static class BridgeProtocol
         // The application already shook hands with the server, so the page must not show its own
         // connect screen. It is handed the session — never the password, which stays encrypted
         // on this machine — in the same store the page would have put it in itself.
-        var connection = session is null
+        var connection = session is null || session.Token.Length == 0
             ? "sessionStorage.removeItem('cord:session:v1');"
             : $"sessionStorage.setItem('cord:session:v1', {JsonSerializer.Serialize(JsonSerializer.Serialize(session, CordJson.Default.ServerSession))});";
         // The two stores have to agree at startup. These preferences used to reach the page
