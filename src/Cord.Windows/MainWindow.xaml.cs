@@ -32,6 +32,12 @@ public sealed partial class MainWindow : Window
     private AppWindowPresenter? _windowedPresenter;
     private bool _viewReady;
     private readonly TaskCompletionSource _homeReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _shown = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private ContentDialog? _openDialog;
+    /// <summary>The handshake with the current server. Null means we are not on a server yet.</summary>
+    private ServerSession? _session;
+    private string _password = "";
+    private bool _renewing;
 
     public MainWindow(bool validateResourcesOnly = false)
     {
@@ -52,7 +58,11 @@ public sealed partial class MainWindow : Window
         AppWindow.MoveAndResize(new global::Windows.Graphics.RectInt32(workArea.X + (workArea.Width - width) / 2, workArea.Y + (workArea.Height - height) / 2, width, height));
         AppWindow.Closing += Window_Closing;
         Closed += Window_Closed;
-        Activated += (_, _) => { if (_workspace?.Capability.Length == 43 && !_closed) Run(RefreshFavoritesAsync); };
+        Activated += (_, _) =>
+        {
+            _shown.TrySetResult();
+            if (_workspace?.Capability.Length == 43 && !_closed) Run(RefreshFavoritesAsync);
+        };
         NetworkChange.NetworkAddressChanged += NetworkChanged;
         Run(InitializeAsync);
     }
@@ -62,6 +72,16 @@ public sealed partial class MainWindow : Window
         _settings = await _profiles.LoadAsync(_lifetime.Token);
         ApplyTheme(_settings.Theme);
         UpdateSidebar();
+        // The server comes first. Until it has answered there are no favourites to show and no
+        // room to join, so showing the workspace would only be a shell around nothing. Someone
+        // who closes that screen without connecting has asked to leave, and the button says so.
+        if (!await EnsureConnectionAsync())
+        {
+            Model.Loading = false;
+            _closing = true;
+            Close();
+            return;
+        }
         await OpenWorkspaceAsync();
         _updater = new ApplicationUpdater(_profiles.Root);
         if (_updater.LastResult() is { } error) Model.Report(error);
@@ -83,7 +103,7 @@ public sealed partial class MainWindow : Window
             throw new InvalidOperationException("Unexpected production capabilities.");
         var rendered = await workspace.View.CoreWebView2.ExecuteScriptAsync("Boolean(document.querySelector('.desktop-home'))");
         if (rendered != "true") throw new InvalidOperationException("The shared desktop interface was not rendered.");
-        await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token);
+        await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token, _session?.Token);
         var size = AppWindow.Size;
         var position = AppWindow.Position;
         var webView = workspace.View.CoreWebView2;
@@ -112,7 +132,7 @@ public sealed partial class MainWindow : Window
             _requestedHotkey = null;
             _workspace?.Dispose();
             var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
-            var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme, _settings.ShowPing, _settings.NotificationSounds)
+            var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme, _settings.ShowPing, _settings.NotificationSounds, _session)
             {
                 RequestPermission = RequestPermissionAsync,
             };
@@ -136,8 +156,13 @@ public sealed partial class MainWindow : Window
         var revision = ++_favoriteRevision;
         try
         {
-            var rooms = await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token);
+            var rooms = await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token, _session?.Token);
             if (workspace == _workspace && revision == _favoriteRevision && !_closed) Model.ReplaceFavorites(rooms);
+        }
+        catch (HttpRequestException e) when (e.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            // The session lapsed. Renewing is ours to do; the page is told about the new one.
+            await RenewSessionAsync();
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
@@ -183,6 +208,8 @@ public sealed partial class MainWindow : Window
                 _workspace?.Post(new("hotkey.status", Detail: status));
                 break;
             case "favorites.changed": Run(RefreshFavoritesAsync); break;
+            case "servers.open": Run(() => ShowServersAsync()); break;
+            case "session.expired": Run(RenewSessionAsync); break;
             case "close-ready": _closeReady?.TrySetResult(); break;
         }
     }
@@ -217,77 +244,477 @@ public sealed partial class MainWindow : Window
             if (_closed) return ContentDialogResult.None;
             dialog.XamlRoot = Root.XamlRoot;
             dialog.RequestedTheme = Root.RequestedTheme;
+            _openDialog = dialog;
             return await dialog.ShowAsync();
         }
-        finally { _dialogs.Release(); }
+        finally
+        {
+            _openDialog = null;
+            _dialogs.Release();
+        }
+    }
+    /// <summary>WinUI shows one dialog at a time, so a step that needs another closes this one first.</summary>
+    private void CloseOpenDialog() => _openDialog?.Hide();
+
+    /// <summary>
+    /// Connects to the saved server, and asks only when it cannot. An address with automatic
+    /// connection on and a remembered password needs no screen at all; anything else opens the
+    /// server list, which is also where a first-time user picks where they are going.
+    /// </summary>
+    private async Task<bool> EnsureConnectionAsync()
+    {
+        Model.ServerLabel = "Подключаемся…";
+        var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
+        var entry = _settings.Servers?.FirstOrDefault(server => server.Url == endpoint.Origin.AbsoluteUri);
+        if (entry?.AutoConnect != false)
+        {
+            var password = await _profiles.GetPasswordAsync(endpoint, _lifetime.Token);
+            var result = await new ServerAccessClient(_http).TryConnectAsync(endpoint.Origin.AbsoluteUri, password, _lifetime.Token);
+            if (result is { Ok: true, Session: { } session })
+            {
+                _session = session;
+                _password = password;
+                return true;
+            }
+            Model.Loading = false;
+            return await ShowServersAsync(result.Detail);
+        }
+        Model.Loading = false;
+        return await ShowServersAsync("");
     }
 
-    private async Task ShowSettingsAsync()
+    /// <summary>
+    /// The list of servers with the one blue button that adds to it, a gear on every row, and
+    /// the way in. Editing an entry needs its own dialog and WinUI shows one at a time, so the
+    /// picker closes, the editor runs, and the picker comes back — which is also why this is a
+    /// loop rather than a single call.
+    /// </summary>
+    private async Task<bool> ShowServersAsync(string complaint = "")
     {
-        var current = ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
-        var servers = _settings.Servers?.ToList() ?? [];
-        var picker = new ComboBox { Header = "Сохранённые серверы", HorizontalAlignment = HorizontalAlignment.Stretch };
-        var address = new TextBox { Header = "Адрес сервера", Text = _settings.ServerUrl, PlaceholderText = "https://meet.example.com", MinWidth = 320 };
-        var label = new TextBox { Header = "Название (необязательно)", Text = servers.FirstOrDefault(entry => entry.Url == current)?.Name ?? "", MaxLength = 60 };
-        var forget = new Button { Content = "Забыть этот сервер", HorizontalAlignment = HorizontalAlignment.Left };
-        void FillPicker(string select)
+        while (true)
         {
-            picker.Items.Clear();
-            foreach (var entry in servers) picker.Items.Add(entry.Label);
-            picker.SelectedIndex = servers.FindIndex(entry => entry.Url == select);
-            // The list must never empty out completely: one server has to remain reachable.
-            forget.IsEnabled = servers.Count > 1;
+            var choice = await PickServerAsync(complaint);
+            complaint = "";
+            if (choice.Adding || choice.Edit is not null)
+            {
+                await EditServerAsync(choice.Edit);
+                continue;
+            }
+            // Moving to the server happens after the dialog has closed. Leaving a meeting first
+            // asks its own question, and WinUI will not show that question over this one — it
+            // would wait for a dialog that is waiting for it.
+            if (choice.Connect is null || choice.Session is null) return _session is not null;
+            if (await ApplyServerAsync(choice.Connect, choice.Password, choice.Automatic, choice.Session)) return true;
+            complaint = "Переход отменён: вы остались во встрече на прежнем сервере.";
         }
-        FillPicker(current);
-        picker.SelectionChanged += (_, _) =>
+    }
+
+    private sealed record ServerChoice(
+        ServerEntry? Connect = null,
+        ServerSession? Session = null,
+        string Password = "",
+        bool Automatic = true,
+        ServerEntry? Edit = null,
+        bool Adding = false);
+
+    private async Task<ServerChoice> PickServerAsync(string complaint)
+    {
+        await _shown.Task;
+        var servers = (_settings.Servers ?? []).ToList();
+        var current = ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+        var chosen = servers.FirstOrDefault(server => server.Url == current) ?? servers.FirstOrDefault();
+        ServerEntry? edit = null;
+        var adding = false;
+
+        var heading = new TextBlock { Text = "СОХРАНЁННЫЕ СЕРВЕРЫ", FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, CharacterSpacing = 90, VerticalAlignment = VerticalAlignment.Center, Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] };
+        var add = new Button
         {
-            if (picker.SelectedIndex < 0 || picker.SelectedIndex >= servers.Count) return;
-            address.Text = servers[picker.SelectedIndex].Url;
-            label.Text = servers[picker.SelectedIndex].Name;
+            Content = new FontIcon { Glyph = "\uE710", FontSize = 14 },
+            Width = 36,
+            Height = 36,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(10),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Background = (Brush)Application.Current.Resources["CordAccent"],
+            Foreground = new SolidColorBrush(Microsoft.UI.Colors.White),
+            BorderThickness = new Thickness(0),
         };
-        forget.Click += (_, _) =>
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(add, "Добавить сервер");
+        ToolTipService.SetToolTip(add, "Добавить сервер");
+        var header = new Grid();
+        header.Children.Add(heading);
+        header.Children.Add(add);
+
+        var rows = new StackPanel { Spacing = 2 };
+        var password = new PasswordBox { Header = "Пароль сервера", PlaceholderText = "Если сервер закрыт паролем", MaxLength = 200 };
+        var automatic = new CheckBox { Content = "Подключаться автоматически при запуске" };
+        var status = new TextBlock { FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        var detail = new Expander { Header = "Подробности", Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var reason = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+        detail.Content = reason;
+
+        void Select(ServerEntry? entry)
         {
-            if (servers.Count <= 1) return;
-            servers = ServerList.Remove(servers, address.Text).ToList();
-            var next = servers.Count > 0 ? servers[0] : null;
-            if (next is not null) { address.Text = next.Url; label.Text = next.Name; }
-            FillPicker(next?.Url ?? "");
+            chosen = entry;
+            password.Password = "";
+            automatic.IsChecked = entry?.AutoConnect != false;
+            rows.Children.Clear();
+            foreach (var server in servers)
+            {
+                var row = new Grid { ColumnSpacing = 4, Padding = new Thickness(0, 1, 0, 1) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                var pick = new Button
+                {
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    HorizontalContentAlignment = HorizontalAlignment.Left,
+                    Padding = new Thickness(12, 9, 12, 9),
+                    CornerRadius = new CornerRadius(10),
+                    BorderThickness = new Thickness(0),
+                    Background = server.Url == entry?.Url
+                        ? (Brush)Application.Current.Resources["AccentFillColorTertiaryBrush"]
+                        : new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    Content = new StackPanel
+                    {
+                        Spacing = 2,
+                        Children =
+                        {
+                            new TextBlock { Text = server.Label, TextTrimming = TextTrimming.CharacterEllipsis, FontSize = 13 },
+                            new TextBlock { Text = Host(server.Url), FontSize = 11, Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"] },
+                        },
+                    },
+                };
+                var captured = server;
+                pick.Click += (_, _) => Select(captured);
+                var gear = new Button
+                {
+                    Content = new FontIcon { Glyph = "\uE713", FontSize = 14 },
+                    Width = 36,
+                    Height = 36,
+                    Padding = new Thickness(0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                    BorderThickness = new Thickness(0),
+                };
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(gear, $"Изменить «{server.Label}»");
+                ToolTipService.SetToolTip(gear, "Изменить или удалить");
+                gear.Click += (_, _) => { edit = captured; CloseOpenDialog(); };
+                Grid.SetColumn(gear, 1);
+                row.Children.Add(pick);
+                row.Children.Add(gear);
+                rows.Children.Add(row);
+            }
+        }
+        Select(chosen);
+        // The password for the server we are already on is the one Windows is keeping; any
+        // other entry starts empty until its own is loaded by the editor.
+        if (chosen?.Url == current)
+            password.Password = await _profiles.GetPasswordAsync(ServerEndpoint.Parse(current), _lifetime.Token);
+        add.Click += (_, _) => { adding = true; CloseOpenDialog(); };
+
+        var check = new HyperlinkButton { Content = "Проверить подключение", FontSize = 12, Padding = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Right };
+        var statusRow = new Grid();
+        statusRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        statusRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        statusRow.Children.Add(status);
+        Grid.SetColumn(check, 1);
+        statusRow.Children.Add(check);
+
+        void Report(ConnectionResult result)
+        {
+            status.Text = result.Ok ? "Подключено!" : "Не подключено";
+            status.Foreground = new SolidColorBrush(result.Ok
+                ? global::Windows.UI.Color.FromArgb(255, 40, 160, 100)
+                : global::Windows.UI.Color.FromArgb(255, 210, 70, 70));
+            reason.Text = result.Detail;
+            detail.Visibility = result.Ok ? Visibility.Collapsed : Visibility.Visible;
+            detail.IsExpanded = false;
+        }
+        check.Click += async (_, _) =>
+        {
+            if (chosen is null) return;
+            check.IsEnabled = false;
+            status.Text = "Проверяем…";
+            status.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            detail.Visibility = Visibility.Collapsed;
+            try { Report(await new ServerAccessClient(_http).TryConnectAsync(chosen.Url, password.Password, _lifetime.Token)); }
+            catch (OperationCanceledException) { /* Closing the window during a check is not a failure. */ }
+            finally { check.IsEnabled = true; }
         };
-        var theme = new ComboBox { Header = "Оформление", HorizontalAlignment = HorizontalAlignment.Stretch };
-        theme.Items.Add("Как в системе"); theme.Items.Add("Светлое"); theme.Items.Add("Тёмное");
-        theme.SelectedIndex = _settings.Theme == "light" ? 1 : _settings.Theme == "dark" ? 2 : 0;
-        var note = new TextBlock { Text = "Выберите сохранённый сервер или впишите новый адрес — он добавится в список. Имя, избранное и устройства сохраняются отдельно для каждого сервера.", TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+        if (complaint.Length > 0) Report(new ConnectionResult(false, complaint));
+
+        var content = new StackPanel { Spacing = 14, MinWidth = 380 };
+        content.Children.Add(header);
+        content.Children.Add(new ScrollViewer { Content = rows, MaxHeight = 220, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+        content.Children.Add(password);
+        content.Children.Add(automatic);
+        content.Children.Add(statusRow);
+        content.Children.Add(detail);
+
+        ServerSession? opened = null;
+        var dialog = new ContentDialog
+        {
+            Title = "Подключение к серверу",
+            Content = content,
+            PrimaryButtonText = "Подключиться",
+            CloseButtonText = _session is null ? "Выйти" : "Закрыть",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        dialog.PrimaryButtonClick += async (_, args) =>
+        {
+            args.Cancel = true;
+            if (chosen is null) return;
+            var deferral = args.GetDeferral();
+            try
+            {
+                status.Text = "Подключаемся…";
+                status.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                var result = await new ServerAccessClient(_http).TryConnectAsync(chosen.Url, password.Password, _lifetime.Token);
+                Report(result);
+                // A refusal keeps the dialog open with the reason under the button, which is
+                // where the person can act on it.
+                opened = result.Session;
+                args.Cancel = !result.Ok;
+            }
+            catch (OperationCanceledException) { }
+            finally { deferral.Complete(); }
+        };
+        await DialogAsync(dialog);
+        return new ServerChoice(opened is null ? null : chosen, opened, password.Password, automatic.IsChecked == true, edit, adding);
+    }
+
+    /// <summary>Add or change one server. Saving never requires the server to be reachable.</summary>
+    private async Task EditServerAsync(ServerEntry? entry)
+    {
+        var servers = (_settings.Servers ?? []).ToList();
+        var address = new TextBox { Header = "Адрес сервера", Text = entry?.Url ?? "", PlaceholderText = "https://meet.example.com", IsSpellCheckEnabled = false };
+        var label = new TextBox { Header = "Название сервера", Text = entry?.Name ?? "", PlaceholderText = "Как называть его в списке", MaxLength = 60 };
+        var password = new PasswordBox { Header = "Пароль", MaxLength = 200, PlaceholderText = "Если сервер закрыт паролем" };
+        if (entry is not null)
+            password.Password = await _profiles.GetPasswordAsync(ServerEndpoint.Parse(entry.Url), _lifetime.Token);
+        var automatic = new CheckBox { Content = "Подключаться автоматически при запуске", IsChecked = entry?.AutoConnect != false };
+        var status = new TextBlock { FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
+        var reason = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+        var detail = new Expander { Header = "Подробности", Content = reason, Visibility = Visibility.Collapsed, HorizontalAlignment = HorizontalAlignment.Stretch };
+        var check = new HyperlinkButton { Content = "Проверить подключение", FontSize = 12, Padding = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Right };
+        check.Click += async (_, _) =>
+        {
+            check.IsEnabled = false;
+            status.Text = "Проверяем…";
+            status.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            detail.Visibility = Visibility.Collapsed;
+            try
+            {
+                var result = await new ServerAccessClient(_http).TryConnectAsync(address.Text, password.Password, _lifetime.Token);
+                status.Text = result.Ok ? "Подключено!" : "Не подключено";
+                status.Foreground = new SolidColorBrush(result.Ok
+                    ? global::Windows.UI.Color.FromArgb(255, 40, 160, 100)
+                    : global::Windows.UI.Color.FromArgb(255, 210, 70, 70));
+                reason.Text = result.Detail;
+                detail.Visibility = result.Ok ? Visibility.Collapsed : Visibility.Visible;
+            }
+            catch (OperationCanceledException) { }
+            finally { check.IsEnabled = true; }
+        };
+        var statusRow = new Grid();
+        statusRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        statusRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        statusRow.Children.Add(status);
+        Grid.SetColumn(check, 1);
+        statusRow.Children.Add(check);
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 210, 70, 70)) };
-        var content = new StackPanel { Spacing = 18, MaxWidth = 420 };
-        content.Children.Add(picker); content.Children.Add(address); content.Children.Add(label); content.Children.Add(forget);
-        content.Children.Add(theme); content.Children.Add(note); content.Children.Add(error);
-        var name = new TextBox { Header = "Имя по умолчанию", Text = Model.Name == "Ваше пространство" ? "" : Model.Name, MaxLength = 40 };
-        content.Children.Insert(0, name);
-        var sounds = new ToggleSwitch { Header = "Звуки уведомлений", IsOn = _settings.NotificationSounds };
-        var ping = new ToggleSwitch { Header = "Показывать задержку / PING", IsOn = _settings.ShowPing };
-        content.Children.Add(sounds); content.Children.Add(ping);
-        var dialog = new ContentDialog { Title = "Ваше пространство", Content = content, PrimaryButtonText = "Сохранить", CloseButtonText = "Отмена", DefaultButton = ContentDialogButton.Primary };
+        var content = new StackPanel { Spacing = 14, MinWidth = 380 };
+        content.Children.Add(label);
+        content.Children.Add(address);
+        content.Children.Add(password);
+        content.Children.Add(automatic);
+        content.Children.Add(error);
+        content.Children.Add(statusRow);
+        content.Children.Add(detail);
+
+        // The active server has to stay in the list: removing the ground you are standing on
+        // would leave the application with nowhere to go.
+        var removable = entry is not null && entry.Url != ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+        var dialog = new ContentDialog
+        {
+            Title = entry is null ? "Новый сервер" : "Сервер",
+            Content = content,
+            PrimaryButtonText = entry is null ? "Добавить" : "Сохранить",
+            SecondaryButtonText = removable ? "Удалить" : "",
+            CloseButtonText = "Закрыть",
+            DefaultButton = ContentDialogButton.Primary,
+        };
         dialog.PrimaryButtonClick += (_, args) =>
         {
             try { ServerEndpoint.Parse(address.Text); }
             catch (ArgumentException e) { error.Text = e.Message.Split(" (Parameter")[0]; args.Cancel = true; }
         };
-        if (await DialogAsync(dialog) != ContentDialogResult.Primary) return;
+        var outcome = await DialogAsync(dialog);
+        if (outcome == ContentDialogResult.Secondary && entry is not null)
+        {
+            _settings = _settings with { Servers = ServerList.Remove(servers, entry.Url) };
+            await _profiles.SaveAsync(_settings, _lifetime.Token);
+            await _profiles.SavePasswordAsync(ServerEndpoint.Parse(entry.Url), "", _lifetime.Token);
+            return;
+        }
+        if (outcome != ContentDialogResult.Primary) return;
         var endpoint = ServerEndpoint.Parse(address.Text);
-        bool changed = endpoint.Origin.AbsoluteUri != current;
-        if (changed && Model.InCall && !await ConfirmLeaveAsync()) return;
+        // Renaming an entry to a different address leaves the old one behind, which would be a
+        // duplicate of a server nobody asked to keep.
+        if (entry is not null && entry.Url != endpoint.Origin.AbsoluteUri)
+            servers = ServerList.Remove(servers, entry.Url).ToList();
+        _settings = _settings with
+        {
+            Servers = ServerList.Add(servers, endpoint.Origin.AbsoluteUri, label.Text, automatic.IsChecked == true),
+        };
+        await _profiles.SaveAsync(_settings, _lifetime.Token);
+        await _profiles.SavePasswordAsync(endpoint, password.Password, _lifetime.Token);
+    }
+
+    /// <summary>Moves the application onto a server: saves it, then reopens the workspace there.</summary>
+    private async Task<bool> ApplyServerAsync(ServerEntry entry, string password, bool automatic, ServerSession session)
+    {
+        var endpoint = ServerEndpoint.Parse(entry.Url);
+        var changed = _workspace is not null && _workspace.Endpoint.Origin.AbsoluteUri != endpoint.Origin.AbsoluteUri;
+        if (changed && Model.InCall && !await ConfirmLeaveAsync()) return false;
         if (changed && Model.InCall) await LeaveWebAsync();
-        _settings = _settings with { ShowPing = ping.IsOn, NotificationSounds = sounds.IsOn, ServerUrl = endpoint.Origin.AbsoluteUri, Servers = ServerList.Add(servers, endpoint.Origin.AbsoluteUri, label.Text), Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system" };
+        _session = session;
+        _password = password;
+        _settings = _settings with
+        {
+            ServerUrl = endpoint.Origin.AbsoluteUri,
+            Servers = ServerList.Add(_settings.Servers ?? [], endpoint.Origin.AbsoluteUri, entry.Name, automatic),
+        };
+        await _profiles.SaveAsync(_settings, _lifetime.Token);
+        await _profiles.SavePasswordAsync(endpoint, password, _lifetime.Token);
+        if (changed)
+        {
+            Model.InCall = false;
+            Model.ReplaceFavorites([]);
+            await OpenWorkspaceAsync();
+        }
+        else if (_workspace is not null) PostSession();
+        return true;
+    }
+
+    /// <summary>A server with no door has nothing to hand over, and an empty pass is not one.</summary>
+    private void PostSession()
+    {
+        if (_session is not { Token.Length: > 0 }) return;
+        _workspace?.Post(new("session.token", Token: _session.Token, ExpiresAt: _session.ExpiresAt, ServerName: _session.Name));
+    }
+
+    /// <summary>
+    /// A lapsed session is repaired here, with the password Windows is keeping for us, and the
+    /// page is handed the new one. It never learns the password and never has to ask for it.
+    /// </summary>
+    private async Task RenewSessionAsync()
+    {
+        if (_renewing || _closed || _workspace is null) return;
+        _renewing = true;
+        try
+        {
+            var result = await new ServerAccessClient(_http).TryConnectAsync(_workspace.Endpoint.Origin.AbsoluteUri, _password, _lifetime.Token);
+            if (result is { Ok: true, Session: { } session })
+            {
+                _session = session;
+                if (_workspace is not null) _workspace.Session = session;
+                PostSession();
+            }
+            else if (!Model.InCall) Model.Report(result.Detail);
+        }
+        finally { _renewing = false; }
+    }
+
+    private static string Host(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Authority : url;
+
+    /// <summary>
+    /// Everything about you and this device, in the order a person thinks about it: who you
+    /// are, what you hear, where you are connected, how it looks.
+    ///
+    /// <para>The server list used to live in the middle of this dialog, which left the two
+    /// switches stranded below an address field and an error line that were usually about
+    /// something else entirely. Choosing a server is its own decision and now has its own
+    /// screen; what stays here is the one line saying where you are and the way to that
+    /// screen.</para>
+    /// </summary>
+    private async Task ShowSettingsAsync()
+    {
+        var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
+        var entry = _settings.Servers?.FirstOrDefault(server => server.Url == endpoint.Origin.AbsoluteUri);
+        var name = new TextBox { Header = "Имя по умолчанию", Text = Model.Name == "Ваше пространство" ? "" : Model.Name, MaxLength = 40, PlaceholderText = "Как к вам обращаться?" };
+        var sounds = new ToggleSwitch { Header = "Звуки уведомлений", IsOn = _settings.NotificationSounds };
+        var ping = new ToggleSwitch { Header = "Показывать задержку / PING", IsOn = _settings.ShowPing };
+        var automatic = new CheckBox { Content = "Подключаться к этому серверу при запуске", IsChecked = entry?.AutoConnect != false };
+        var servers = new Button { Content = "Сменить сервер…", HorizontalAlignment = HorizontalAlignment.Left };
+        var switching = false;
+        servers.Click += (_, _) => { switching = true; CloseOpenDialog(); };
+        var theme = new ComboBox { Header = "Оформление", HorizontalAlignment = HorizontalAlignment.Stretch };
+        theme.Items.Add("Как в системе"); theme.Items.Add("Светлое"); theme.Items.Add("Тёмное");
+        theme.SelectedIndex = _settings.Theme == "light" ? 1 : _settings.Theme == "dark" ? 2 : 0;
+
+        var content = new StackPanel { Spacing = 10, MinWidth = 380 };
+        content.Children.Add(Group("Профиль"));
+        content.Children.Add(name);
+        content.Children.Add(Note("Это имя подставляется при следующем входе во встречу."));
+        content.Children.Add(Group("Звук"));
+        content.Children.Add(sounds);
+        content.Children.Add(Note("Вход и выход каждого участника, запрос на вход, ваш вход и выход. При закрытии приложения сначала звучит выход из встречи."));
+        content.Children.Add(Group("Подключение"));
+        content.Children.Add(new TextBlock
+        {
+            Text = (_session?.Name is { Length: > 0 } title ? title + " · " : "") + Host(endpoint.Origin.AbsoluteUri),
+            TextWrapping = TextWrapping.Wrap,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        content.Children.Add(automatic);
+        content.Children.Add(servers);
+        content.Children.Add(ping);
+        content.Children.Add(Note("Имя, избранное и устройства сохраняются отдельно для каждого сервера."));
+        content.Children.Add(Group("Оформление"));
+        content.Children.Add(theme);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Ваше пространство",
+            Content = new ScrollViewer { Content = content, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 520 },
+            PrimaryButtonText = "Сохранить",
+            CloseButtonText = "Отмена",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        var outcome = await DialogAsync(dialog);
+        if (outcome != ContentDialogResult.Primary && !switching) return;
+        _settings = _settings with
+        {
+            ShowPing = ping.IsOn,
+            NotificationSounds = sounds.IsOn,
+            Servers = ServerList.Add(_settings.Servers ?? [], endpoint.Origin.AbsoluteUri, entry?.Name ?? "", automatic.IsChecked == true),
+            Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system",
+        };
         await _profiles.SaveAsync(_settings, _lifetime.Token);
         ApplyTheme(_settings.Theme);
-        if (changed) { Model.InCall = false; Model.ReplaceFavorites([]); await OpenWorkspaceAsync(); }
-        else
-        {
-            _workspace?.Post(new("theme.changed", Theme: _settings.Theme));
-            _workspace?.Post(new("profile.changed", Name: name.Text.Trim()));
-            _workspace?.Post(new("preferences.changed", ShowPing: _settings.ShowPing, NotificationSounds: _settings.NotificationSounds));
-        }
+        _workspace?.Post(new("theme.changed", Theme: _settings.Theme));
+        _workspace?.Post(new("profile.changed", Name: name.Text.Trim()));
+        _workspace?.Post(new("preferences.changed", ShowPing: _settings.ShowPing, NotificationSounds: _settings.NotificationSounds));
+        if (switching) await ShowServersAsync();
     }
+
+    private static TextBlock Group(string title) => new()
+    {
+        Text = title.ToUpperInvariant(),
+        FontSize = 11,
+        CharacterSpacing = 90,
+        Margin = new Thickness(0, 12, 0, 0),
+        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+    };
+    private static TextBlock Note(string text) => new()
+    {
+        Text = text,
+        TextWrapping = TextWrapping.Wrap,
+        FontSize = 12,
+        Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+    };
     private void ApplyTheme(string theme)
     {
         Root.RequestedTheme = theme == "dark" ? ElementTheme.Dark : theme == "light" ? ElementTheme.Light : ElementTheme.Default;
@@ -361,7 +788,7 @@ public sealed partial class MainWindow : Window
         if (Root.ActualWidth < 1000)
         {
             var menu = new MenuFlyout();
-            foreach (var (text, action) in new (string, Func<Task>)[] { ("Главная", () => NavigateAsync("home")), ("Новая встреча", () => NavigateAsync("create")), ("Настройки", ShowSettingsAsync) })
+            foreach (var (text, action) in new (string, Func<Task>)[] { ("Главная", () => NavigateAsync("home")), ("Новая встреча", () => NavigateAsync("create")), ("Настройки", ShowSettingsAsync), ("Серверы", () => ShowServersAsync()) })
             {
                 var item = new MenuFlyoutItem { Text = text }; item.Click += (_, _) => Run(action); menu.Items.Add(item);
             }
@@ -421,6 +848,7 @@ public sealed partial class MainWindow : Window
     private void Favorite_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) Run(() => NavigateAsync("favorite", id)); }
     private void Refresh_Click(object sender, RoutedEventArgs e) => Run(RefreshFavoritesAsync);
     private void Settings_Click(object sender, RoutedEventArgs e) => Run(ShowSettingsAsync);
+    private void Servers_Click(object sender, RoutedEventArgs e) => Run(() => ShowServersAsync());
     private void Retry_Click(object sender, RoutedEventArgs e) => Run(async () => { if (!Model.InCall || await ConfirmLeaveAsync()) { await LeaveWebAsync(); Model.InCall = false; await OpenWorkspaceAsync(); } });
     private async void Run(Func<Task> action)
     {

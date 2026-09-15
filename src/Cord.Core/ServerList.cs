@@ -25,7 +25,7 @@ public static class ServerList
         {
             if (result.Count >= Max) break;
             if (Origin(entry.Url) is not { } origin || !seen.Add(origin)) continue;
-            result.Add(new ServerEntry(origin, Trim(entry.Name)));
+            result.Add(new ServerEntry(origin, Trim(entry.Name), entry.AutoConnect));
         }
 
         // The server currently in use must stay reachable even if it was never saved, and
@@ -38,11 +38,12 @@ public static class ServerList
         return result;
     }
 
-    /// <summary>Adds a server, or renames it if that origin is already saved.</summary>
+    /// <summary>Adds a server, or updates it if that origin is already saved.</summary>
     public static IReadOnlyList<ServerEntry> Add(
         IReadOnlyList<ServerEntry> servers,
         string url,
-        string name = "")
+        string name = "",
+        bool autoConnect = true)
     {
         if (Origin(url) is not { } origin) throw new ArgumentException("Неверный адрес сервера", nameof(url));
         var result = servers.ToList();
@@ -50,10 +51,10 @@ public static class ServerList
         var existing = result.FindIndex(entry => entry.Url == origin);
         if (existing >= 0)
         {
-            result[existing] = new ServerEntry(origin, Trim(name));
+            result[existing] = new ServerEntry(origin, Trim(name), autoConnect);
             return result;
         }
-        result.Insert(0, new ServerEntry(origin, Trim(name)));
+        result.Insert(0, new ServerEntry(origin, Trim(name), autoConnect));
         if (result.Count > Max) result.RemoveRange(Max, result.Count - Max);
         return result;
     }

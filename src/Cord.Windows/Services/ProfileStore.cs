@@ -72,6 +72,53 @@ public sealed class ProfileStore
         finally { _writes.Release(); }
     }
 
+    /// <summary>
+    /// The server password, if this device chose to remember one. Protected the same way as the
+    /// profile capability and for the same reason: settings.json is plain text a person may copy
+    /// between machines, and a password does not belong in it.
+    /// </summary>
+    public async Task<string> GetPasswordAsync(ServerEndpoint endpoint, CancellationToken token)
+    {
+        var path = PasswordPath(endpoint);
+        if (!File.Exists(path)) return "";
+        await _writes.WaitAsync(token);
+        try
+        {
+            var encrypted = await File.ReadAllBytesAsync(path, token);
+            return Encoding.UTF8.GetString(ProtectedData.Unprotect(encrypted, Entropy(endpoint), DataProtectionScope.CurrentUser));
+        }
+        catch (Exception error) when (error is CryptographicException or IOException)
+        {
+            // A password that cannot be read is a password we do not have; asking again is the
+            // correct behaviour, and refusing to start would not be.
+            return "";
+        }
+        finally { _writes.Release(); }
+    }
+
+    public async Task SavePasswordAsync(ServerEndpoint endpoint, string password, CancellationToken token)
+    {
+        var path = PasswordPath(endpoint);
+        await _writes.WaitAsync(token);
+        try
+        {
+            if (string.IsNullOrEmpty(password))
+            {
+                File.Delete(path);
+                return;
+            }
+            var bytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(password), Entropy(endpoint), DataProtectionScope.CurrentUser);
+            var temporary = path + ".tmp";
+            await File.WriteAllBytesAsync(temporary, bytes, token);
+            File.Move(temporary, path, overwrite: true);
+        }
+        catch (IOException) { /* Remembering a password is a convenience, never a failure. */ }
+        finally { _writes.Release(); }
+    }
+
+    private string PasswordPath(ServerEndpoint endpoint) => Path.Combine(Root, $"server-{endpoint.StorageKey}.dat");
+    private static byte[] Entropy(ServerEndpoint endpoint) => Encoding.UTF8.GetBytes("server-password:" + endpoint.Origin.AbsoluteUri);
+
     public string BrowserProfile(ServerEndpoint endpoint)
     {
         var path = Path.Combine(Root, "WebView2", endpoint.StorageKey);

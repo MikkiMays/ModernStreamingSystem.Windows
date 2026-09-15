@@ -103,6 +103,136 @@ public sealed class BoundaryTests
         }
     }
 
+    [Fact]
+    public void TheHostHandsThePageASessionAndNeverThePassword()
+    {
+        var endpoint = ServerEndpoint.Parse("https://meet.example.com");
+        var profile = new string('A', 43);
+        var session = new ServerSession("1800000000.signature", 1800000000, "Наш Cord", true);
+        var withSession = BridgeProtocol.Bootstrap(endpoint, profile, "dark", false, true, session);
+        Assert.Contains("cord:session:v1", withSession, StringComparison.Ordinal);
+        Assert.Contains("1800000000.signature", withSession, StringComparison.Ordinal);
+        // Bootstrap has no parameter for the password at all, and what it does carry is a value
+        // inside a JavaScript string literal: a server that names itself with a quote must not
+        // be able to end that literal and continue as code.
+        var hostile = new ServerSession("1800000000.s", 1800000000, "');fetch('https://evil.test", true);
+        Assert.DoesNotContain("');fetch(", BridgeProtocol.Bootstrap(endpoint, profile, "dark", false, true, hostile), StringComparison.Ordinal);
+        var without = BridgeProtocol.Bootstrap(endpoint, profile);
+        Assert.Contains("sessionStorage.removeItem('cord:session:v1')", without, StringComparison.Ordinal);
+        Assert.DoesNotContain("setItem('cord:session:v1'", without, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheBridgeCarriesTheTwoNewRequestsAndNothingElse()
+    {
+        var endpoint = ServerEndpoint.Parse("https://meet.example.com");
+        var origin = endpoint.Origin.AbsoluteUri;
+        Assert.Equal("servers.open", BridgeProtocol.Read(endpoint, origin, """{"version":1,"type":"servers.open"}""")?.Type);
+        Assert.Equal("session.expired", BridgeProtocol.Read(endpoint, origin, """{"version":1,"type":"session.expired"}""")?.Type);
+        Assert.Null(BridgeProtocol.Read(endpoint, "https://evil.test", """{"version":1,"type":"servers.open"}"""));
+        Assert.Null(BridgeProtocol.Read(endpoint, origin, """{"version":1,"type":"session.token"}"""));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, "не принял пароль")]
+    [InlineData(HttpStatusCode.TooManyRequests, "Слишком много попыток")]
+    [InlineData(HttpStatusCode.BadGateway, "ещё запускается")]
+    public async Task EveryRefusalSaysSomethingAPersonCanActOn(HttpStatusCode status, string expected)
+    {
+        using var handler = new StubHttp(_ => new(status));
+        using var http = new HttpClient(handler);
+        var result = await new ServerAccessClient(http).TryConnectAsync("https://meet.example.com", "wrong", TestContext.Current.CancellationToken);
+        Assert.False(result.Ok);
+        Assert.Contains(expected, result.Detail, StringComparison.Ordinal);
+        Assert.Null(result.Session);
+    }
+
+    /// <summary>
+    /// A Cord older than the handshake has no /session at all. Refusing to open it would mean a
+    /// new client cannot talk to a server nobody has updated yet, which is not a decision this
+    /// client gets to make. A 404 from something that is not Cord still has to look different.
+    /// </summary>
+    [Fact]
+    public async Task AServerWithNoDoorIsWalkedIntoAndAnythingElseWithA404IsNot()
+    {
+        using var older = new StubHttp(request => request.RequestUri!.AbsolutePath == "/api/v1/session"
+            ? new(HttpStatusCode.NotFound)
+            : new(HttpStatusCode.OK) { Content = new StringContent("""{"name":"Старый Cord","passwordRequired":false,"maxParticipants":10}""", Encoding.UTF8, "application/json") });
+        using var olderClient = new HttpClient(older);
+        var walked = await new ServerAccessClient(olderClient).TryConnectAsync("https://meet.example.com", "", TestContext.Current.CancellationToken);
+        Assert.True(walked.Ok, walked.Detail);
+        Assert.Equal("", walked.Session!.Token);
+        Assert.Equal("Старый Cord", walked.Session.Name);
+        // An empty pass is not a pass: the page must not be handed one.
+        Assert.Contains("removeItem('cord:session:v1')", BridgeProtocol.Bootstrap(ServerEndpoint.Parse("https://meet.example.com"), new string('A', 43), "system", false, true, walked.Session), StringComparison.Ordinal);
+
+        using var stranger = new StubHttp(_ => new(HttpStatusCode.NotFound));
+        using var strangerClient = new HttpClient(stranger);
+        var refused = await new ServerAccessClient(strangerClient).TryConnectAsync("https://meet.example.com", "", TestContext.Current.CancellationToken);
+        Assert.False(refused.Ok);
+        Assert.Contains("отвечает не Cord", refused.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnAddressThatCannotBeAServerIsRefusedBeforeAnythingIsSent()
+    {
+        var sent = false;
+        using var handler = new StubHttp(_ => { sent = true; return new(HttpStatusCode.OK); });
+        using var http = new HttpClient(handler);
+        var result = await new ServerAccessClient(http).TryConnectAsync("http://meet.example.com", "", TestContext.Current.CancellationToken);
+        Assert.False(result.Ok);
+        Assert.False(sent);
+        Assert.Contains("HTTPS", result.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AHandshakeSendsThePasswordInTheBodyAndReturnsTheSession()
+    {
+        string? body = null;
+        using var handler = new StubHttp(request =>
+        {
+            Assert.Equal("/api/v1/session", request.RequestUri!.AbsolutePath);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Empty(request.RequestUri.Query);
+            body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new(HttpStatusCode.OK) { Content = new StringContent("""{"token":"1800000000.s","expiresAt":1800000000,"name":"Наш Cord","passwordRequired":true}""", Encoding.UTF8, "application/json") };
+        });
+        using var http = new HttpClient(handler);
+        var result = await new ServerAccessClient(http).TryConnectAsync("https://meet.example.com", "тайна", TestContext.Current.CancellationToken);
+        Assert.True(result.Ok, result.Detail);
+        Assert.Equal("Наш Cord", result.Session!.Name);
+        Assert.Equal("тайна", System.Text.Json.JsonDocument.Parse(body!).RootElement.GetProperty("password").GetString());
+    }
+
+    [Fact]
+    public async Task AServerPasswordIsKeptEncryptedAndSeparatelyForEachServer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Cord.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new ProfileStore(root);
+            var a = ServerEndpoint.Parse("https://a.example.com");
+            var b = ServerEndpoint.Parse("https://b.example.com");
+            var token = TestContext.Current.CancellationToken;
+            Assert.Equal("", await store.GetPasswordAsync(a, token));
+            await store.SavePasswordAsync(a, "очень тайно", token);
+            Assert.Equal("очень тайно", await new ProfileStore(root).GetPasswordAsync(a, token));
+            Assert.Equal("", await store.GetPasswordAsync(b, token));
+            var stored = await File.ReadAllBytesAsync(Path.Combine(root, $"server-{a.StorageKey}.dat"), token);
+            Assert.DoesNotContain("очень тайно", Encoding.UTF8.GetString(stored), StringComparison.Ordinal);
+            // Settings travel between machines in plain text; the password must not be in them.
+            await store.SaveAsync(new DesktopSettings(a.Origin.AbsoluteUri), token);
+            Assert.DoesNotContain("очень тайно", await File.ReadAllTextAsync(Path.Combine(root, "settings.json"), token), StringComparison.Ordinal);
+            await store.SavePasswordAsync(a, "", token);
+            Assert.Equal("", await new ProfileStore(root).GetPasswordAsync(a, token));
+        }
+        finally
+        {
+            var allowed = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Cord.Tests")) + Path.DirectorySeparatorChar;
+            if (Path.GetFullPath(root).StartsWith(allowed, StringComparison.OrdinalIgnoreCase)) Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class StubHttp(Func<HttpRequestMessage, HttpResponseMessage> response) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(response(request));
