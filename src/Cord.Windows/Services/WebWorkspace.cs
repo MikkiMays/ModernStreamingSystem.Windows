@@ -29,7 +29,14 @@ public sealed class WebWorkspace(
     public async Task InitializeAsync(CancellationToken token)
     {
         Capability = await profiles.GetCapabilityAsync(Endpoint, token);
-        var environment = await CoreWebView2Environment.CreateWithOptionsAsync(null, profiles.BrowserProfile(Endpoint), new CoreWebView2EnvironmentOptions());
+        // Cord's cues are the point of the notification sounds setting, and a browser will not
+        // play anything until the page itself has been clicked. In our own window there is no
+        // question of whose page this is, so the gesture requirement is lifted — otherwise a
+        // meeting joined automatically from a favourite would open in silence.
+        var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
+            null,
+            profiles.BrowserProfile(Endpoint),
+            new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required" });
         token.ThrowIfCancellationRequested();
         if (_disposed) return;
         await View.EnsureCoreWebView2Async(environment);
