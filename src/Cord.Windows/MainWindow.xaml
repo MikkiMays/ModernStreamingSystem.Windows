@@ -92,7 +92,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
-              <Button Click="Settings_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,8" Background="Transparent" BorderThickness="0" CornerRadius="10" AutomationProperties.Name="Профиль и настройки" ToolTipService.ToolTip="Профиль и настройки">
+              <Button Click="Profile_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,8" Background="Transparent" BorderThickness="0" CornerRadius="10" AutomationProperties.Name="Профиль и аватар" ToolTipService.ToolTip="Имя и картинка профиля">
                 <Grid ColumnSpacing="10">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="36" />

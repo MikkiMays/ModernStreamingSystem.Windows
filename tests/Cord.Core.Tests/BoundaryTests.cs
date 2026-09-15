@@ -112,6 +112,9 @@ public sealed class BoundaryTests
         var withSession = BridgeProtocol.Bootstrap(endpoint, profile, "dark", false, true, session);
         Assert.Contains("cord:session:v1", withSession, StringComparison.Ordinal);
         Assert.Contains("1800000000.signature", withSession, StringComparison.Ordinal);
+        // The page did not perform this connection, so it is told that one just happened and
+        // can sound the cue. The mark is only ever set alongside a real session.
+        Assert.Contains("sessionStorage.setItem('cord:session:fresh', '1')", withSession, StringComparison.Ordinal);
         // Bootstrap has no parameter for the password at all, and what it does carry is a value
         // inside a JavaScript string literal: a server that names itself with a quote must not
         // be able to end that literal and continue as code.
@@ -120,6 +123,7 @@ public sealed class BoundaryTests
         var without = BridgeProtocol.Bootstrap(endpoint, profile);
         Assert.Contains("sessionStorage.removeItem('cord:session:v1')", without, StringComparison.Ordinal);
         Assert.DoesNotContain("setItem('cord:session:v1'", without, StringComparison.Ordinal);
+        Assert.DoesNotContain("setItem('cord:session:fresh'", without, StringComparison.Ordinal);
     }
 
     [Fact]

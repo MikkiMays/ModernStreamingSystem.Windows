@@ -39,9 +39,11 @@ public static class BridgeProtocol
         // The application already shook hands with the server, so the page must not show its own
         // connect screen. It is handed the session — never the password, which stays encrypted
         // on this machine — in the same store the page would have put it in itself.
+        // The mark next to it says this connection was just made, so the page can sound the
+        // connect cue it did not perform itself. It is consumed once and removed.
         var connection = session is null || session.Token.Length == 0
-            ? "sessionStorage.removeItem('cord:session:v1');"
-            : $"sessionStorage.setItem('cord:session:v1', {JsonSerializer.Serialize(JsonSerializer.Serialize(session, CordJson.Default.ServerSession))});";
+            ? "sessionStorage.removeItem('cord:session:v1'); sessionStorage.removeItem('cord:session:fresh');"
+            : $"sessionStorage.setItem('cord:session:v1', {JsonSerializer.Serialize(JsonSerializer.Serialize(session, CordJson.Default.ServerSession))}); sessionStorage.setItem('cord:session:fresh', '1');";
         // The two stores have to agree at startup. These preferences used to reach the page
         // only when the settings dialog was reopened, so a fresh launch showed whatever the
         // page had saved for itself and the desktop checkbox looked like it did nothing.

@@ -16,7 +16,7 @@
     <RootNamespace>Cord.Windows</RootNamespace>
     <ApplicationIcon>Assets\Cord.ico</ApplicationIcon>
     <Product>Cord</Product>
-    <Version>0.6.1</Version>
+    <Version>0.6.2</Version>
     <Authors>@nikgers</Authors>
     <Company>@nikgers</Company>
     <Copyright>© @nikgers</Copyright>
