@@ -19,21 +19,26 @@ public sealed class ProfileStore
     public async Task<DesktopSettings> LoadAsync(CancellationToken token)
     {
         var path = Path.Combine(Root, "settings.json");
-        if (!File.Exists(path)) return new();
+        if (!File.Exists(path)) return Normalized(new());
         try
         {
             await using var stream = File.OpenRead(path);
             var settings = await JsonSerializer.DeserializeAsync(stream, CordJson.Default.DesktopSettings, token);
-            if (settings is null) return new();
+            if (settings is null) return Normalized(new());
             ServerEndpoint.Parse(settings.ServerUrl);
-            return settings with { Theme = settings.Theme is "light" or "dark" ? settings.Theme : "system" };
+            return Normalized(settings with { Theme = settings.Theme is "light" or "dark" ? settings.Theme : "system" });
         }
-        catch (Exception error) when (error is JsonException or ArgumentException) { return new(); }
+        catch (Exception error) when (error is JsonException or ArgumentException) { return Normalized(new()); }
     }
+
+    /// <summary>Settings written before the server list existed carry only a single address.</summary>
+    private static DesktopSettings Normalized(DesktopSettings settings) =>
+        settings with { Servers = ServerList.Normalize(settings.Servers, settings.ServerUrl) };
 
     public async Task SaveAsync(DesktopSettings settings, CancellationToken token)
     {
         ServerEndpoint.Parse(settings.ServerUrl);
+        settings = Normalized(settings);
         await _writes.WaitAsync(token);
         try
         {

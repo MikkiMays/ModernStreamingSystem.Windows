@@ -74,7 +74,7 @@ public sealed partial class MainWindow : Window
     {
         await _homeReady.Task.WaitAsync(TimeSpan.FromSeconds(45));
         var workspace = _workspace ?? throw new InvalidOperationException("The web workspace did not initialize.");
-        if (workspace.Endpoint.Origin.AbsoluteUri != "https://meet.nikg.tech/")
+        if (workspace.Endpoint.Origin.AbsoluteUri != ServerEndpoint.Parse(CordDefaults.ServerUrl).Origin.AbsoluteUri)
             throw new InvalidOperationException("A fresh installation must use the production service.");
         using var response = await _http.GetAsync(new Uri(workspace.Endpoint.Origin, "api/v1/capabilities"), _lifetime.Token);
         response.EnsureSuccessStatusCode();
@@ -221,14 +221,43 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowSettingsAsync()
     {
-        var address = new TextBox { Header = "Адрес вашего сервера", Text = _settings.ServerUrl, PlaceholderText = "https://meet.example.com", MinWidth = 320 };
+        var current = ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+        var servers = _settings.Servers?.ToList() ?? [];
+        var picker = new ComboBox { Header = "Сохранённые серверы", HorizontalAlignment = HorizontalAlignment.Stretch };
+        var address = new TextBox { Header = "Адрес сервера", Text = _settings.ServerUrl, PlaceholderText = "https://meet.example.com", MinWidth = 320 };
+        var label = new TextBox { Header = "Название (необязательно)", Text = servers.FirstOrDefault(entry => entry.Url == current)?.Name ?? "", MaxLength = 60 };
+        var forget = new Button { Content = "Забыть этот сервер", HorizontalAlignment = HorizontalAlignment.Left };
+        void FillPicker(string select)
+        {
+            picker.Items.Clear();
+            foreach (var entry in servers) picker.Items.Add(entry.Label);
+            picker.SelectedIndex = servers.FindIndex(entry => entry.Url == select);
+            // The list must never empty out completely: one server has to remain reachable.
+            forget.IsEnabled = servers.Count > 1;
+        }
+        FillPicker(current);
+        picker.SelectionChanged += (_, _) =>
+        {
+            if (picker.SelectedIndex < 0 || picker.SelectedIndex >= servers.Count) return;
+            address.Text = servers[picker.SelectedIndex].Url;
+            label.Text = servers[picker.SelectedIndex].Name;
+        };
+        forget.Click += (_, _) =>
+        {
+            if (servers.Count <= 1) return;
+            servers = ServerList.Remove(servers, address.Text).ToList();
+            var next = servers.Count > 0 ? servers[0] : null;
+            if (next is not null) { address.Text = next.Url; label.Text = next.Name; }
+            FillPicker(next?.Url ?? "");
+        };
         var theme = new ComboBox { Header = "Оформление", HorizontalAlignment = HorizontalAlignment.Stretch };
         theme.Items.Add("Как в системе"); theme.Items.Add("Светлое"); theme.Items.Add("Тёмное");
         theme.SelectedIndex = _settings.Theme == "light" ? 1 : _settings.Theme == "dark" ? 2 : 0;
-        var note = new TextBlock { Text = "Один адрес для Windows, браузера и телефона. Имя, избранное и устройства сохраняются отдельно для каждого сервера.", TextWrapping = TextWrapping.Wrap, FontSize = 13 };
+        var note = new TextBlock { Text = "Выберите сохранённый сервер или впишите новый адрес — он добавится в список. Имя, избранное и устройства сохраняются отдельно для каждого сервера.", TextWrapping = TextWrapping.Wrap, FontSize = 13 };
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(global::Windows.UI.Color.FromArgb(255, 210, 70, 70)) };
         var content = new StackPanel { Spacing = 18, MaxWidth = 420 };
-        content.Children.Add(address); content.Children.Add(theme); content.Children.Add(note); content.Children.Add(error);
+        content.Children.Add(picker); content.Children.Add(address); content.Children.Add(label); content.Children.Add(forget);
+        content.Children.Add(theme); content.Children.Add(note); content.Children.Add(error);
         var name = new TextBox { Header = "Имя по умолчанию", Text = Model.Name == "Ваше пространство" ? "" : Model.Name, MaxLength = 40 };
         content.Children.Insert(0, name);
         var sounds = new ToggleSwitch { Header = "Звуки уведомлений", IsOn = _settings.NotificationSounds };
@@ -242,10 +271,10 @@ public sealed partial class MainWindow : Window
         };
         if (await DialogAsync(dialog) != ContentDialogResult.Primary) return;
         var endpoint = ServerEndpoint.Parse(address.Text);
-        bool changed = endpoint.Origin.AbsoluteUri != ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+        bool changed = endpoint.Origin.AbsoluteUri != current;
         if (changed && Model.InCall && !await ConfirmLeaveAsync()) return;
         if (changed && Model.InCall) await LeaveWebAsync();
-        _settings = _settings with { ShowPing = ping.IsOn, NotificationSounds = sounds.IsOn, ServerUrl = endpoint.Origin.AbsoluteUri, Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system" };
+        _settings = _settings with { ShowPing = ping.IsOn, NotificationSounds = sounds.IsOn, ServerUrl = endpoint.Origin.AbsoluteUri, Servers = ServerList.Add(servers, endpoint.Origin.AbsoluteUri, label.Text), Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system" };
         await _profiles.SaveAsync(_settings, _lifetime.Token);
         ApplyTheme(_settings.Theme);
         if (changed) { Model.InCall = false; Model.ReplaceFavorites([]); await OpenWorkspaceAsync(); }

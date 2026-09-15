@@ -12,7 +12,7 @@ public sealed partial class ReleaseClient(HttpClient http)
 {
     public const string Repository = "MikkiMays/ModernStreamingSystem.Windows";
     public static readonly Uri Latest = new($"https://api.github.com/repos/{Repository}/releases/latest");
-    public static readonly Uri MirrorLatest = new("https://meet.nikg.tech/downloads/windows/latest.json");
+    public static readonly Uri MirrorLatest = CordDefaults.UpdateMirror;
     [GeneratedRegex(@"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")]
     private static partial Regex StableVersion();
     [GeneratedRegex(@"^[a-fA-F0-9]{64}$")]
