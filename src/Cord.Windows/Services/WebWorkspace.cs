@@ -11,9 +11,12 @@ public sealed class WebWorkspace(
     ProfileStore profiles,
     string theme = "system",
     bool showPing = false,
-    bool notificationSounds = true) : IDisposable
+    bool notificationSounds = true,
+    ServerSession? session = null) : IDisposable
 {
     public ServerEndpoint Endpoint { get; } = endpoint;
+    /// <summary>The handshake this workspace was opened with; renewed by the window, not the page.</summary>
+    public ServerSession? Session { get; set; } = session;
     public WebView2 View { get; } = new() { DefaultBackgroundColor = global::Windows.UI.Color.FromArgb(255, 247, 249, 252) };
     public string Capability { get; private set; } = "";
     public event EventHandler<WebMessage>? MessageReceived;
@@ -64,7 +67,7 @@ public sealed class WebWorkspace(
         };
         core.ProcessFailed += (_, _) => Failed?.Invoke(this, "Медиадвижок остановился. Откройте пространство повторно, чтобы войти в комнату.");
         await core.AddScriptToExecuteOnDocumentCreatedAsync(
-            BridgeProtocol.Bootstrap(Endpoint, Capability, theme, showPing, notificationSounds));
+            BridgeProtocol.Bootstrap(Endpoint, Capability, theme, showPing, notificationSounds, Session));
         if (!_disposed) core.Navigate(Endpoint.Origin.AbsoluteUri);
     }
 

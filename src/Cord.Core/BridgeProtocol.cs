@@ -10,7 +10,7 @@ public static class BridgeProtocol
         try
         {
             var message = JsonSerializer.Deserialize(json, CordJson.Default.WebMessage);
-            if (message is not { Version: 1 } || message.Type is not ("state" or "favorites.changed" or "close-ready" or "hotkey.configure" or "preferences.changed" or "call-state")) return null;
+            if (message is not { Version: 1 } || message.Type is not ("state" or "favorites.changed" or "close-ready" or "hotkey.configure" or "preferences.changed" or "call-state" or "servers.open" or "session.expired")) return null;
             if (message.Type == "state" && message.Page is not ("home" or "prejoin" or "room")) return null;
             if (message.Name?.Length > 40 || message.Room?.Title?.Length > 80) return null;
             if (message.Room is { } room && (!Guid.TryParseExact(room.RoomId, "D", out _) || string.IsNullOrWhiteSpace(room.Title) || room.Code is null || room.Code.Length != 9 || room.Code.Any(c => !char.IsAsciiDigit(c)))) return null;
@@ -26,7 +26,8 @@ public static class BridgeProtocol
         string profile,
         string theme = "system",
         bool showPing = false,
-        bool notificationSounds = true)
+        bool notificationSounds = true,
+        ServerSession? session = null)
     {
         if (profile.Length != 43 || profile.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_')))
             throw new ArgumentException("Invalid profile capability", nameof(profile));
@@ -35,6 +36,12 @@ public static class BridgeProtocol
         var appearance = JsonSerializer.Serialize(theme is "light" or "dark" ? theme : "system");
         var ping = showPing ? "true" : "false";
         var sounds = notificationSounds ? "true" : "false";
+        // The application already shook hands with the server, so the page must not show its own
+        // connect screen. It is handed the session — never the password, which stays encrypted
+        // on this machine — in the same store the page would have put it in itself.
+        var connection = session is null
+            ? "sessionStorage.removeItem('cord:session:v1');"
+            : $"sessionStorage.setItem('cord:session:v1', {JsonSerializer.Serialize(JsonSerializer.Serialize(session, CordJson.Default.ServerSession))});";
         // The two stores have to agree at startup. These preferences used to reach the page
         // only when the settings dialog was reopened, so a fresh launch showed whatever the
         // page had saved for itself and the desktop checkbox looked like it did nothing.
@@ -50,6 +57,7 @@ public static class BridgeProtocol
                 saved.showPing = {{ping}};
                 saved.notificationSounds = {{sounds}};
                 localStorage.setItem('cord:preferences:v1', JSON.stringify(saved));
+                {{connection}}
                 document.documentElement.dataset.desktop = 'true';
               }
             })();

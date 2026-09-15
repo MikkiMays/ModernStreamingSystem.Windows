@@ -32,7 +32,7 @@
             </Button>
             <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Height="48" Click="Create_Click" Background="{StaticResource CordAccent}" Foreground="White" BorderThickness="0" CornerRadius="10">
               <StackPanel Orientation="Horizontal" Spacing="14">
-                <FontIcon Glyph="" FontSize="17" />
+                    <FontIcon Glyph="" FontSize="17" />
                 <TextBlock Text="Новая встреча" VerticalAlignment="Center" FontWeight="SemiBold" />
               </StackPanel>
             </Button>
@@ -84,18 +84,32 @@
               </StackPanel>
             </Button>
             <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="8,0" />
-            <Grid ColumnSpacing="10" Margin="8,0,0,0">
+            <!-- The profile block is where a person looks for their own settings, so it is the
+                 way into them; the server button beside it opens the server list for the same
+                 reason. Both used to be a label under a button somewhere above. -->
+            <Grid ColumnSpacing="4">
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="36" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
               </Grid.ColumnDefinitions>
-              <Border Background="{ThemeResource AccentFillColorTertiaryBrush}" CornerRadius="18" Width="36" Height="36">
-                <FontIcon Glyph="" FontSize="17" />
-              </Border>
-              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
-                <TextBlock Text="{x:Bind Model.Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="12" />
-                <TextBlock Text="{x:Bind Model.ServerLabel, Mode=OneWay}" FontSize="10" TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-              </StackPanel>
+              <Button Click="Settings_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,8" Background="Transparent" BorderThickness="0" CornerRadius="10" AutomationProperties.Name="Профиль и настройки" ToolTipService.ToolTip="Профиль и настройки">
+                <Grid ColumnSpacing="10">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="36" />
+                    <ColumnDefinition Width="*" />
+                  </Grid.ColumnDefinitions>
+                  <Border Background="{ThemeResource AccentFillColorTertiaryBrush}" CornerRadius="18" Width="36" Height="36">
+                    <FontIcon Glyph="" FontSize="17" />
+                  </Border>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="3">
+                    <TextBlock Text="{x:Bind Model.Name, Mode=OneWay}" TextTrimming="CharacterEllipsis" FontSize="12" />
+                    <TextBlock Text="{x:Bind Model.ServerLabel, Mode=OneWay}" FontSize="10" TextTrimming="CharacterEllipsis" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                  </StackPanel>
+                </Grid>
+              </Button>
+              <Button Grid.Column="1" Click="Servers_Click" Width="36" Height="36" Padding="0" VerticalAlignment="Center" Background="Transparent" BorderThickness="0" CornerRadius="10" AutomationProperties.Name="Серверы" ToolTipService.ToolTip="Сменить сервер">
+                <FontIcon Glyph="" FontSize="15" />
+              </Button>
             </Grid>
           </StackPanel>
         </Grid>

@@ -88,4 +88,24 @@ public sealed class ServerListTests
         var servers = ServerList.Add([], "https://meet.example.com:8443", "  ");
         Assert.Equal("meet.example.com:8443", servers[0].Label);
     }
+
+    [Fact]
+    public void AutomaticConnectionIsRememberedPerServer()
+    {
+        var servers = ServerList.Add([], "https://a.example.com", "A", autoConnect: false);
+        servers = ServerList.Add(servers, "https://b.example.com", "B");
+        Assert.False(servers.First(entry => entry.Url == "https://a.example.com/").AutoConnect);
+        Assert.True(servers.First(entry => entry.Url == "https://b.example.com/").AutoConnect);
+        // A settings file rewritten by normalisation must not quietly turn the choice back on.
+        var normalized = ServerList.Normalize(servers, "https://a.example.com/");
+        Assert.False(normalized.First(entry => entry.Url == "https://a.example.com/").AutoConnect);
+    }
+
+    [Fact]
+    public void ASettingsFileFromBeforeTheChoiceExistedConnectsAsItAlwaysDid()
+    {
+        // Older builds had no such field, so the server they opened on startup is the one they
+        // must keep opening. Off by default would look like the application forgot the server.
+        Assert.True(ServerList.Normalize(null, "https://meet.example.com")[0].AutoConnect);
+    }
 }
