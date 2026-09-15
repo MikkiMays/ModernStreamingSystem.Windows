@@ -42,6 +42,8 @@ $log = Join-Path $toolsRoot 'build.log'
 & $compiler "--define=PublishRoot=$publication" "--define=RedistRoot=$toolsRoot" "--define=ArtifactRoot=$(Join-Path $projectRoot 'artifacts')" "--define=AppVersion=$version" (Join-Path $projectRoot 'installer\Cord.iss') *> $log
 if ($LASTEXITCODE -ne 0) { Get-Content -LiteralPath $log -Tail 30; throw 'Installer compilation failed.' }
 $installer = Join-Path $projectRoot "artifacts\Cord-Setup-$version-x64.exe"
+# Signing changes the bytes, so the published checksum has to be taken after it.
+& (Join-Path $PSScriptRoot 'sign.ps1') -Path @($installer)
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$installer.sha256" -Value "$hash  $([IO.Path]::GetFileName($installer))" -Encoding ascii
 Write-Output "Installer: $installer"

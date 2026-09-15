@@ -23,6 +23,8 @@ try {
         throw "Incomplete Windows publication: $resource is missing or empty."
       }
     }
+    # Before the archive, so the portable build carries the same signature as the installed one.
+    & (Join-Path $PSScriptRoot 'sign.ps1') -Path @(Join-Path $output 'Cord.exe')
     $archive = Join-Path $projectRoot 'artifacts\Cord-win-x64.zip'
     if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive }
     [System.IO.Compression.ZipFile]::CreateFromDirectory($output, $archive)
