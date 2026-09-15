@@ -41,6 +41,18 @@ AlwaysRestart=no
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
 AppComments=Звонки, экран и разговоры в одном пространстве.
+AppPublisherURL=https://meet.nikg.tech/download
+AppSupportURL=https://meet.nikg.tech/download
+AppUpdatesURL=https://meet.nikg.tech/download
+; Windows reads these when it describes the file — in its properties, and in the SmartScreen
+; dialog for an unsigned build. They do not remove that dialog; nothing inside the installer
+; can. They decide whether it names the program or shows a blank.
+VersionInfoVersion={#AppVersion}
+VersionInfoProductName=Cord
+VersionInfoProductTextVersion={#AppVersion}
+VersionInfoDescription=Установка Cord
+VersionInfoCompany=Cord
+VersionInfoCopyright=© @nikgers
 InfoBeforeFile=About-installation.txt
 
 [Languages]

@@ -18,12 +18,20 @@ jobs:
       - name: Verify formatting
         run: .\.local\dotnet\dotnet.exe format whitespace Cord.slnx --verify-no-changes --no-restore
       - name: Test and publish
+        env: &signing
+          # Absent secrets resolve to empty, and sign.ps1 reads that as "no certificate": the
+          # build then produces exactly what it produces today. Adding the secrets is the whole
+          # of turning Authenticode signing on.
+          CORD_SIGN_PFX_BASE64: ${{ secrets.CORD_SIGN_PFX_BASE64 }}
+          CORD_SIGN_PASSWORD: ${{ secrets.CORD_SIGN_PASSWORD }}
+          CORD_SIGN_TIMESTAMP_URL: ${{ vars.CORD_SIGN_TIMESTAMP_URL }}
         run: .\scripts\build.ps1 -Publish
       - name: Verify unpackaged WinUI resources
         run: .\scripts\verify-publication.ps1
       - name: Verify the native app connects to the deployed service
         run: .\scripts\verify-service.ps1
       - name: Build offline installer
+        env: *signing
         run: .\scripts\build-installer.ps1 -SkipPublish
       - name: Verify installation, upgrade and uninstall
         run: .\scripts\test-installer.ps1
