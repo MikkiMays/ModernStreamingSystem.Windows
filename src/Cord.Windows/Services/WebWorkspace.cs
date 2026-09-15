@@ -6,7 +6,12 @@ using Microsoft.Web.WebView2.Core;
 namespace Cord.Windows.Services;
 
 /// <summary>One media engine per window, isolated to the configured server origin.</summary>
-public sealed class WebWorkspace(ServerEndpoint endpoint, ProfileStore profiles, string theme = "system") : IDisposable
+public sealed class WebWorkspace(
+    ServerEndpoint endpoint,
+    ProfileStore profiles,
+    string theme = "system",
+    bool showPing = false,
+    bool notificationSounds = true) : IDisposable
 {
     public ServerEndpoint Endpoint { get; } = endpoint;
     public WebView2 View { get; } = new() { DefaultBackgroundColor = global::Windows.UI.Color.FromArgb(255, 247, 249, 252) };
@@ -58,7 +63,8 @@ public sealed class WebWorkspace(ServerEndpoint endpoint, ProfileStore profiles,
             if (!Endpoint.Owns(uri) && !(uri.StartsWith("blob:", StringComparison.Ordinal) && Endpoint.Owns(uri[5..]))) e.Cancel = true;
         };
         core.ProcessFailed += (_, _) => Failed?.Invoke(this, "Медиадвижок остановился. Откройте пространство повторно, чтобы войти в комнату.");
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(BridgeProtocol.Bootstrap(Endpoint, Capability, theme));
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(
+            BridgeProtocol.Bootstrap(Endpoint, Capability, theme, showPing, notificationSounds));
         if (!_disposed) core.Navigate(Endpoint.Origin.AbsoluteUri);
     }
 

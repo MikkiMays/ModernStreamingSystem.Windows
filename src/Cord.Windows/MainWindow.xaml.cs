@@ -112,7 +112,10 @@ public sealed partial class MainWindow : Window
             _requestedHotkey = null;
             _workspace?.Dispose();
             var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
-            var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme) { RequestPermission = RequestPermissionAsync };
+            var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme, _settings.ShowPing, _settings.NotificationSounds)
+            {
+                RequestPermission = RequestPermissionAsync,
+            };
             _workspace = workspace;
             workspace.MessageReceived += WebMessageReceived;
             workspace.Failed += (_, message) => { Model.Loading = false; Model.Report(message); };

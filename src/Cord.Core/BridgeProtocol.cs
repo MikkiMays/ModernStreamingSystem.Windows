@@ -21,18 +21,35 @@ public static class BridgeProtocol
     }
 
     /// <summary>No host objects, file access or executable commands are exposed to the page.</summary>
-    public static string Bootstrap(ServerEndpoint endpoint, string profile, string theme = "system")
+    public static string Bootstrap(
+        ServerEndpoint endpoint,
+        string profile,
+        string theme = "system",
+        bool showPing = false,
+        bool notificationSounds = true)
     {
         if (profile.Length != 43 || profile.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_')))
             throw new ArgumentException("Invalid profile capability", nameof(profile));
         var origin = JsonSerializer.Serialize(endpoint.Origin.GetLeftPart(UriPartial.Authority));
         var capability = JsonSerializer.Serialize(profile);
         var appearance = JsonSerializer.Serialize(theme is "light" or "dark" ? theme : "system");
+        var ping = showPing ? "true" : "false";
+        var sounds = notificationSounds ? "true" : "false";
+        // The two stores have to agree at startup. These preferences used to reach the page
+        // only when the settings dialog was reopened, so a fresh launch showed whatever the
+        // page had saved for itself and the desktop checkbox looked like it did nothing.
+        // Merge rather than replace: the same entry holds the name, devices and quality.
         return $$"""
             (() => {
               if (window === window.top && location.origin === {{origin}}) {
                 localStorage.setItem('cord:profile:v1', {{capability}});
                 localStorage.setItem('cord:theme', {{appearance}});
+                let saved = {};
+                try { saved = JSON.parse(localStorage.getItem('cord:preferences:v1')) || {}; } catch {}
+                if (typeof saved !== 'object' || saved === null) saved = {};
+                saved.showPing = {{ping}};
+                saved.notificationSounds = {{sounds}};
+                localStorage.setItem('cord:preferences:v1', JSON.stringify(saved));
                 document.documentElement.dataset.desktop = 'true';
               }
             })();
