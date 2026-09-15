@@ -39,6 +39,8 @@ public sealed partial class MainWindow : Window
     private ServerSession? _session;
     private string _password = "";
     private bool _renewing;
+    /// <summary>The data URI currently shown, so the same picture is decoded only once.</summary>
+    private string _avatar = "";
 
     public MainWindow(bool validateResourcesOnly = false)
     {
@@ -133,7 +135,8 @@ public sealed partial class MainWindow : Window
             _requestedHotkey = null;
             _workspace?.Dispose();
             var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
-            var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme, _settings.ShowPing, _settings.NotificationSounds, _session)
+            var entry = _settings.Servers?.FirstOrDefault(server => server.Url == endpoint.Origin.AbsoluteUri);
+            var workspace = new WebWorkspace(endpoint, _profiles, _settings.Theme, _settings.ShowPing, _settings.NotificationSounds, _session, entry?.AutoConnect != false)
             {
                 RequestPermission = RequestPermissionAsync,
             };
@@ -143,12 +146,18 @@ public sealed partial class MainWindow : Window
             workspace.Loaded += (_, _) => { Model.Loading = false; workspace.Post(new("theme.changed", Theme: _settings.Theme)); };
             workspace.FullScreenChanged += (sender, fullScreen) => { if (sender == _workspace) SetMediaFullScreen(fullScreen); };
             WorkspaceHost.Content = workspace.View;
-            Model.ServerLabel = endpoint.Origin.IsLoopback ? "Локальный сервер" : endpoint.Origin.IdnHost;
+            Model.ServerLabel = ServerName(endpoint);
             await workspace.InitializeAsync(_lifetime.Token);
             await RefreshFavoritesAsync();
         }
         finally { _switching = false; }
     }
+
+    /// <summary>What to call the server in the sidebar: its own name, or its bare host.</summary>
+    private string ServerName(ServerEndpoint endpoint) =>
+        _session?.Name is { Length: > 0 } named ? named
+        : endpoint.Origin.IsLoopback ? "Локальный сервер"
+        : endpoint.Origin.IdnHost;
 
     private async Task RefreshFavoritesAsync()
     {
@@ -158,7 +167,14 @@ public sealed partial class MainWindow : Window
         try
         {
             var rooms = await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token, _session?.Token);
-            if (workspace == _workspace && revision == _favoriteRevision && !_closed) Model.ReplaceFavorites(rooms);
+            if (workspace == _workspace && revision == _favoriteRevision && !_closed)
+            {
+                Model.ReplaceFavorites(rooms);
+                // One refresh that did not arrive used to rename the server «Ожидаем сервер»
+                // for the rest of the visit, including the whole of a meeting that was working
+                // perfectly. A refresh that did arrive is the answer to that.
+                Model.ServerLabel = ServerName(workspace.Endpoint);
+            }
         }
         catch (HttpRequestException e) when (e.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
@@ -167,7 +183,9 @@ public sealed partial class MainWindow : Window
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
         {
-            if (!_closed && revision == _favoriteRevision) Model.ServerLabel = "Ожидаем сервер";
+            // A conversation in progress is proof that the server is answering; a favourites
+            // list that did not arrive says nothing about it and must not say otherwise.
+            if (!_closed && revision == _favoriteRevision && !Model.InCall) Model.ServerLabel = "Ожидаем сервер";
         }
     }
 
@@ -183,6 +201,7 @@ public sealed partial class MainWindow : Window
                 _microphoneHotkey?.Configure(Model.InCall ? _requestedHotkey : null);
                 Model.Status = message.Room?.Title ?? (message.Page == "prejoin" ? "Перед разговором" : "На одной волне");
                 Model.Name = string.IsNullOrWhiteSpace(message.Name) ? "Ваше пространство" : message.Name;
+                ShowAvatar(message.Avatar ?? "");
                 if (message.Theme is "light" or "dark" or "system")
                 {
                     ApplyTheme(message.Theme);
@@ -207,6 +226,15 @@ public sealed partial class MainWindow : Window
                 _requestedHotkey = message.Hotkey;
                 var status = _microphoneHotkey?.Configure(Model.InCall ? _requestedHotkey : null);
                 _workspace?.Post(new("hotkey.status", Detail: status));
+                break;
+            case "server.autoconnect":
+                if (message.AutoConnect is { } automatic)
+                {
+                    var origin = ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+                    var current = _settings.Servers?.FirstOrDefault(server => server.Url == origin);
+                    _settings = _settings with { Servers = ServerList.Add(_settings.Servers ?? [], origin, current?.Name ?? "", automatic) };
+                    Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
+                }
                 break;
             case "favorites.changed": Run(RefreshFavoritesAsync); break;
             case "servers.open": Run(() => ShowServersAsync()); break;
@@ -646,74 +674,47 @@ public sealed partial class MainWindow : Window
     private static string Host(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Authority : url;
 
     /// <summary>
-    /// Everything about you and this device, in the order a person thinks about it: who you
-    /// are, what you hear, where you are connected, how it looks.
+    /// Shows the profile picture the page sent with its state.
     ///
-    /// <para>The server list used to live in the middle of this dialog, which left the two
-    /// switches stranded below an address field and an error line that were usually about
-    /// something else entirely. Choosing a server is its own decision and now has its own
-    /// screen; what stays here is the one line saying where you are and the way to that
-    /// screen.</para>
+    /// <para>The picture is the page's: it is stored there, per server, and sent to the room
+    /// from there. The shell keeps no copy and owns no second way to change it — it decodes the
+    /// data URI it was given, once per distinct value, and shows it. A picture in a format this
+    /// Windows cannot decode simply leaves the placeholder in place.</para>
     /// </summary>
-    private async Task ShowSettingsAsync()
+    private async void ShowAvatar(string dataUri)
     {
-        var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
-        var entry = _settings.Servers?.FirstOrDefault(server => server.Url == endpoint.Origin.AbsoluteUri);
-        var name = new TextBox { Header = "Имя по умолчанию", Text = Model.Name == "Ваше пространство" ? "" : Model.Name, MaxLength = 40, PlaceholderText = "Как к вам обращаться?" };
-        var sounds = new ToggleSwitch { Header = "Звуки уведомлений", IsOn = _settings.NotificationSounds };
-        var ping = new ToggleSwitch { Header = "Показывать задержку / PING", IsOn = _settings.ShowPing };
-        var automatic = new CheckBox { Content = "Подключаться к этому серверу при запуске", IsChecked = entry?.AutoConnect != false };
-        var servers = new Button { Content = "Сменить сервер…", HorizontalAlignment = HorizontalAlignment.Left };
-        var switching = false;
-        servers.Click += (_, _) => { switching = true; CloseOpenDialog(); };
-        var theme = new ComboBox { Header = "Оформление", HorizontalAlignment = HorizontalAlignment.Stretch };
-        theme.Items.Add("Как в системе"); theme.Items.Add("Светлое"); theme.Items.Add("Тёмное");
-        theme.SelectedIndex = _settings.Theme == "light" ? 1 : _settings.Theme == "dark" ? 2 : 0;
+        if (dataUri == _avatar) return;
+        _avatar = dataUri;
+        var comma = dataUri.IndexOf(',');
+        if (comma < 0 || !dataUri.StartsWith("data:image/", StringComparison.Ordinal) || !dataUri[..comma].EndsWith(";base64", StringComparison.Ordinal))
+        {
+            Model.Avatar = null;
+            return;
+        }
+        try
+        {
+            var bytes = Convert.FromBase64String(dataUri[(comma + 1)..]);
+            using var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
+            await stream.WriteAsync(System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.AsBuffer(bytes));
+            stream.Seek(0);
+            var image = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage { DecodePixelWidth = 72, DecodePixelHeight = 72 };
+            // A format Windows has no codec for fails here rather than throwing, and the
+            // placeholder is the right answer to that.
+            image.ImageFailed += (_, _) => { if (!_closed && _avatar == dataUri) Model.Avatar = null; };
+            await image.SetSourceAsync(stream);
+            if (!_closed && _avatar == dataUri) Model.Avatar = image;
+        }
+        catch (Exception e) when (e is FormatException or ArgumentException or System.Runtime.InteropServices.COMException)
+        {
+            if (_avatar == dataUri) Model.Avatar = null;
+        }
+    }
 
-        var content = new StackPanel { Spacing = 10, MinWidth = 380 };
-        content.Children.Add(Group("Профиль"));
-        content.Children.Add(name);
-        content.Children.Add(Note("Это имя подставляется при следующем входе во встречу."));
-        content.Children.Add(Group("Звук"));
-        content.Children.Add(sounds);
-        content.Children.Add(Note("Вход и выход каждого участника, запрос на вход, ваш вход и выход. При закрытии приложения сначала звучит выход из встречи."));
-        content.Children.Add(Group("Подключение"));
-        content.Children.Add(new TextBlock
-        {
-            Text = (_session?.Name is { Length: > 0 } title ? title + " · " : "") + Host(endpoint.Origin.AbsoluteUri),
-            TextWrapping = TextWrapping.Wrap,
-            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-        });
-        content.Children.Add(automatic);
-        content.Children.Add(servers);
-        content.Children.Add(ping);
-        content.Children.Add(Note("Имя, избранное и устройства сохраняются отдельно для каждого сервера."));
-        content.Children.Add(Group("Оформление"));
-        content.Children.Add(theme);
-
-        var dialog = new ContentDialog
-        {
-            Title = "Ваше пространство",
-            Content = new ScrollViewer { Content = content, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 520 },
-            PrimaryButtonText = "Сохранить",
-            CloseButtonText = "Отмена",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-        var outcome = await DialogAsync(dialog);
-        if (outcome != ContentDialogResult.Primary && !switching) return;
-        _settings = _settings with
-        {
-            ShowPing = ping.IsOn,
-            NotificationSounds = sounds.IsOn,
-            Servers = ServerList.Add(_settings.Servers ?? [], endpoint.Origin.AbsoluteUri, entry?.Name ?? "", automatic.IsChecked == true),
-            Theme = theme.SelectedIndex == 1 ? "light" : theme.SelectedIndex == 2 ? "dark" : "system",
-        };
-        await _profiles.SaveAsync(_settings, _lifetime.Token);
-        ApplyTheme(_settings.Theme);
-        _workspace?.Post(new("theme.changed", Theme: _settings.Theme));
-        _workspace?.Post(new("profile.changed", Name: name.Text.Trim()));
-        _workspace?.Post(new("preferences.changed", ShowPing: _settings.ShowPing, NotificationSounds: _settings.NotificationSounds));
-        if (switching) await ShowServersAsync();
+    /// <summary>Opens the settings, which are the page's — see <see cref="Settings_Click"/>.</summary>
+    private Task OpenSettingsAsync()
+    {
+        _workspace?.Post(new("settings.open", Tab: "audio"));
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -826,7 +827,7 @@ public sealed partial class MainWindow : Window
         if (Root.ActualWidth < 1000)
         {
             var menu = new MenuFlyout();
-            foreach (var (text, action) in new (string, Func<Task>)[] { ("Главная", () => NavigateAsync("home")), ("Новая встреча", () => NavigateAsync("create")), ("Настройки", ShowSettingsAsync), ("Серверы", () => ShowServersAsync()) })
+            foreach (var (text, action) in new (string, Func<Task>)[] { ("Главная", () => NavigateAsync("home")), ("Новая встреча", () => NavigateAsync("create")), ("Настройки", OpenSettingsAsync), ("Серверы", () => ShowServersAsync()) })
             {
                 var item = new MenuFlyoutItem { Text = text }; item.Click += (_, _) => Run(action); menu.Items.Add(item);
             }
@@ -885,12 +886,16 @@ public sealed partial class MainWindow : Window
     private void Create_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("create"));
     private void Favorite_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) Run(() => NavigateAsync("favorite", id)); }
     private void Refresh_Click(object sender, RoutedEventArgs e) => Run(RefreshFavoritesAsync);
-    private void Settings_Click(object sender, RoutedEventArgs e) => Run(ShowSettingsAsync);
     /// <summary>
-    /// The profile block opens the page's own profile settings, because that is where the
-    /// picture lives: it is a data URI kept by the page, per server, and a native dialog would
-    /// have to invent a second way to edit something it does not own.
+    /// Settings are the page's, all of them.
+    ///
+    /// <para>There used to be a second, native settings dialog here holding a copy of the name,
+    /// two switches and the theme — a smaller screen next to the real one, which knew nothing
+    /// about devices, sound processing, video quality, keys or diagnostics. Both entries now
+    /// open the settings that have all of it; the sidebar button lands on sound, the profile
+    /// block on the profile, because that is where the picture is.</para>
     /// </summary>
+    private void Settings_Click(object sender, RoutedEventArgs e) => _workspace?.Post(new("settings.open", Tab: "audio"));
     private void Profile_Click(object sender, RoutedEventArgs e) => _workspace?.Post(new("settings.open", Tab: "profile"));
     private void Servers_Click(object sender, RoutedEventArgs e) => Run(() => ShowServersAsync());
     private void Retry_Click(object sender, RoutedEventArgs e) => Run(async () => { if (!Model.InCall || await ConfirmLeaveAsync()) { await LeaveWebAsync(); Model.InCall = false; await OpenWorkspaceAsync(); } });

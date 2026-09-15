@@ -61,6 +61,45 @@ public sealed class BoundaryTests
         Assert.NotNull(BridgeProtocol.Read(endpoint, endpoint.Origin.AbsoluteUri, """{"version":1,"type":"state","page":"home"}"""));
     }
 
+    /// <summary>
+    /// The profile picture crosses the bridge because the page owns it and the sidebar shows it.
+    /// Having no picture is an ordinary state and must not cost the whole message; anything that
+    /// is not a small image is not a picture.
+    /// </summary>
+    [Fact]
+    public void ProfilePictureCrossesTheBridgeOnlyAsASmallImage()
+    {
+        var endpoint = ServerEndpoint.Parse("https://meet.example.com");
+        var origin = endpoint.Origin.AbsoluteUri;
+        string state(string avatar) => $$"""{"version":1,"type":"state","page":"home","avatar":{{avatar}}}""";
+        Assert.Equal(
+            "data:image/webp;base64,AAAA",
+            BridgeProtocol.Read(endpoint, origin, state("\"data:image/webp;base64,AAAA\""))?.Avatar);
+        Assert.NotNull(BridgeProtocol.Read(endpoint, origin, state("\"\"")));
+        Assert.NotNull(BridgeProtocol.Read(endpoint, origin, state("null")));
+        Assert.Null(BridgeProtocol.Read(endpoint, origin, state("\"https://evil.test/track.png\"")));
+        Assert.Null(BridgeProtocol.Read(
+            endpoint, origin, state($"\"data:image/webp;base64,{new string('A', BridgeProtocol.AvatarLimit)}\"")));
+        Assert.Null(BridgeProtocol.Read(endpoint, origin, state($"\"{new string('A', 20000)}\"")));
+    }
+
+    /// <summary>
+    /// Automatic connection belongs to the application — it decides whether the server is opened
+    /// without asking — but the switch is on the settings page, so it has to travel both ways.
+    /// </summary>
+    [Fact]
+    public void AutomaticConnectionTravelsBothWaysAcrossTheBridge()
+    {
+        var endpoint = ServerEndpoint.Parse("https://meet.example.com");
+        var message = BridgeProtocol.Read(
+            endpoint, endpoint.Origin.AbsoluteUri, """{"version":1,"type":"server.autoconnect","autoConnect":false}""");
+        Assert.Equal("server.autoconnect", message?.Type);
+        Assert.False(message!.AutoConnect);
+        var profile = new string('A', 43);
+        Assert.Contains("server.autoConnect = false", BridgeProtocol.Bootstrap(endpoint, profile, autoConnect: false), StringComparison.Ordinal);
+        Assert.Contains("server.autoConnect = true", BridgeProtocol.Bootstrap(endpoint, profile), StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task NativeClientUsesTheSameFavoriteContractAndNeverQueryStringCredentials()
     {

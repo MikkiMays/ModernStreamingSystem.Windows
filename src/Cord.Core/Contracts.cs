@@ -22,7 +22,7 @@ public sealed record ServerEntry(string Url, string Name = "", bool AutoConnect 
 /// <summary><see cref="ServerUrl"/> is the server in use; <see cref="Servers"/> is the saved list.</summary>
 public sealed record DesktopSettings(string ServerUrl = CordDefaults.ServerUrl, string Theme = "system", bool CompactSidebar = false, bool ShowPing = false, bool NotificationSounds = true, IReadOnlyList<ServerEntry>? Servers = null);
 public sealed record WebRoom(string RoomId, string Title, string Code);
-public sealed record WebMessage(int Version, string Type, string? Page, string? Name, string? Theme, WebRoom? Room, MicrophoneHotkey? Hotkey = null, bool? ShowPing = null, bool? NotificationSounds = null, bool? InCall = null);
+public sealed record WebMessage(int Version, string Type, string? Page, string? Name, string? Theme, WebRoom? Room, MicrophoneHotkey? Hotkey = null, bool? ShowPing = null, bool? NotificationSounds = null, bool? InCall = null, string? Avatar = null, bool? AutoConnect = null);
 public sealed record HostMessage(string Type, string? Page = null, string? RoomId = null, string? Theme = null, int Version = 1, string? Name = null, string? Detail = null, bool? ShowPing = null, bool? NotificationSounds = null, string? Token = null, long? ExpiresAt = null, string? ServerName = null, string? Tab = null);
 
 /// <summary>What a server says about itself before anyone has authenticated.</summary>

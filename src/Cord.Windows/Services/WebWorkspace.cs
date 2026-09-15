@@ -12,7 +12,8 @@ public sealed class WebWorkspace(
     string theme = "system",
     bool showPing = false,
     bool notificationSounds = true,
-    ServerSession? session = null) : IDisposable
+    ServerSession? session = null,
+    bool autoConnect = true) : IDisposable
 {
     public ServerEndpoint Endpoint { get; } = endpoint;
     /// <summary>The handshake this workspace was opened with; renewed by the window, not the page.</summary>
@@ -74,7 +75,7 @@ public sealed class WebWorkspace(
         };
         core.ProcessFailed += (_, _) => Failed?.Invoke(this, "Медиадвижок остановился. Откройте пространство повторно, чтобы войти в комнату.");
         await core.AddScriptToExecuteOnDocumentCreatedAsync(
-            BridgeProtocol.Bootstrap(Endpoint, Capability, theme, showPing, notificationSounds, Session));
+            BridgeProtocol.Bootstrap(Endpoint, Capability, theme, showPing, notificationSounds, Session, autoConnect));
         if (!_disposed) core.Navigate(Endpoint.Origin.AbsoluteUri);
     }
 
