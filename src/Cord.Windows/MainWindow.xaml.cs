@@ -359,6 +359,10 @@ public sealed partial class MainWindow : Window
         ServerEntry? edit = null;
         var adding = false;
         var health = new Dictionary<string, Ellipse>(StringComparer.Ordinal);
+        var picks = new Dictionary<string, Button>(StringComparer.Ordinal);
+        // Что уже известно про каждый сервер. Без этой памяти любая перерисовка списка
+        // начинала бы с серого: цвет жил только на самом кружке, а кружок — недолго.
+        var known = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         var password = new PasswordBox { Header = "Пароль сервера", PlaceholderText = "Если сервер закрыт паролем", MaxLength = 200 };
         var automatic = new CheckBox { Content = "Подключаться к этому серверу при запуске" };
@@ -404,12 +408,32 @@ public sealed partial class MainWindow : Window
         };
         invite.Click += (_, _) => { adding = true; CloseOpenDialog(); };
 
+        // Выделение — это цвет подложки, а не новый список.
+        //
+        // ЗАЧЕМ ОТДЕЛЬНО. Раньше нажатие на сервер пересобирало список целиком, и вместе с
+        // ним — кружки состояния. Новые кружки рождались серыми, а опрос к этому моменту уже
+        // прошёл, и красить было нечего: цвет пропадал у всех сразу и больше не возвращался.
+        // Снаружи это выглядело как «точка гаснет, когда выбираешь сервер».
+        void Highlight()
+        {
+            foreach (var (url, pick) in picks)
+                pick.Background = new SolidColorBrush(url == chosen?.Url
+                    ? global::Windows.UI.Color.FromArgb(56, 0x46, 0x74, 0xF3)
+                    : Microsoft.UI.Colors.Transparent);
+        }
+
         void Select(ServerEntry? entry)
         {
             chosen = entry;
             automatic.IsChecked = entry?.AutoConnect != false;
+            Highlight();
+        }
+
+        void BuildRows()
+        {
             rows.Children.Clear();
             health.Clear();
+            picks.Clear();
             foreach (var server in servers)
             {
                 var row = new Grid { ColumnSpacing = 4 };
@@ -420,7 +444,9 @@ public sealed partial class MainWindow : Window
                     Width = 8,
                     Height = 8,
                     VerticalAlignment = VerticalAlignment.Center,
-                    Fill = new SolidColorBrush(Unknown),
+                    // Серый — только пока о сервере ничего не спрашивали. Всё, что уже
+                    // известно, кружок показывает с первого кадра, а не после нового опроса.
+                    Fill = new SolidColorBrush(known.TryGetValue(server.Url, out var live) ? (live ? Alive : Dead) : Unknown),
                     Opacity = 0.7,
                 };
                 health[server.Url] = dot;
@@ -432,15 +458,14 @@ public sealed partial class MainWindow : Window
                     Padding = new Thickness(12, 10, 12, 10),
                     CornerRadius = new CornerRadius(14),
                     BorderThickness = new Thickness(0),
-                    Background = new SolidColorBrush(server.Url == entry?.Url
-                        ? global::Windows.UI.Color.FromArgb(56, 0x46, 0x74, 0xF3)
-                        : Microsoft.UI.Colors.Transparent),
+                    Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
                     Content = new StackPanel
                     {
                         Spacing = 2,
                         Children = { title, new TextBlock { Text = Host(server.Url), FontSize = 11, Opacity = Muted } },
                     },
                 };
+                picks[server.Url] = pick;
                 var captured = server;
                 pick.Click += (_, _) => Select(captured);
                 var gear = new Button
@@ -462,6 +487,7 @@ public sealed partial class MainWindow : Window
                 rows.Children.Add(row);
             }
         }
+        BuildRows();
         Select(chosen);
         // The password for the server we are already on is the one Windows is keeping; any
         // other entry starts empty until its own is loaded by the editor.
@@ -525,32 +551,61 @@ public sealed partial class MainWindow : Window
             catch (OperationCanceledException) { }
             finally { deferral.Complete(); }
         };
-        var probing = ProbeServersAsync(servers, health);
+        using var probes = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var probing = ProbeServersAsync(servers, health, known, probes.Token);
         await DialogAsync(dialog);
+        await probes.CancelAsync();
         await probing;
         return new ServerChoice(opened is null ? null : chosen, opened, password.Password, automatic.IsChecked == true, edit, adding);
     }
 
     /// <summary>
-    /// Lights the dot beside every saved server. The native client can ask all of them, which
-    /// a browser cannot: the core refuses a foreign origin. Failures are the answer here, not
-    /// an error — a server that does not respond is exactly what the dot is for.
+    /// Lights the dot beside every saved server, and keeps it lit for as long as the picker is
+    /// open. The native client can ask all of them, which a browser cannot: the core refuses a
+    /// foreign origin. Failures are the answer here, not an error — a server that does not
+    /// respond is exactly what the dot is for.
     /// </summary>
-    private async Task ProbeServersAsync(IReadOnlyList<ServerEntry> servers, Dictionary<string, Ellipse> health)
+    /// <remarks>
+    /// Опрашиваются все сразу. Обход по очереди означал, что последний сервер в списке ждёт
+    /// таймаутов всех предыдущих, — при паре недоступных адресов «сразу» превращалось в
+    /// десятки секунд ожидания серого кружка.
+    ///
+    /// Повторяется, пока открыто окно: состояние сервера — это не свойство списка, а то, что
+    /// верно прямо сейчас, и за минуту выбора оно успевает измениться.
+    ///
+    /// Словари трогает только поток интерфейса: ни одно ожидание здесь не отпускает контекст
+    /// синхронизации, поэтому параллельны запросы, а не записи.
+    /// </remarks>
+    private async Task ProbeServersAsync(
+        IReadOnlyList<ServerEntry> servers,
+        Dictionary<string, Ellipse> health,
+        Dictionary<string, bool> known,
+        CancellationToken token)
     {
-        foreach (var server in servers)
+        if (servers.Count == 0) return;
+        var client = new ServerAccessClient(_http);
+        try
         {
-            if (_closed) return;
-            var alive = false;
-            try
+            while (!token.IsCancellationRequested && !_closed)
             {
-                await new ServerAccessClient(_http).DescribeAsync(ServerEndpoint.Parse(server.Url), _lifetime.Token);
-                alive = true;
+                await Task.WhenAll(servers.Select(async server =>
+                {
+                    var alive = false;
+                    try
+                    {
+                        await client.DescribeAsync(ServerEndpoint.Parse(server.Url), token);
+                        alive = true;
+                    }
+                    catch (OperationCanceledException) { return; }
+                    catch (Exception e) when (e is HttpRequestException or InvalidDataException or ArgumentException or System.Text.Json.JsonException) { }
+                    if (_closed) return;
+                    known[server.Url] = alive;
+                    if (health.TryGetValue(server.Url, out var dot)) dot.Fill = new SolidColorBrush(alive ? Alive : Dead);
+                }));
+                await Task.Delay(Recheck, token);
             }
-            catch (OperationCanceledException) { return; }
-            catch (Exception e) when (e is HttpRequestException or InvalidDataException or ArgumentException or System.Text.Json.JsonException) { }
-            if (health.TryGetValue(server.Url, out var dot)) dot.Fill = new SolidColorBrush(alive ? Alive : Dead);
         }
+        catch (OperationCanceledException) { }
     }
 
     /// <summary>
@@ -733,6 +788,8 @@ public sealed partial class MainWindow : Window
         text.ClearValue(TextBlock.ForegroundProperty);
         text.Opacity = Muted;
     }
+    /// <summary>Как часто перепроверять серверы, пока открыто окно подключения.</summary>
+    private static readonly TimeSpan Recheck = TimeSpan.FromSeconds(5);
     /// <summary>Fixed colours, readable on both themes, for states that mean the same in both.</summary>
     private static readonly global::Windows.UI.Color Alive = global::Windows.UI.Color.FromArgb(255, 54, 178, 118);
     private static readonly global::Windows.UI.Color Dead = global::Windows.UI.Color.FromArgb(255, 226, 92, 92);
