@@ -4,7 +4,11 @@ permissions:
   contents: read
 concurrency:
   group: windows-${{ github.ref }}
-  cancel-in-progress: true
+  # На ветке — отменять устаревший прогон правильно: его результат уже никому не нужен.
+  # На main прогон выкладывает релиз, и отмена застаёт его посреди загрузки установщика:
+  # остаётся черновик с одними контрольными суммами, а следующий прогон видит «релиз уже
+  # есть» и не трогает его. Так и случилось с 0.7.1 — двумя пушами подряд.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   windows:
     runs-on: windows-2022
@@ -69,9 +73,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(python3 -c "import xml.etree.ElementTree as E; print(E.parse('src/Cord.Windows/Cord.Windows.csproj').findtext('./PropertyGroup/Version'))")
-          if gh release view "v$version" >/dev/null 2>&1; then
+          state=$(gh release view "v$version" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$state" = "false" ]; then
             echo "Release v$version already exists; preserving its artifacts."
             exit 0
+          fi
+          # Черновик остаётся только от прогона, убитого посреди загрузки: у него нет ни
+          # установщика, ни тега, и «сохранить» в нём нечего. Опубликованный релиз этой ветки
+          # кода не касается — он отсеян выше.
+          if [ "$state" = "true" ]; then
+            echo "Draft v$version left by an interrupted run; replacing it."
+            gh release delete "v$version" --yes
           fi
           cd artifacts
           sha256sum --check "Cord-Setup-$version-x64.exe.sha256" Cord-win-x64.zip.sha256
