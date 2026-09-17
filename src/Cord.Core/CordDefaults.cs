@@ -10,9 +10,14 @@ public static class CordDefaults
     public const string ServerUrl = "https://meet.nikg.tech/";
 
     /// <summary>
-    /// Where the client looks for its own updates. This deliberately does NOT follow the
-    /// selected meeting server: joining someone's room must never let that server decide
-    /// which executable this machine installs.
+    /// Запасной источник обновления, когда GitHub недоступен.
+    ///
+    /// Раньше он был основным: репозиторий был закрытым, и анонимный клиент никакого другого
+    /// источника не имел. Репозиторий публичный, релиз выпускает GitHub — он и спрашивается
+    /// первым, а зеркало осталось для случая, когда до GitHub не достучаться.
+    ///
+    /// Адрес намеренно НЕ следует за выбранным сервером встреч: вход в чужую комнату не должен
+    /// решать, какой исполняемый файл поставится на эту машину.
     /// </summary>
     public static readonly Uri UpdateMirror =
         new("https://meet.nikg.tech/downloads/windows/latest.json");

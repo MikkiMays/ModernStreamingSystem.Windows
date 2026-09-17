@@ -31,8 +31,13 @@ public class ReleaseTests
         Assert.Throws<InvalidDataException>(() => ReleaseClient.Parse(Release(url: "https://example.org/setup.exe"), new(0, 3, 0), "x64"));
         Assert.Throws<InvalidDataException>(() => ReleaseClient.Parse(Release(digest: ""), new(0, 3, 0), "x64"));
     }
+    /// <summary>
+    /// Источник истины у релиза один — тот, кто его выпустил. Пока репозиторий был закрытым,
+    /// анонимный клиент туда не попадал и жил зеркалом; теперь GitHub спрашивается первым,
+    /// и никакие учётные данные в установленный клиент по-прежнему не попадают.
+    /// </summary>
     [Fact]
-    public async Task PrivateUpstreamUsesVerifiedPublicMirrorWithoutCredentials()
+    public async Task PublicUpstreamIsAskedFirstWithoutCredentials()
     {
         var requested = new List<Uri>();
         using var http = new HttpClient(new Handler(request =>
@@ -42,9 +47,42 @@ public class ReleaseTests
             return new(HttpStatusCode.OK) { Content = new StringContent(Release()) };
         }));
         var release = await new ReleaseClient(http).CheckAsync(new(0, 3, 0), "x64", default);
-        Assert.Equal([ReleaseClient.MirrorLatest], requested);
-        Assert.Equal(new Uri("https://meet.nikg.tech/downloads/windows/v0.4.0/Cord-Setup-0.4.0-x64.exe"), release!.Package);
+        Assert.Equal([ReleaseClient.Latest], requested);
+        Assert.Equal(new Uri($"https://github.com/{ReleaseClient.Repository}/releases/download/v0.4.0/Cord-Setup-0.4.0-x64.exe"), release!.Package);
         Assert.Equal(new string('a', 64), release.Sha256);
+    }
+
+    /// <summary>Зеркало остаётся ровно для того случая, ради которого его и держат.</summary>
+    [Fact]
+    public async Task FallsBackToTheMirrorWhenUpstreamCannotBeReached()
+    {
+        var requested = new List<Uri>();
+        using var http = new HttpClient(new Handler(request =>
+        {
+            requested.Add(request.RequestUri!);
+            if (request.RequestUri == ReleaseClient.Latest) throw new HttpRequestException("network is down");
+            return new(HttpStatusCode.OK) { Content = new StringContent(Release()) };
+        }));
+        var release = await new ReleaseClient(http).CheckAsync(new(0, 3, 0), "x64", default);
+        Assert.Equal([ReleaseClient.Latest, ReleaseClient.MirrorLatest], requested);
+        Assert.Equal(new Uri("https://meet.nikg.tech/downloads/windows/v0.4.0/Cord-Setup-0.4.0-x64.exe"), release!.Package);
+    }
+
+    /// <summary>
+    /// Подделанный релиз должен остановить обновление, а не отправить клиента искать другой
+    /// источник: иначе проверка адреса пакета перестаёт что-либо значить.
+    /// </summary>
+    [Fact]
+    public async Task ARejectedUpstreamReleaseIsNotRetriedOnTheMirror()
+    {
+        var requested = new List<Uri>();
+        using var http = new HttpClient(new Handler(request =>
+        {
+            requested.Add(request.RequestUri!);
+            return new(HttpStatusCode.OK) { Content = new StringContent(Release(url: "https://example.org/setup.exe")) };
+        }));
+        await Assert.ThrowsAsync<InvalidDataException>(() => new ReleaseClient(http).CheckAsync(new(0, 3, 0), "x64", default));
+        Assert.Equal([ReleaseClient.Latest], requested);
     }
     [Fact]
     public void MirrorMustNameExactUpstreamAndAssets()

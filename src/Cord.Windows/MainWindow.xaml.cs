@@ -20,6 +20,8 @@ public sealed partial class MainWindow : Window
     private ApplicationUpdater? _updater;
     private System.Threading.Timer? _updateTimer;
     private bool _applyingUpdate;
+    /// <summary>Версия, о которой уже сказали. Второй раз о том же не напоминаем.</summary>
+    private Version? _announcedUpdate;
     private DesktopSettings _settings = new();
     private WebWorkspace? _workspace;
     private GlobalMicrophoneHotkey? _microphoneHotkey;
@@ -239,6 +241,12 @@ public sealed partial class MainWindow : Window
             case "favorites.changed": Run(RefreshFavoritesAsync); break;
             case "servers.open": Run(() => ShowServersAsync()); break;
             case "session.expired": Run(RenewSessionAsync); break;
+            // Страница о файлах приложения ничего не знает: она умеет только попросить
+            // проверить и показать ответ. Раздел «О программе» в вебе и в приложении — один,
+            // и кнопка в нём должна делать что-то и там, и там.
+            case "update.version": PostUpdateStatus(); break;
+            case "update.check": Run(async () => { await CheckUpdateAsync(); PostUpdateStatus(); }); break;
+            case "update.apply": Run(DownloadUpdateAsync); break;
             case "close-ready": _closeReady?.TrySetResult(); break;
         }
     }
@@ -845,7 +853,7 @@ public sealed partial class MainWindow : Window
         _closed = true;
         NetworkChange.NetworkAddressChanged -= NetworkChanged;
         _microphoneHotkey?.Dispose();
-        _updateTimer?.Dispose(); _updater?.Dispose();
+        _updateTimer?.Dispose(); _updater?.Dispose(); Notifications.Release();
         _networkTimer?.Dispose(); _lifetime.Cancel(); _workspace?.Dispose(); _http.Dispose();
     }
     private void UpdateSidebar()
@@ -897,6 +905,10 @@ public sealed partial class MainWindow : Window
         _settings = _settings with { CompactSidebar = !_settings.CompactSidebar };
         UpdateSidebar(); Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
     }
+    /// <summary>Что оболочка знает про обновление — в том виде, в каком это покажет страница.</summary>
+    private void PostUpdateStatus() =>
+        _workspace?.Post(new("update.status", Name: ApplicationUpdater.DisplayVersion, Detail: Model.UpdateStatus, Available: Model.UpdateAvailable));
+
     private async Task CheckUpdateAsync()
     {
         if (_updater is null || Model.UpdateBusy || _closed) return;
@@ -904,7 +916,21 @@ public sealed partial class MainWindow : Window
         {
             await _updater.CheckAsync(_lifetime.Token);
             Model.UpdateAvailable = _updater.Available is not null;
-            if (Model.UpdateAvailable) { Model.UpdateButton = "Обновить"; Model.UpdateStatus = "Доступна версия " + _updater.Available!.Version; }
+            if (Model.UpdateAvailable)
+            {
+                Model.UpdateButton = "Обновить";
+                Model.UpdateStatus = "Доступна версия " + _updater.Available!.Version;
+                // Проверка идёт раз в шесть часов, в том числе когда окно свёрнуто, и строка
+                // в боковой панели в этот момент никому не видна. Уведомление показывается
+                // один раз на версию: напоминать о том же самом каждые шесть часов — травля.
+                if (_announcedUpdate != _updater.Available.Version)
+                {
+                    _announcedUpdate = _updater.Available.Version;
+                    Notifications.Activated = () => DispatcherQueue.TryEnqueue(Activate);
+                    Notifications.Announce("Обновление Cord", $"Доступна версия {_updater.Available.Version}. Откройте Cord, чтобы установить.");
+                }
+            }
+            else Model.UpdateStatus = "Установлена последняя версия";
         }
         catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException)
         {
@@ -938,6 +964,13 @@ public sealed partial class MainWindow : Window
         catch { _applyingUpdate = false; Model.UpdateStatus = "Не удалось запустить обновление"; Model.UpdateAvailable = true; throw; }
     }
     private void Update_Click(object sender, RoutedEventArgs e) => Run(DownloadUpdateAsync);
+    private void CheckUpdate_Click(object sender, RoutedEventArgs e) =>
+        Run(async () =>
+        {
+            Model.UpdateStatus = "Проверяем обновления…";
+            await CheckUpdateAsync();
+            PostUpdateStatus();
+        });
     private void FavoriteSettings_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) _workspace?.Post(new("favorite.settings", RoomId: id)); }
     private void Home_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("home"));
     private void Create_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("create"));

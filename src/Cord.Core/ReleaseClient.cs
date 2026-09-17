@@ -55,20 +55,35 @@ public sealed partial class ReleaseClient(HttpClient http)
         };
     }
 
+    /// <summary>
+    /// Первым спрашивается GitHub, зеркало — запасной путь.
+    ///
+    /// Порядок был обратный, и не без причины: репозиторий был закрытым, анонимный запрос
+    /// получал 404, и единственным источником оставалось зеркало, которое наполняет выкладка.
+    /// Репозиторий стал публичным — и порядок должен был поменяться вместе с ним. Источник
+    /// истины у релиза один, и это тот, кто его выпустил; зеркало остаётся на случай, когда
+    /// GitHub недоступен, и продолжает проверяться так же строго.
+    /// </summary>
     public async Task<CordRelease?> CheckAsync(Version current, string architecture, CancellationToken token)
     {
-        // The upstream repository is private. Its verified release is mirrored by the
-        // deployment publisher; GitHub credentials never enter the installed client.
-        using var mirror = await GetAsync(MirrorLatest, token);
-        if (mirror.StatusCode != HttpStatusCode.NotFound)
+        try
         {
-            mirror.EnsureSuccessStatusCode();
-            return ParseMirror(await mirror.Content.ReadAsStringAsync(token), current, architecture);
+            using var response = await GetAsync(Latest, token);
+            if (response.IsSuccessStatusCode)
+                return Parse(await response.Content.ReadAsStringAsync(token), current, architecture);
+            // 404 у публичного репозитория значит «выпусков ещё нет», а не «спроси зеркало»;
+            // но лимит запросов и сбой — значат именно это, поэтому решает не код ответа,
+            // а наличие зеркала. Ошибка разбора сюда не попадает: подделанный релиз должен
+            // остановить обновление, а не отправить клиента искать другой источник.
         }
-        using var response = await GetAsync(Latest, token);
-        if (response.StatusCode == HttpStatusCode.NotFound) return null;
-        response.EnsureSuccessStatusCode();
-        return Parse(await response.Content.ReadAsStringAsync(token), current, architecture);
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        {
+            if (token.IsCancellationRequested) throw;
+        }
+        using var mirror = await GetAsync(MirrorLatest, token);
+        if (mirror.StatusCode == HttpStatusCode.NotFound) return null;
+        mirror.EnsureSuccessStatusCode();
+        return ParseMirror(await mirror.Content.ReadAsStringAsync(token), current, architecture);
     }
 
     // Redirects are followed explicitly: an HTTPS release must never redirect to HTTP or an unrelated origin.
