@@ -73,11 +73,11 @@
           <StackPanel Grid.Row="2" Spacing="14">
             <StackPanel Spacing="6" Margin="8,0">
               <!--
-                Версия и обновление. Кнопка «Обновить» появлялась, только когда обновление уже
-                нашлось, — то есть спросить «а не вышло ли чего» было нечем, оставалось ждать
-                следующей проверки через шесть часов. Теперь проверка доступна всегда, а
-                найденное обновление отделено заметной плашкой, потому что строчка серым
-                текстом в углу панели — это не новость, а её отсутствие.
+                Версия и обновление. В спокойном состоянии здесь только номер версии: кнопка
+                проверки живёт в «О программе», рядом с остальным про обновления, и держать её
+                копию в панели значило бы спрашивать одно и то же в двух местах. Найденное
+                обновление — заметная плашка, потому что серая строчка в углу панели это не
+                новость, а её отсутствие.
               -->
               <TextBlock Text="{x:Bind Model.Version}" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               <Border Visibility="{x:Bind Model.UpdateAvailable, Mode=OneWay}" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="8" Padding="10,8">
@@ -86,9 +86,7 @@
                   <Button Content="{x:Bind Model.UpdateButton, Mode=OneWay}" Click="Update_Click" HorizontalAlignment="Stretch" />
                 </StackPanel>
               </Border>
-              <TextBlock Text="{x:Bind Model.UpdateStatus, Mode=OneWay}" FontSize="11" TextWrapping="Wrap" Visibility="{x:Bind Model.UpdateIdle, Mode=OneWay}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
               <ProgressBar Value="{x:Bind Model.UpdateProgress, Mode=OneWay}" Maximum="100" Visibility="{x:Bind Model.UpdateBusy, Mode=OneWay}" />
-              <HyperlinkButton Content="Проверить обновления" Click="CheckUpdate_Click" Padding="0" FontSize="11" IsEnabled="{x:Bind Model.UpdateIdle, Mode=OneWay}" />
             </StackPanel>
             <Button Click="Settings_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Height="48" Background="Transparent" BorderThickness="0" CornerRadius="10">
               <StackPanel Orientation="Horizontal" Spacing="14">

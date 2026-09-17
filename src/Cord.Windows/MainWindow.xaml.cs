@@ -964,13 +964,6 @@ public sealed partial class MainWindow : Window
         catch { _applyingUpdate = false; Model.UpdateStatus = "Не удалось запустить обновление"; Model.UpdateAvailable = true; throw; }
     }
     private void Update_Click(object sender, RoutedEventArgs e) => Run(DownloadUpdateAsync);
-    private void CheckUpdate_Click(object sender, RoutedEventArgs e) =>
-        Run(async () =>
-        {
-            Model.UpdateStatus = "Проверяем обновления…";
-            await CheckUpdateAsync();
-            PostUpdateStatus();
-        });
     private void FavoriteSettings_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) _workspace?.Post(new("favorite.settings", RoomId: id)); }
     private void Home_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("home"));
     private void Create_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("create"));

@@ -19,14 +19,8 @@ public partial class ShellViewModel : ObservableObject
     public string Version => "Cord " + Services.ApplicationUpdater.DisplayVersion;
     [ObservableProperty] public partial string UpdateStatus { get; set; } = "";
     [ObservableProperty] public partial string UpdateButton { get; set; } = "Обновить";
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UpdateIdle))]
-    public partial bool UpdateAvailable { get; set; }
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(UpdateIdle))]
-    public partial bool UpdateBusy { get; set; }
-    /// <summary>Ни плашки, ни полосы: обычное состояние, в котором можно спросить заново.</summary>
-    public bool UpdateIdle => !UpdateAvailable && !UpdateBusy;
+    [ObservableProperty] public partial bool UpdateAvailable { get; set; }
+    [ObservableProperty] public partial bool UpdateBusy { get; set; }
     [ObservableProperty] public partial double UpdateProgress { get; set; }
     public ObservableCollection<FavoriteRoom> Favorites { get; } = [];
 
