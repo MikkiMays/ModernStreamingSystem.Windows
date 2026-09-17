@@ -15,7 +15,7 @@ public static class BridgeProtocol
         try
         {
             var message = JsonSerializer.Deserialize(json, CordJson.Default.WebMessage);
-            if (message is not { Version: 1 } || message.Type is not ("state" or "favorites.changed" or "close-ready" or "hotkey.configure" or "preferences.changed" or "call-state" or "servers.open" or "session.expired" or "server.autoconnect")) return null;
+            if (message is not { Version: 1 } || message.Type is not ("state" or "favorites.changed" or "close-ready" or "hotkey.configure" or "preferences.changed" or "call-state" or "servers.open" or "session.expired" or "server.autoconnect" or "update.version" or "update.check" or "update.apply")) return null;
             if (message.Type == "state" && message.Page is not ("home" or "prejoin" or "room")) return null;
             if (message.Name?.Length > 40 || message.Room?.Title?.Length > 80) return null;
             // No picture is an empty string, not an absent field; only a non-empty one is checked.

@@ -75,7 +75,13 @@ jobs:
           fi
           cd artifacts
           sha256sum --check "Cord-Setup-$version-x64.exe.sha256" Cord-win-x64.zip.sha256
+          # Копия под именем без версии. Она нужна не сборке, а одной ссылке:
+          # releases/latest/download/Cord-Setup-x64.exe ведёт на последний установщик
+          # всегда и не требует ни одного запроса к API. Страница загрузки любого сервера
+          # Cord опирается на неё, когда своей копии у него нет.
+          cp "Cord-Setup-$version-x64.exe" Cord-Setup-x64.exe
           gh release create "v$version" --target "$GITHUB_SHA" --title "Cord $version" \
             --notes-file "../docs/releases/$version.md" \
             "Cord-Setup-$version-x64.exe" "Cord-Setup-$version-x64.exe.sha256" \
+            Cord-Setup-x64.exe \
             Cord-win-x64.zip Cord-win-x64.zip.sha256
