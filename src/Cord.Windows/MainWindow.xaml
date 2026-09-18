@@ -67,7 +67,7 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
-              <TextBlock Text="До пяти мест, куда хочется возвращаться." Margin="10,4,10,0" TextWrapping="Wrap" FontSize="12" LineHeight="19" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+              <TextBlock Text="Места, куда хочется возвращаться." Margin="10,4,10,0" TextWrapping="Wrap" FontSize="12" LineHeight="19" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
           </ScrollViewer>
           <StackPanel Grid.Row="2" Spacing="14">
