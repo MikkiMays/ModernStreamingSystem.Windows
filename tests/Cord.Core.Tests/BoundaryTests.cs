@@ -117,6 +117,35 @@ public sealed class BoundaryTests
     }
 
     [Fact]
+    public async Task AFreshInstallationHasNoServerAndKeepsWhatWasSavedWithoutOne()
+    {
+        // Свежая установка ничего не знает о серверах, и это состояние обязано пережить запись:
+        // сервер добавляют до того, как к нему подключились, а вместе с ним сохраняются тема и
+        // список. Раньше пустой адрес ронял разбор, и сохранённое возвращалось умолчаниями.
+        var root = Path.Combine(Path.GetTempPath(), "Cord.Tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var token = TestContext.Current.CancellationToken;
+            var store = new ProfileStore(root);
+            var fresh = await store.LoadAsync(token);
+            Assert.Equal("", fresh.ServerUrl);
+            Assert.Empty(fresh.Servers!);
+
+            var added = ServerList.Add([], "https://first.example.com", "Первый");
+            await store.SaveAsync(new DesktopSettings("", "dark", Servers: added), token);
+            var reopened = await new ProfileStore(root).LoadAsync(token);
+            Assert.Equal("", reopened.ServerUrl);
+            Assert.Equal("dark", reopened.Theme);
+            Assert.Equal("https://first.example.com/", Assert.Single(reopened.Servers!).Url);
+        }
+        finally
+        {
+            var allowed = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "Cord.Tests")) + Path.DirectorySeparatorChar;
+            if (Path.GetFullPath(root).StartsWith(allowed, StringComparison.OrdinalIgnoreCase)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ProfilePersistsAcrossRestartsAndKeepsServersIsolated()
     {
         var root = Path.Combine(Path.GetTempPath(), "Cord.Tests", Guid.NewGuid().ToString("N"));

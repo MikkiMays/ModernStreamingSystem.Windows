@@ -12,8 +12,12 @@ public partial class App : Application
     }
     protected override async void OnLaunched(LaunchActivatedEventArgs args)
     {
-        var verifyResources = Environment.GetCommandLineArgs().Contains("--verify-resources", StringComparer.Ordinal);
-        var verifyService = Environment.GetCommandLineArgs().Contains("--verify-service", StringComparer.Ordinal);
+        var arguments = Environment.GetCommandLineArgs();
+        var verifyResources = arguments.Contains("--verify-resources", StringComparer.Ordinal);
+        // Адрес приёмки идёт следом за ключом: сервера по умолчанию у Cord нет, и проверке
+        // выпуска его называют снаружи — как и всякому другому запуску.
+        var service = Array.IndexOf(arguments, "--verify-service");
+        var verifyService = service >= 0 && service + 1 < arguments.Length ? arguments[service + 1] : "";
         try
         {
             _window = new MainWindow(verifyResources);
@@ -24,9 +28,9 @@ public partial class App : Application
                 return;
             }
             _window.Activate();
-            if (verifyService)
+            if (verifyService.Length > 0)
             {
-                await ((MainWindow)_window).VerifyServiceAsync();
+                await ((MainWindow)_window).VerifyServiceAsync(verifyService);
                 _window.Close();
                 Exit();
             }
@@ -34,7 +38,7 @@ public partial class App : Application
         catch (Exception error)
         {
             ReportStartupFailure(error);
-            if (verifyResources || verifyService) Environment.Exit(1);
+            if (verifyResources || verifyService.Length > 0) Environment.Exit(1);
             throw;
         }
     }

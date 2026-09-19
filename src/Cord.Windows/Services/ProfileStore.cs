@@ -25,7 +25,10 @@ public sealed class ProfileStore
             await using var stream = File.OpenRead(path);
             var settings = await JsonSerializer.DeserializeAsync(stream, CordJson.Default.DesktopSettings, token);
             if (settings is null) return Normalized(new());
-            ServerEndpoint.Parse(settings.ServerUrl);
+            // Пустой адрес проверять нечем и незачем: это установка, на которой сервер ещё не
+            // выбрали. Разбор такой записи раньше бросал — и вместе с адресом терялись тема,
+            // список серверов и всё, что человек уже успел настроить.
+            if (settings.ServerUrl.Length > 0) ServerEndpoint.Parse(settings.ServerUrl);
             return Normalized(settings with { Theme = settings.Theme is "light" or "dark" ? settings.Theme : "system" });
         }
         catch (Exception error) when (error is JsonException or ArgumentException) { return Normalized(new()); }
@@ -37,7 +40,7 @@ public sealed class ProfileStore
 
     public async Task SaveAsync(DesktopSettings settings, CancellationToken token)
     {
-        ServerEndpoint.Parse(settings.ServerUrl);
+        if (settings.ServerUrl.Length > 0) ServerEndpoint.Parse(settings.ServerUrl);
         settings = Normalized(settings);
         await _writes.WaitAsync(token);
         try

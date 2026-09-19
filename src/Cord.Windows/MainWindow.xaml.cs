@@ -94,13 +94,20 @@ public sealed partial class MainWindow : Window
         _updateTimer = new System.Threading.Timer(_ => DispatcherQueue.TryEnqueue(() => Run(CheckUpdateAsync)), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
     }
 
-    /// <summary>Release acceptance: real WebView2, trusted origin, React bridge and native API.</summary>
-    public async Task VerifyServiceAsync()
+    /// <summary>
+    /// Release acceptance: real WebView2, trusted origin, React bridge and native API.
+    ///
+    /// <para>Адрес приходит снаружи, а не из сборки: сервера по умолчанию у Cord нет, и проверка
+    /// выпуска — единственное место, которому нужен конкретный. Профиль ей готовит
+    /// <c>scripts/verify-service.ps1</c>: это машина, на которой сервер уже записан, а не
+    /// приложение, которое его откуда-то знает.</para>
+    /// </summary>
+    public async Task VerifyServiceAsync(string expected)
     {
         await _homeReady.Task.WaitAsync(TimeSpan.FromSeconds(45));
         var workspace = _workspace ?? throw new InvalidOperationException("The web workspace did not initialize.");
-        if (workspace.Endpoint.Origin.AbsoluteUri != ServerEndpoint.Parse(CordDefaults.ServerUrl).Origin.AbsoluteUri)
-            throw new InvalidOperationException("A fresh installation must use the production service.");
+        if (workspace.Endpoint.Origin.AbsoluteUri != ServerEndpoint.Parse(expected).Origin.AbsoluteUri)
+            throw new InvalidOperationException("The acceptance probe did not open the requested service.");
         using var response = await _http.GetAsync(new Uri(workspace.Endpoint.Origin, "api/v1/capabilities"), _lifetime.Token);
         response.EnsureSuccessStatusCode();
         using var capabilities = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync(_lifetime.Token));
@@ -230,9 +237,8 @@ public sealed partial class MainWindow : Window
                 _workspace?.Post(new("hotkey.status", Detail: status));
                 break;
             case "server.autoconnect":
-                if (message.AutoConnect is { } automatic)
+                if (message.AutoConnect is { } automatic && Active() is { Length: > 0 } origin)
                 {
-                    var origin = ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
                     var current = _settings.Servers?.FirstOrDefault(server => server.Url == origin);
                     _settings = _settings with { Servers = ServerList.Add(_settings.Servers ?? [], origin, current?.Name ?? "", automatic) };
                     Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
@@ -300,6 +306,13 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async Task<bool> EnsureConnectionAsync()
     {
+        // Первый запуск: сервера нет ни одного, и выдумать его за человека нельзя. Раньше здесь
+        // стоял адрес автора, и любая установка попадала к нему — куда бы её ни принесли.
+        if (_settings.ServerUrl.Length == 0)
+        {
+            Model.Loading = false;
+            return await ShowServersAsync("");
+        }
         Model.ServerLabel = "Подключаемся…";
         var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
         var entry = _settings.Servers?.FirstOrDefault(server => server.Url == endpoint.Origin.AbsoluteUri);
@@ -362,7 +375,7 @@ public sealed partial class MainWindow : Window
     {
         await _shown.Task;
         var servers = (_settings.Servers ?? []).ToList();
-        var current = preselect ?? ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+        var current = preselect ?? Active();
         var chosen = servers.FirstOrDefault(server => server.Url == current) ?? servers.FirstOrDefault();
         ServerEntry? edit = null;
         var adding = false;
@@ -407,7 +420,7 @@ public sealed partial class MainWindow : Window
             {
                 Orientation = Orientation.Horizontal,
                 Spacing = 10,
-                Children = { new FontIcon { Glyph = "\uE710", FontSize = 15 }, new TextBlock { Text = "Добавить сервер", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold } },
+                Children = { new FontIcon { Glyph = "\uE710", FontSize = 15 }, new TextBlock { Text = "Указать первый сервер", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold } },
             },
             Height = 52,
             HorizontalAlignment = HorizontalAlignment.Stretch,
@@ -515,8 +528,18 @@ public sealed partial class MainWindow : Window
         var content = new StackPanel { Spacing = 14, MinWidth = 380 };
         if (empty)
         {
+            // Первый экран первого запуска. Он не спрашивает «какой сервер?» в пустоту: адрес у
+            // человека уже есть — это то место, откуда он только что скачал Cord.
+            content.Children.Add(new TextBlock
+            {
+                Text = "Cord — это приложение, а встречи идут на сервере.",
+                TextWrapping = TextWrapping.Wrap,
+                FontSize = 14,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            content.Children.Add(Note("Впишите адрес того сервера, с которого вы скачали Cord, — обычно это та же ссылка, по которой открылась страница загрузки. Например: https://meet.example.com"));
             content.Children.Add(invite);
-            content.Children.Add(Note("Cord подключается к серверу, на котором идут встречи. Адрес даёт тот, кто его поднял."));
+            content.Children.Add(Note("Если Cord вам дал кто-то другой — спросите адрес у него. Серверов можно добавить сколько угодно и переключаться между ними в любой момент."));
         }
         else
         {
@@ -541,7 +564,8 @@ public sealed partial class MainWindow : Window
         ServerSession? opened = null;
         var dialog = new ContentDialog
         {
-            Title = "Подключение к серверу",
+            // Первый запуск — это не «подключение», это знакомство: подключаться ещё не к чему.
+            Title = empty ? "Добро пожаловать в Cord" : "Подключение к серверу",
             Content = content,
             PrimaryButtonText = empty ? "" : "Подключиться",
             CloseButtonText = _session is null ? "Выйти" : "Закрыть",
@@ -647,13 +671,16 @@ public sealed partial class MainWindow : Window
         var content = new StackPanel { Spacing = 14, MinWidth = 380 };
         content.Children.Add(label);
         content.Children.Add(address);
+        // Та же подсказка, что и на первом экране, и стоит она там, куда адрес вписывают. Первый
+        // сервер человек ищет не в списке серверов, а в своей истории браузера.
+        if (entry is null) content.Children.Add(Note("Тот же адрес, с которого вы скачали Cord."));
         content.Children.Add(password);
         content.Children.Add(error);
         content.Children.Add(Note("Проверять сейчас ничего не нужно: подключение произойдёт, когда вы выберете сервер в списке."));
 
         // The active server has to stay in the list: removing the ground you are standing on
         // would leave the application with nowhere to go.
-        var removable = entry is not null && entry.Url != ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
+        var removable = entry is not null && entry.Url != Active();
         var dialog = new ContentDialog
         {
             Title = entry is null ? "Новый сервер" : "Сервер",
@@ -748,6 +775,9 @@ public sealed partial class MainWindow : Window
     }
 
     private static string Host(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Authority : url;
+
+    /// <summary>Сервер, на котором мы стоим, или пусто — до того, как его выбрали впервые.</summary>
+    private string Active() => _settings.ServerUrl.Length == 0 ? "" : ServerEndpoint.Parse(_settings.ServerUrl).Origin.AbsoluteUri;
 
     /// <summary>
     /// Shows the profile picture the page sent with its state.

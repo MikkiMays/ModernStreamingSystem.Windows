@@ -40,17 +40,19 @@ RestartApplications=no
 AlwaysRestart=no
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
-AppComments=Звонки, экран и разговоры в одном пространстве.
-AppPublisherURL=https://meet.nikg.tech/download
-AppSupportURL=https://meet.nikg.tech/download
-AppUpdatesURL=https://meet.nikg.tech/download
+AppComments=Видеовстречи, демонстрация экрана и совместный просмотр. Сервер выбираете вы.
+; Адреса ведут туда, где лежит сам Cord, а не на чей-то сервер встреч: сервер у каждого свой,
+; и установщик не должен рекламировать один из них как «тот самый».
+AppPublisherURL=https://github.com/MikkiMays/ModernStreamingSystem.Windows
+AppSupportURL=https://github.com/MikkiMays/ModernStreamingSystem.Windows/issues
+AppUpdatesURL=https://github.com/MikkiMays/ModernStreamingSystem.Windows/releases/latest
 ; Windows reads these when it describes the file — in its properties, and in the SmartScreen
 ; dialog for an unsigned build. They do not remove that dialog; nothing inside the installer
 ; can. They decide whether it names the program or shows a blank.
 VersionInfoVersion={#AppVersion}
 VersionInfoProductName=Cord
 VersionInfoProductTextVersion={#AppVersion}
-VersionInfoDescription=Установка Cord
+VersionInfoDescription=Cord — видеовстречи, экран и совместный просмотр
 VersionInfoCompany=Cord
 VersionInfoCopyright=© @nikgers
 InfoBeforeFile=About-installation.txt

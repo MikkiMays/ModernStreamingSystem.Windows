@@ -1,14 +1,17 @@
 namespace Cord.Core;
 
 /// <summary>
-/// Everything that ties a build of Cord to one operator. A fork changes these two values
-/// and nothing else: the rest of the client is server-agnostic.
+/// Всё, что связывает сборку Cord с кем-то конкретным. Осталось одно значение — и то про
+/// обновления: сервера по умолчанию у Cord больше нет.
+///
+/// <para>ПОЧЕМУ НЕТ. Прежняя установка молча подключалась к серверу автора: человек скачивал
+/// приложение где угодно, а попадал всегда в одно и то же место — и адрес, по которому он
+/// только что ходил за установщиком, оказывался ни при чём. Cord — приложение, а встречи
+/// идут на сервере, который кто-то поднял; какой это сервер, знает только тот, кто дал
+/// ссылку. Поэтому первый запуск ничего не угадывает, а спрашивает.</para>
 /// </summary>
 public static class CordDefaults
 {
-    /// <summary>The server a fresh installation starts on. Users may add or replace it.</summary>
-    public const string ServerUrl = "https://meet.nikg.tech/";
-
     /// <summary>
     /// Запасной источник обновления, когда GitHub недоступен.
     ///
