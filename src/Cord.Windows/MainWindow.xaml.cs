@@ -372,7 +372,10 @@ public sealed partial class MainWindow : Window
         // начинала бы с серого: цвет жил только на самом кружке, а кружок — недолго.
         var known = new Dictionary<string, bool>(StringComparer.Ordinal);
 
-        var password = new PasswordBox { Header = "Пароль сервера", PlaceholderText = "Если сервер закрыт паролем", MaxLength = 200 };
+        // Пароля здесь нет намеренно: он хранится вместе с сервером и подставляется сам.
+        // Спрашивать его при каждом выборе значило бы требовать вводить заново то, что уже
+        // сохранено, — а ошибиться в нём можно ровно там, где он записан, по шестерёнке.
+        var secret = "";
         var automatic = new CheckBox { Content = "Подключаться к этому серверу при запуске" };
         var status = new TextBlock { FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         var reason = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
@@ -497,10 +500,6 @@ public sealed partial class MainWindow : Window
         }
         BuildRows();
         Select(chosen);
-        // The password for the server we are already on is the one Windows is keeping; any
-        // other entry starts empty until its own is loaded by the editor.
-        if (chosen?.Url == current)
-            password.Password = await _profiles.GetPasswordAsync(ServerEndpoint.Parse(current), _lifetime.Token);
 
         void Report(ConnectionResult result)
         {
@@ -522,19 +521,28 @@ public sealed partial class MainWindow : Window
         else
         {
             content.Children.Add(Group("Серверы"));
-            content.Children.Add(new ScrollViewer { Content = rows, MaxHeight = 240, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
+            // Список — единственное, что здесь вообще может не поместиться, и прокрутка
+            // остаётся только у него. Раньше в прокрутку была завёрнута ещё и вся страница
+            // диалога, и полоса появлялась у окна целиком — при двух серверах и одной кнопке.
+            content.Children.Add(new ScrollViewer
+            {
+                Content = rows,
+                MaxHeight = 260,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            });
             content.Children.Add(add);
-            content.Children.Add(password);
             content.Children.Add(automatic);
             content.Children.Add(status);
             content.Children.Add(detail);
+            content.Children.Add(Note("Пароль сервера хранится вместе с ним и подставляется сам. Изменить его — по шестерёнке в строке."));
         }
 
         ServerSession? opened = null;
         var dialog = new ContentDialog
         {
             Title = "Подключение к серверу",
-            Content = new ScrollViewer { Content = content, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, MaxHeight = 560 },
+            Content = content,
             PrimaryButtonText = empty ? "" : "Подключиться",
             CloseButtonText = _session is null ? "Выйти" : "Закрыть",
             DefaultButton = empty ? ContentDialogButton.Close : ContentDialogButton.Primary,
@@ -549,7 +557,10 @@ public sealed partial class MainWindow : Window
                 status.Text = "Подключаемся…";
                 Neutral(status);
                 detail.Visibility = Visibility.Collapsed;
-                var result = await new ServerAccessClient(_http).TryConnectAsync(chosen.Url, password.Password, _lifetime.Token);
+                // Пароль берётся у самого сервера — того, который выбран сейчас, а не того,
+                // на котором мы стояли, когда окно открылось.
+                secret = await _profiles.GetPasswordAsync(ServerEndpoint.Parse(chosen.Url), _lifetime.Token);
+                var result = await new ServerAccessClient(_http).TryConnectAsync(chosen.Url, secret, _lifetime.Token);
                 Report(result);
                 // The dialog closes on a connection and on nothing else: a refusal keeps the
                 // reason under the button, which is where it can be acted on.
@@ -564,7 +575,7 @@ public sealed partial class MainWindow : Window
         await DialogAsync(dialog);
         await probes.CancelAsync();
         await probing;
-        return new ServerChoice(opened is null ? null : chosen, opened, password.Password, automatic.IsChecked == true, edit, adding);
+        return new ServerChoice(opened is null ? null : chosen, opened, secret, automatic.IsChecked == true, edit, adding);
     }
 
     /// <summary>
@@ -629,13 +640,14 @@ public sealed partial class MainWindow : Window
         var password = new PasswordBox { Header = "Пароль", MaxLength = 200, PlaceholderText = "Если сервер закрыт паролем" };
         if (entry is not null)
             password.Password = await _profiles.GetPasswordAsync(ServerEndpoint.Parse(entry.Url), _lifetime.Token);
-        var automatic = new CheckBox { Content = "Подключаться автоматически при запуске", IsChecked = entry?.AutoConnect != false };
+        // «Подключаться при запуске» здесь больше нет: это свойство не сервера, а того, с чего
+        // начинается запуск, и спрашивалось оно в двух местах сразу — в карточке сервера и в
+        // окне выбора. Осталось одно, то, где рядом видно, о каком сервере речь.
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = new SolidColorBrush(Dead) };
         var content = new StackPanel { Spacing = 14, MinWidth = 380 };
         content.Children.Add(label);
         content.Children.Add(address);
         content.Children.Add(password);
-        content.Children.Add(automatic);
         content.Children.Add(error);
         content.Children.Add(Note("Проверять сейчас ничего не нужно: подключение произойдёт, когда вы выберете сервер в списке."));
 
@@ -672,7 +684,8 @@ public sealed partial class MainWindow : Window
             servers = ServerList.Remove(servers, entry.Url).ToList();
         _settings = _settings with
         {
-            Servers = ServerList.Add(servers, endpoint.Origin.AbsoluteUri, label.Text, automatic.IsChecked == true),
+            // Автоподключение у записи остаётся прежним: его меняют в окне выбора сервера.
+            Servers = ServerList.Add(servers, endpoint.Origin.AbsoluteUri, label.Text, entry?.AutoConnect ?? true),
         };
         await _profiles.SaveAsync(_settings, _lifetime.Token);
         await _profiles.SavePasswordAsync(endpoint, password.Password, _lifetime.Token);
