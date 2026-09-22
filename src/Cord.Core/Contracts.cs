@@ -26,6 +26,7 @@ public sealed record ServerEntry(string Url, string Name = "", bool AutoConnect 
 /// состояние: так выглядит установка, на которой сервер ещё не выбрали ни разу.</para>
 /// </summary>
 public sealed record DesktopSettings(string ServerUrl = "", string Theme = "system", bool CompactSidebar = false, bool ShowPing = false, bool NotificationSounds = true, IReadOnlyList<ServerEntry>? Servers = null);
+public sealed record FavoriteOrder(string[] RoomIds);
 public sealed record WebRoom(string RoomId, string Title, string Code);
 public sealed record WebMessage(int Version, string Type, string? Page, string? Name, string? Theme, WebRoom? Room, MicrophoneHotkey? Hotkey = null, bool? ShowPing = null, bool? NotificationSounds = null, bool? InCall = null, string? Avatar = null, bool? AutoConnect = null);
 public sealed record HostMessage(string Type, string? Page = null, string? RoomId = null, string? Theme = null, int Version = 1, string? Name = null, string? Detail = null, bool? ShowPing = null, bool? NotificationSounds = null, string? Token = null, long? ExpiresAt = null, string? ServerName = null, string? Tab = null, bool? Available = null);
@@ -39,6 +40,7 @@ public sealed record ConnectionResult(bool Ok, string Detail, ServerSession? Ses
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(List<FavoriteRoom>))]
+[JsonSerializable(typeof(FavoriteOrder))]
 [JsonSerializable(typeof(List<ServerEntry>))]
 [JsonSerializable(typeof(DesktopSettings))]
 [JsonSerializable(typeof(WebMessage))]

@@ -45,11 +45,19 @@
                   <FontIcon Glyph="" FontSize="13" />
                 </Button>
               </Grid>
-              <ItemsControl ItemsSource="{x:Bind Model.Favorites}">
-                <ItemsControl.ItemTemplate>
+              <ListView x:Name="FavoriteList" ItemsSource="{x:Bind Model.Favorites}" SelectionMode="Single"
+                  CanDragItems="True" CanReorderItems="True" AllowDrop="True" IsItemClickEnabled="True"
+                  DragItemsStarting="Favorites_DragItemsStarting" DragItemsCompleted="Favorites_DragItemsCompleted"
+                  ItemClick="Favorites_ItemClick" ContextRequested="Favorites_ContextRequested" AutomationProperties.Name="Избранные комнаты. Перетащите для изменения порядка">
+                <ListView.ItemContainerStyle><Style TargetType="ListViewItem">
+                  <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                  <Setter Property="Padding" Value="0" />
+                </Style></ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
                   <DataTemplate x:DataType="core:FavoriteRoom">
                     <Grid ColumnSpacing="2"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="32" /></Grid.ColumnDefinitions>
-                    <Button Tag="{x:Bind RoomId}" Click="Favorite_Click" IsEnabled="{x:Bind CanJoin}" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="10,10" Margin="0,2" Background="Transparent" BorderThickness="0" CornerRadius="10">
+
+                    <Border Padding="10,10" Margin="0,2">
                       <Grid ColumnSpacing="12">
                         <Grid.ColumnDefinitions>
                           <ColumnDefinition Width="24" />
@@ -61,12 +69,12 @@
                           <TextBlock Text="{x:Bind DisplayCode}" FontSize="10" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
                       </Grid>
-                    </Button>
+                    </Border>
                     <Button Grid.Column="1" Tag="{x:Bind RoomId}" Click="FavoriteSettings_Click" Content="…" Width="32" Padding="4" VerticalAlignment="Center" Background="Transparent" BorderThickness="0" AutomationProperties.Name="Настройки избранной комнаты" />
                     </Grid>
                   </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
+                </ListView.ItemTemplate>
+              </ListView>
               <TextBlock Text="Места, куда хочется возвращаться." Margin="10,4,10,0" TextWrapping="Wrap" FontSize="12" LineHeight="19" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
             </StackPanel>
           </ScrollViewer>

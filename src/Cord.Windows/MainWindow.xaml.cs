@@ -142,6 +142,7 @@ public sealed partial class MainWindow : Window
             SetMediaFullScreen(false);
             _microphoneHotkey?.Configure(null);
             _requestedHotkey = null;
+            CancelFavoriteDrag();
             _workspace?.Dispose();
             var endpoint = ServerEndpoint.Parse(_settings.ServerUrl);
             var entry = _settings.Servers?.FirstOrDefault(server => server.Url == endpoint.Origin.AbsoluteUri);
@@ -171,14 +172,14 @@ public sealed partial class MainWindow : Window
     private async Task RefreshFavoritesAsync()
     {
         var workspace = _workspace;
-        if (workspace?.Capability.Length != 43 || _closed) return;
+        if (workspace?.Capability.Length != 43 || _closed || _favoriteDragging || _favoriteOrderSaving) return;
         var revision = ++_favoriteRevision;
         try
         {
             var rooms = await new FavoriteClient(_http).ListAsync(workspace.Endpoint, workspace.Capability, _lifetime.Token, _session?.Token);
-            if (workspace == _workspace && revision == _favoriteRevision && !_closed)
+            if (workspace == _workspace && revision == _favoriteRevision && !_closed && !_favoriteDragging && !_favoriteOrderSaving)
             {
-                Model.ReplaceFavorites(rooms);
+                ReplaceFavoriteRows(rooms);
                 // One refresh that did not arrive used to rename the server «Ожидаем сервер»
                 // for the rest of the visit, including the whole of a meeting that was working
                 // perfectly. A refresh that did arrive is the answer to that.
@@ -738,6 +739,7 @@ public sealed partial class MainWindow : Window
         if (changed)
         {
             Model.InCall = false;
+            CancelFavoriteDrag();
             Model.ReplaceFavorites([]);
             await OpenWorkspaceAsync();
         }
