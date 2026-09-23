@@ -1,9 +1,10 @@
 param([string]$Installer)
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+[xml]$project = Get-Content -LiteralPath (Join-Path $projectRoot 'src\Cord.Windows\Cord.Windows.csproj')
+$version = [string]$project.Project.PropertyGroup.Version
 if (!$Installer) {
-  [xml]$project = Get-Content -LiteralPath (Join-Path $projectRoot 'src\Cord.Windows\Cord.Windows.csproj')
-  $Installer = Join-Path $projectRoot "artifacts\Cord-Setup-$($project.Project.PropertyGroup.Version)-x64.exe"
+  $Installer = Join-Path $projectRoot "artifacts\Cord-Setup-$version-x64.exe"
 }
 $Installer = [IO.Path]::GetFullPath($Installer)
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{E43CC1FC-827B-4F55-A8E8-C746D4BAE102}_is1'
@@ -58,13 +59,24 @@ try {
   $profileSentinel = Join-Path $env:CORD_PROFILE_DIRECTORY 'preserved.json'
   Set-Content -LiteralPath $profileSentinel -Value '{"favorites":["room"],"showPing":true}'
   try {
+    $round = 0
     foreach ($valid in @($false, $true, $true)) {
+      $round++
+      # The last round leaves another Cord running from the installation directory - a second
+      # window, or a process whose window closed but which never exited. Its open files made the
+      # installer fail while the app restarted as the old version; the helper must clear it.
+      $stray = $null
+      if ($round -eq 3) {
+        $stray = Start-Process -FilePath (Join-Path $installRoot 'Cord.exe') -WorkingDirectory $installRoot -PassThru
+        Start-Sleep -Seconds 8
+        if ($stray.HasExited) { throw 'The stray Cord for the update test exited on its own.' }
+      }
       $parent = Start-Process powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command "Start-Sleep -Seconds 120"' -WindowStyle Hidden -PassThru
       $ready = Join-Path $testRoot "ready-$([guid]::NewGuid())"
       $result = Join-Path $testRoot 'result.json'
       if (Test-Path $result) { Remove-Item -LiteralPath $result }
       $planFile = Join-Path $testRoot 'update-plan.json'
-      @{ ProcessId = $parent.Id; Package = $Installer; Sha256 = $(if ($valid) { (Get-FileHash $Installer -Algorithm SHA256).Hash } else { '0' * 64 }); InstallDirectory = $installRoot; UpdateDirectory = $testRoot; ReadyFile = $ready } | ConvertTo-Json | Set-Content -LiteralPath $planFile -Encoding UTF8
+      @{ ProcessId = $parent.Id; Package = $Installer; Sha256 = $(if ($valid) { (Get-FileHash $Installer -Algorithm SHA256).Hash } else { '0' * 64 }); InstallDirectory = $installRoot; UpdateDirectory = $testRoot; ReadyFile = $ready; Version = $version } | ConvertTo-Json | Set-Content -LiteralPath $planFile -Encoding UTF8
       $helper = Start-Process powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$helperScript`"", '-PlanFile', "`"$planFile`"") -WindowStyle Hidden -PassThru
       try {
         if ($valid) {
@@ -74,9 +86,11 @@ try {
           if (Test-Path $result) { throw 'Update ran while the parent app was alive.' }
           $parent.Kill(); $parent.WaitForExit()
         }
-        if (!$helper.WaitForExit(90000)) { throw 'Update helper timed out.' }
+        if (!$helper.WaitForExit(150000)) { throw 'Update helper timed out.' }
         $outcome = Get-Content -LiteralPath $result -Raw | ConvertFrom-Json
-        if ($outcome.ok -ne $valid) { throw "Unexpected update result: $($outcome.detail)" }
+        if ($outcome.ok -ne $valid) { throw "Unexpected update result at $($outcome.stage): $($outcome.detail) $($outcome.tail)" }
+        if ($valid -and $outcome.installed -ne $version) { throw "The helper reported version '$($outcome.installed)' instead of $version." }
+        if ($stray -and !$stray.HasExited) { throw 'The update left another Cord from the installation running.' }
         if (!$valid -and $parent.HasExited) { throw 'Invalid package terminated the running app.' }
         if ((Get-Content -LiteralPath $profileSentinel -Raw).Trim() -ne '{"favorites":["room"],"showPing":true}') { throw 'Update changed the profile.' }
         if ((Get-ItemProperty -LiteralPath $uninstallKey).InstallLocation.TrimEnd('\') -ne $installRoot) { throw 'Update changed the installation directory.' }

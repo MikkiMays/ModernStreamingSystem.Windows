@@ -30,4 +30,14 @@ public partial class ShellViewModel : ObservableObject
         foreach (var room in rooms) Favorites.Add(room);
     }
     public void Report(string message) { Error = message; HasError = true; }
+    /// <summary>Итог прошлого обновления — своей плашкой: в «Соединении» с кнопкой «Открыть повторно» он читался как сбой сервера.</summary>
+    [ObservableProperty] public partial string UpdateNotice { get; set; } = "";
+    [ObservableProperty] public partial bool HasUpdateNotice { get; set; }
+    [ObservableProperty] public partial Microsoft.UI.Xaml.Controls.InfoBarSeverity UpdateSeverity { get; set; }
+    public void ReportUpdate(bool ok, string message)
+    {
+        UpdateNotice = message;
+        UpdateSeverity = ok ? Microsoft.UI.Xaml.Controls.InfoBarSeverity.Success : Microsoft.UI.Xaml.Controls.InfoBarSeverity.Warning;
+        HasUpdateNotice = true;
+    }
 }

@@ -89,7 +89,7 @@ public sealed partial class MainWindow : Window
         }
         await OpenWorkspaceAsync();
         _updater = new ApplicationUpdater(_profiles.Root);
-        if (_updater.LastResult() is { } error) Model.Report(error);
+        if (_updater.LastResult() is { } outcome) Model.ReportUpdate(outcome.Ok, outcome.Message);
         Run(CheckUpdateAsync);
         _updateTimer = new System.Threading.Timer(_ => DispatcherQueue.TryEnqueue(() => Run(CheckUpdateAsync)), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
     }

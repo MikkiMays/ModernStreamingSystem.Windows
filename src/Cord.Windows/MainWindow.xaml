@@ -147,11 +147,14 @@
         <Grid>
           <ContentControl x:Name="WorkspaceHost" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
           <ProgressRing IsActive="{x:Bind Model.Loading, Mode=OneWay}" Width="40" Height="40" IsHitTestVisible="False" />
-          <InfoBar IsOpen="{x:Bind Model.HasError, Mode=TwoWay}" Title="Соединение" Message="{x:Bind Model.Error, Mode=OneWay}" Severity="Warning" VerticalAlignment="Top" Margin="16">
-            <InfoBar.ActionButton>
-              <Button Content="Открыть повторно" Click="Retry_Click" />
-            </InfoBar.ActionButton>
-          </InfoBar>
+          <StackPanel VerticalAlignment="Top" Margin="16" Spacing="8">
+            <InfoBar IsOpen="{x:Bind Model.HasError, Mode=TwoWay}" Title="Соединение" Message="{x:Bind Model.Error, Mode=OneWay}" Severity="Warning">
+              <InfoBar.ActionButton>
+                <Button Content="Открыть повторно" Click="Retry_Click" />
+              </InfoBar.ActionButton>
+            </InfoBar>
+            <InfoBar IsOpen="{x:Bind Model.HasUpdateNotice, Mode=TwoWay}" Title="Обновление" Message="{x:Bind Model.UpdateNotice, Mode=OneWay}" Severity="{x:Bind Model.UpdateSeverity, Mode=OneWay}" />
+          </StackPanel>
         </Grid>
       </Border>
     </SplitView>
