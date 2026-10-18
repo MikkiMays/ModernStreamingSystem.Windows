@@ -41,11 +41,8 @@ AlwaysRestart=no
 UsePreviousAppDir=yes
 UsePreviousTasks=yes
 AppComments=Видеовстречи, демонстрация экрана и совместный просмотр. Сервер выбираете вы.
-; Адреса ведут туда, где лежит сам Cord, а не на чей-то сервер встреч: сервер у каждого свой,
-; и установщик не должен рекламировать один из них как «тот самый».
-AppPublisherURL=https://github.com/MikkiMays/ModernStreamingSystem.Windows
-AppSupportURL=https://github.com/MikkiMays/ModernStreamingSystem.Windows/issues
-AppUpdatesURL=https://github.com/MikkiMays/ModernStreamingSystem.Windows/releases/latest
+; Ссылок нет намеренно: Cord — продукт, а не исходники. Репозиторий приватный, и адрес в
+; «Установленных приложениях» Windows вёл бы в 404.
 ; Windows reads these when it describes the file — in its properties, and in the SmartScreen
 ; dialog for an unsigned build. They do not remove that dialog; nothing inside the installer
 ; can. They decide whether it names the program or shows a blank.
@@ -62,7 +59,9 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"; Flags: unchecked
+; Ярлык на рабочем столе включён по умолчанию (T15): Cord — приложение для звонков, которое
+; ищут на рабочем столе. Снятая однажды галочка запоминается (UsePreviousTasks=yes).
+Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Ярлыки:"
 
 [Files]
 Source: "{#RedistRoot}\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"; Flags: dontcopy nocompression

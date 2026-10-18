@@ -7,11 +7,14 @@ namespace Cord.Core;
 
 public sealed record CordRelease(Version Version, Uri Package, string Sha256, long Size);
 
-/// <summary>Only stable x64 installers from Cord's fixed upstream release repository are accepted.</summary>
+/// <summary>
+/// Only stable x64 installers published by Cord's own release pipeline are accepted, and they are
+/// fetched only from the Cord update mirror.
+/// </summary>
 public sealed partial class ReleaseClient(HttpClient http)
 {
+    /// <summary>Who built the release: the mirror's metadata must name it, and asset URLs must match it.</summary>
     public const string Repository = "MikkiMays/ModernStreamingSystem.Windows";
-    public static readonly Uri Latest = new($"https://api.github.com/repos/{Repository}/releases/latest");
     public static readonly Uri MirrorLatest = CordDefaults.UpdateMirror;
     [GeneratedRegex(@"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")]
     private static partial Regex StableVersion();
@@ -56,30 +59,13 @@ public sealed partial class ReleaseClient(HttpClient http)
     }
 
     /// <summary>
-    /// Первым спрашивается GitHub, зеркало — запасной путь.
-    ///
-    /// Порядок был обратный, и не без причины: репозиторий был закрытым, анонимный запрос
-    /// получал 404, и единственным источником оставалось зеркало, которое наполняет выкладка.
-    /// Репозиторий стал публичным — и порядок должен был поменяться вместе с ним. Источник
-    /// истины у релиза один, и это тот, кто его выпустил; зеркало остаётся на случай, когда
-    /// GitHub недоступен, и продолжает проверяться так же строго.
+    /// Обновление спрашивается только у зеркала Cord. GitHub из клиента убран: репозиторий
+    /// закрыт (анонимный запрос — 404), и Cord как продукт не ходит на чужие адреса. Метаданные
+    /// на зеркале — это релиз сборочного конвейера как есть, поэтому адрес и SHA-256 установщика
+    /// проверяются так же строго; подделка останавливает обновление, а не ищет другой источник.
     /// </summary>
     public async Task<CordRelease?> CheckAsync(Version current, string architecture, CancellationToken token)
     {
-        try
-        {
-            using var response = await GetAsync(Latest, token);
-            if (response.IsSuccessStatusCode)
-                return Parse(await response.Content.ReadAsStringAsync(token), current, architecture);
-            // 404 у публичного репозитория значит «выпусков ещё нет», а не «спроси зеркало»;
-            // но лимит запросов и сбой — значат именно это, поэтому решает не код ответа,
-            // а наличие зеркала. Ошибка разбора сюда не попадает: подделанный релиз должен
-            // остановить обновление, а не отправить клиента искать другой источник.
-        }
-        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
-        {
-            if (token.IsCancellationRequested) throw;
-        }
         using var mirror = await GetAsync(MirrorLatest, token);
         if (mirror.StatusCode == HttpStatusCode.NotFound) return null;
         mirror.EnsureSuccessStatusCode();
@@ -92,7 +78,7 @@ public sealed partial class ReleaseClient(HttpClient http)
         for (var redirects = 0; redirects < 6; redirects++)
         {
             var mirror = uri.IdnHost == MirrorLatest.IdnHost && uri.AbsolutePath.StartsWith("/downloads/windows/", StringComparison.Ordinal) && uri.Query.Length == 0;
-            if (uri.Scheme != "https" || !uri.IsDefaultPort || uri.UserInfo.Length != 0 || (!mirror && !new[] { "api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com" }.Contains(uri.IdnHost)))
+            if (uri.Scheme != "https" || !uri.IsDefaultPort || uri.UserInfo.Length != 0 || !mirror)
                 throw new InvalidDataException("Недопустимый адрес загрузки.");
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.UserAgent.ParseAdd("Cord-Windows-Updater/1.0");

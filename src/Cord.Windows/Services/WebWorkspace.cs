@@ -37,7 +37,13 @@ public sealed class WebWorkspace(
         var environment = await CoreWebView2Environment.CreateWithOptionsAsync(
             null,
             profiles.BrowserProfile(Endpoint),
-            new CoreWebView2EnvironmentOptions { AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required" });
+            new CoreWebView2EnvironmentOptions
+            {
+                AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required",
+                // Подписи того немногого, что остаётся от меню по правой кнопке, — по-русски, как
+                // и всё приложение, а не на языке системы.
+                Language = "ru-RU",
+            });
         token.ThrowIfCancellationRequested();
         if (_disposed) return;
         await View.EnsureCoreWebView2Async(environment);
@@ -68,6 +74,7 @@ public sealed class WebWorkspace(
             if (!_disposed) FullScreenChanged?.Invoke(this, core.ContainsFullScreenElement);
         };
         core.PermissionRequested += PermissionRequested;
+        core.ContextMenuRequested += ContextMenuRequested;
         core.DownloadStarting += (_, e) =>
         {
             var uri = e.DownloadOperation.Uri;
@@ -105,6 +112,34 @@ public sealed class WebWorkspace(
         catch (Exception) { args.State = CoreWebView2PermissionState.Deny; }
         finally { deferral.Complete(); }
     }
+    /// <summary>
+    /// Правая кнопка — это Cord, а не Edge: «Проверить», «Сохранить как», «Поиск в Bing» и
+    /// «Назад» в приложении бессмысленны. В поле ввода остаётся правка текста, на выделении —
+    /// «Копировать», везде остальное меню не появляется вовсе. Своё меню страница открывает сама
+    /// (`contextmenu` с `preventDefault`), и тогда это событие не приходит.
+    /// </summary>
+    private static void ContextMenuRequested(CoreWebView2 sender, CoreWebView2ContextMenuRequestedEventArgs args)
+    {
+        var target = args.ContextMenuTarget;
+        var allowed = target.IsEditable ? EditingCommands : target.HasSelection ? CopyCommand : null;
+        if (allowed is null)
+        {
+            args.Handled = true;
+            return;
+        }
+        var items = args.MenuItems;
+        for (var index = items.Count - 1; index >= 0; index--)
+        {
+            if (items[index].Kind != CoreWebView2ContextMenuItemKind.Command || !allowed.Contains(items[index].Name))
+                items.RemoveAt(index);
+        }
+        if (items.Count == 0) args.Handled = true;
+    }
+
+    private static readonly HashSet<string> EditingCommands =
+        new(StringComparer.Ordinal) { "undo", "redo", "cut", "copy", "paste", "pasteAndMatchStyle", "selectAll" };
+    private static readonly HashSet<string> CopyCommand = new(StringComparer.Ordinal) { "copy" };
+
     private async void OpenExternal(CoreWebView2 sender, CoreWebView2NewWindowRequestedEventArgs args)
     {
         args.Handled = true;

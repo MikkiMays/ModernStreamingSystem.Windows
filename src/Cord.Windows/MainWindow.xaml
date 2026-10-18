@@ -9,10 +9,23 @@
         <FontIcon Glyph="" FontSize="16" />
       </Button>
       <Grid x:Name="DragRegion" Margin="60,0,144,0">
-        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-          <TextBlock Text="cord" FontSize="18" FontWeight="SemiBold" />
-          <Ellipse Width="5" Height="5" Fill="{StaticResource CordAccent}" Margin="-7,0,0,0" VerticalAlignment="Center" />
-        </StackPanel>
+        <!-- Марка — рисунок, а не текст (T24): знак и слово из ui/brand веб-клиента. Высота 24 и центр
+             по вертикали совпадают с центром PaneToggle (y = 26), края — на сетке 4 px (T01). -->
+        <Viewbox Height="24" HorizontalAlignment="Left" VerticalAlignment="Center" AutomationProperties.Name="Cord">
+          <Canvas Width="109" Height="30">
+            <Rectangle Canvas.Left="2" Canvas.Top="6" Width="6" Height="18" RadiusX="3" RadiusY="3" Fill="{StaticResource CordAccent}">
+              <Rectangle.RenderTransform><RotateTransform Angle="-15" CenterX="3" CenterY="9" /></Rectangle.RenderTransform>
+            </Rectangle>
+            <Rectangle Canvas.Left="12" Canvas.Top="0.5" Width="6" Height="29" RadiusX="3" RadiusY="3" Fill="{StaticResource CordAccent}">
+              <Rectangle.RenderTransform><RotateTransform Angle="-15" CenterX="3" CenterY="14.5" /></Rectangle.RenderTransform>
+            </Rectangle>
+            <Rectangle Canvas.Left="22" Canvas.Top="4" Width="6" Height="22" RadiusX="3" RadiusY="3" Fill="{StaticResource CordAccent}">
+              <Rectangle.RenderTransform><RotateTransform Angle="-15" CenterX="3" CenterY="11" /></Rectangle.RenderTransform>
+            </Rectangle>
+            <Path Data="M51.91 25.81Q49.5 25.81 47.75 24.78Q46 23.76 45.06 21.92Q44.11 20.08 44.11 17.65Q44.11 15.2 45.06 13.36Q46 11.52 47.75 10.49Q49.5 9.47 51.91 9.47Q53.36 9.47 54.57 9.85Q55.78 10.22 56.7 10.92Q57.63 11.61 58.22 12.61Q58.82 13.6 59.03 14.84L54.9 15.59Q54.77 14.97 54.52 14.48Q54.26 13.99 53.89 13.65Q53.52 13.3 53.04 13.12Q52.55 12.94 51.96 12.94Q50.88 12.94 50.15 13.53Q49.41 14.11 49.03 15.16Q48.65 16.22 48.65 17.63Q48.65 19.03 49.03 20.09Q49.41 21.15 50.15 21.74Q50.88 22.33 51.96 22.33Q52.56 22.33 53.05 22.15Q53.54 21.96 53.92 21.6Q54.3 21.25 54.55 20.74Q54.81 20.22 54.93 19.59L59.05 20.32Q58.84 21.6 58.25 22.61Q57.65 23.62 56.73 24.33Q55.8 25.05 54.58 25.43Q53.36 25.81 51.91 25.81Z M67.44 25.81Q65.03 25.81 63.28 24.78Q61.52 23.76 60.58 21.92Q59.63 20.08 59.63 17.65Q59.63 15.2 60.58 13.36Q61.52 11.52 63.28 10.49Q65.03 9.47 67.44 9.47Q69.86 9.47 71.6 10.49Q73.35 11.52 74.3 13.36Q75.24 15.2 75.24 17.65Q75.24 20.08 74.3 21.92Q73.35 23.76 71.6 24.78Q69.86 25.81 67.44 25.81ZM67.44 22.33Q68.52 22.33 69.25 21.73Q69.97 21.12 70.34 20.06Q70.71 18.99 70.71 17.63Q70.71 16.26 70.34 15.2Q69.97 14.15 69.25 13.54Q68.52 12.94 67.44 12.94Q66.36 12.94 65.63 13.54Q64.9 14.15 64.54 15.2Q64.17 16.25 64.17 17.63Q64.17 18.99 64.54 20.06Q64.9 21.12 65.63 21.73Q66.36 22.33 67.44 22.33Z M76.52 25.5V9.67H80.84V12.46H81.01Q81.44 10.97 82.45 10.21Q83.46 9.46 84.79 9.46Q85.12 9.46 85.5 9.5Q85.87 9.54 86.17 9.61V13.56Q85.87 13.45 85.31 13.39Q84.76 13.33 84.3 13.33Q83.34 13.33 82.59 13.75Q81.83 14.16 81.4 14.89Q80.97 15.63 80.97 16.6V25.5Z M91.87 25.75Q90.08 25.75 88.62 24.82Q87.16 23.89 86.31 22.07Q85.46 20.26 85.46 17.61Q85.46 14.88 86.34 13.07Q87.22 11.26 88.67 10.37Q90.13 9.47 91.85 9.47Q93.17 9.47 94.06 9.92Q94.95 10.36 95.51 11.03Q96.07 11.69 96.35 12.35H96.48V4.4H100.93V25.5H96.55V22.96H96.35Q96.05 23.62 95.48 24.26Q94.92 24.9 94.03 25.33Q93.15 25.75 91.87 25.75ZM93.3 22.21Q94.34 22.21 95.07 21.64Q95.8 21.06 96.19 20.02Q96.57 18.99 96.57 17.6Q96.57 16.19 96.19 15.17Q95.81 14.14 95.08 13.58Q94.34 13.01 93.3 13.01Q92.23 13.01 91.5 13.59Q90.78 14.17 90.4 15.21Q90.03 16.24 90.03 17.6Q90.03 18.96 90.41 20Q90.78 21.04 91.51 21.63Q92.24 22.21 93.3 22.21Z" Fill="{ThemeResource TextFillColorPrimaryBrush}" />
+            <Path Data="M106.01 25.78Q104.94 25.78 104.21 25.06Q103.49 24.34 103.49 23.28Q103.49 22.22 104.21 21.51Q104.94 20.79 106.01 20.79Q107.08 20.79 107.8 21.51Q108.53 22.22 108.53 23.28Q108.53 24.34 107.8 25.06Q107.08 25.78 106.01 25.78Z" Fill="{StaticResource CordAccent}" />
+          </Canvas>
+        </Viewbox>
       </Grid>
     </Grid>
     <SplitView x:Name="NavigationSplit" Grid.Row="1" DisplayMode="Inline" IsPaneOpen="True" OpenPaneLength="244" CompactPaneLength="0" PaneBackground="Transparent">
