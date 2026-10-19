@@ -14,15 +14,14 @@ using Xunit;
 /// </summary>
 public class ForcedUpdateTests
 {
-    private static readonly Version Installed = new(0, 7, 6, 0);
+    private static readonly Version Installed = new(0, 7, 7, 0);
 
-    private static string Release(string tag, string? digest = null, long size = 4, string? url = null) => JsonSerializer.Serialize(new
+    private static string Release(string version, string? sha256 = null, long size = 4, string? name = null) => JsonSerializer.Serialize(new
     {
-        repository = ReleaseClient.Repository,
-        tag_name = tag,
-        draft = false,
-        prerelease = false,
-        assets = new[] { new { name = $"Cord-Setup-{tag.TrimStart('v')}-x64.exe", browser_download_url = url ?? $"https://github.com/{ReleaseClient.Repository}/releases/download/{tag}/Cord-Setup-{tag.TrimStart('v')}-x64.exe", size, digest = digest ?? "sha256:" + new string('a', 64) } }
+        version,
+        tag = "v" + version,
+        publishedAt = "2026-10-20T10:00:00Z",
+        files = new[] { new { name = name ?? $"Cord-Setup-{version}-x64.exe", kind = "installer", size, sha256 = sha256 ?? new string('a', 64) } },
     });
 
     private static HttpClient Mirror(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> respond) => new(new Handler(respond));
@@ -34,34 +33,34 @@ public class ForcedUpdateTests
     [Fact]
     public async Task ANewerReleaseIsInstalledAtOnce()
     {
-        using var http = Mirror(_ => new(HttpStatusCode.OK) { Content = new StringContent(Release("v0.7.7")) });
+        using var http = Mirror(_ => new(HttpStatusCode.OK) { Content = new StringContent(Release("0.7.8")) });
         var check = await Check(http);
         Assert.Equal(UpdateVerdict.Forced, check.Verdict);
-        Assert.Equal(new Version(0, 7, 7), check.Release!.Version);
-        Assert.Equal(new Uri("https://meet.nikg.tech/downloads/windows/v0.7.7/Cord-Setup-0.7.7-x64.exe"), check.Release.Package);
+        Assert.Equal(new Version(0, 7, 8), check.Release!.Version);
+        Assert.Equal(new Uri("https://meet.nikg.tech/downloads/windows/v0.7.8/Cord-Setup-0.7.8-x64.exe"), check.Release.Package);
     }
 
     /// <summary>Та же версия и любая старая — не повод ничего ставить, тем более откатываться.</summary>
     [Theory]
-    [InlineData("v0.7.6")]
-    [InlineData("v0.7.5")]
-    [InlineData("v0.6.9")]
-    [InlineData("v0.0.1")]
-    public async Task TheSameOrAnOlderReleaseChangesNothing(string tag)
+    [InlineData("0.7.7")]
+    [InlineData("0.7.6")]
+    [InlineData("0.6.9")]
+    [InlineData("0.0.1")]
+    public async Task TheSameOrAnOlderReleaseChangesNothing(string version)
     {
-        using var http = Mirror(_ => new(HttpStatusCode.OK) { Content = new StringContent(Release(tag)) });
+        using var http = Mirror(_ => new(HttpStatusCode.OK) { Content = new StringContent(Release(version)) });
         var check = await Check(http);
         Assert.Equal(UpdateVerdict.None, check.Verdict);
         Assert.Null(check.Release);
     }
 
     [Theory]
-    [InlineData("0.7.7", true)]
+    [InlineData("0.7.8", true)]
     [InlineData("0.8.0", true)]
     [InlineData("1.0.0", true)]
+    [InlineData("0.7.7", false)]
+    [InlineData("0.7.7.9", false)]
     [InlineData("0.7.6", false)]
-    [InlineData("0.7.6.9", false)]
-    [InlineData("0.7.5", false)]
     [InlineData("0.6.99", false)]
     public void OnlyAnUpgradeIsEverInstalled(string candidate, bool upgrade) =>
         Assert.Equal(upgrade, ForcedUpdate.IsUpgrade(Version.Parse(candidate), Installed));
@@ -81,6 +80,8 @@ public class ForcedUpdateTests
     [InlineData("html")]
     [InlineData("empty")]
     [InlineData("foreign")]
+    [InlineData("beta")]
+    [InlineData("unverifiable")]
     [InlineData("github")]
     public async Task AMirrorThatCannotAnswerStartsNormally(string failure)
     {
@@ -91,8 +92,10 @@ public class ForcedUpdateTests
             "503" => new(HttpStatusCode.ServiceUnavailable),
             "html" => new(HttpStatusCode.OK) { Content = new StringContent("<html>Bad gateway</html>") },
             "empty" => new(HttpStatusCode.OK) { Content = new StringContent("{}") },
-            "foreign" => new(HttpStatusCode.OK) { Content = new StringContent(Release("v0.7.7", url: "https://example.org/setup.exe")) },
-            _ => Redirect($"https://github.com/{ReleaseClient.Repository}/releases/latest"),
+            "foreign" => new(HttpStatusCode.OK) { Content = new StringContent(Release("0.7.8", name: "../../setup.exe")) },
+            "beta" => new(HttpStatusCode.OK) { Content = new StringContent(Release("0.7.8-beta")) },
+            "unverifiable" => new(HttpStatusCode.OK) { Content = new StringContent(Release("0.7.8", sha256: "")) },
+            _ => Redirect("https://github.com/cord/releases/latest"),
         });
         var check = await Check(http);
         Assert.Equal(UpdateVerdict.Unavailable, check.Verdict);
@@ -243,7 +246,7 @@ public class ForcedUpdateTests
     }
 
     private static CordRelease Signed(byte[] bytes) =>
-        ReleaseClient.ParseMirror(Release("v0.7.7", "sha256:" + Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length), Installed, "x64")!;
+        ReleaseClient.Parse(Release("0.7.8", Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length), Installed, "x64")!;
 
     private static Task<UpdateDownload> Download(HttpClient http, CordRelease release, string folder, TimeSpan? stall = null, IProgress<double>? progress = null, TimeProvider? time = null) =>
         ForcedUpdate.DownloadAsync((relay, token) => new ReleaseClient(http).DownloadAsync(release, folder, relay, token), progress, stall ?? ForcedUpdate.StallLimit, time ?? TimeProvider.System, TestContext.Current.CancellationToken);

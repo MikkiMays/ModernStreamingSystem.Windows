@@ -13,13 +13,14 @@ namespace Cord.Core;
 public static class CordDefaults
 {
     /// <summary>
-    /// Единственный источник обновления: зеркало на главном сервере Cord. Его наполняет выкладка
-    /// выпуска (`scripts/publish-windows-release.py` в репозитории ядра) — без неё клиенты
-    /// новую версию не увидят.
+    /// Единственный источник обновления: описание выпуска на зеркале главного сервера Cord — тот
+    /// же <c>download.json</c>, что читает страница <c>/download</c>. Его пишет выкладка выпуска
+    /// (`scripts/publish-windows-release.py` в репозитории ядра) — без неё клиенты новую версию
+    /// не увидят.
     ///
     /// Адрес намеренно НЕ следует за выбранным сервером встреч: вход в чужую комнату не должен
     /// решать, какой исполняемый файл поставится на эту машину.
     /// </summary>
     public static readonly Uri UpdateMirror =
-        new("https://meet.nikg.tech/downloads/windows/latest.json");
+        new("https://meet.nikg.tech/downloads/windows/download.json");
 }

@@ -8,68 +8,57 @@ namespace Cord.Core;
 public sealed record CordRelease(Version Version, Uri Package, string Sha256, long Size);
 
 /// <summary>
-/// Only stable x64 installers published by Cord's own release pipeline are accepted, and they are
-/// fetched only from the Cord update mirror.
+/// Обновление спрашивается только у зеркала Cord, по описанию выпуска <c>download.json</c> — тому же
+/// файлу, что читает страница <c>/download</c>. В нём номер версии и файлы с размером и SHA-256, и
+/// ничего больше: ни адресов, ни репозитория. Адрес установщика клиент строит сам — рядом с
+/// описанием, в <c>v{версия}/</c> на том же хосте, — поэтому описание не может увести загрузку
+/// куда-то ещё. Подделка останавливает обновление, а не ищет другой источник.
 /// </summary>
 public sealed partial class ReleaseClient(HttpClient http)
 {
-    /// <summary>Who built the release: the mirror's metadata must name it, and asset URLs must match it.</summary>
-    public const string Repository = "MikkiMays/ModernStreamingSystem.Windows";
-    public static readonly Uri MirrorLatest = CordDefaults.UpdateMirror;
-    [GeneratedRegex(@"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")]
+    public static readonly Uri Manifest = CordDefaults.UpdateMirror;
+    /// <summary>Больше установщик Cord не бывает; всё крупнее — не он.</summary>
+    private const long SizeLimit = 1024L * 1024 * 1024;
+    [GeneratedRegex(@"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")]
     private static partial Regex StableVersion();
     [GeneratedRegex(@"^[a-fA-F0-9]{64}$")]
     private static partial Regex Digest();
 
+    /// <summary>
+    /// Выпуск новее <paramref name="current"/> — или null, если ставить нечего. Описание, которому
+    /// нельзя верить (номер не X.Y.Z, нет установщика, у него чужое имя, нет SHA-256 или размер не
+    /// тот), — это <see cref="InvalidDataException"/>, а не «обновлений нет».
+    /// </summary>
     public static CordRelease? Parse(string json, Version current, string architecture)
     {
         if (architecture != "x64") return null;
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
-        if (root.GetProperty("draft").GetBoolean() || root.GetProperty("prerelease").GetBoolean()) return null;
-        var tag = root.GetProperty("tag_name").GetString() ?? "";
-        if (!StableVersion().IsMatch(tag) || !Version.TryParse(tag.TrimStart('v'), out var version) || !ForcedUpdate.IsUpgrade(version, current)) return null;
+        var number = root.GetProperty("version").GetString() ?? "";
+        if (!StableVersion().IsMatch(number) || !Version.TryParse(number, out var version))
+            throw new InvalidDataException("Неверный номер версии в описании выпуска.");
+        if (!ForcedUpdate.IsUpgrade(version, current)) return null;
         var name = $"Cord-Setup-{version}-x64.exe";
-        foreach (var asset in root.GetProperty("assets").EnumerateArray())
+        foreach (var file in root.GetProperty("files").EnumerateArray())
         {
-            if (asset.GetProperty("name").GetString() != name) continue;
-            var url = asset.GetProperty("browser_download_url").GetString();
-            var expected = $"https://github.com/{Repository}/releases/download/{tag}/{name}";
-            if (url != expected) throw new InvalidDataException("Неверный адрес пакета обновления.");
-            var hash = asset.TryGetProperty("digest", out var digest) ? digest.GetString() ?? "" : "";
-            if (!hash.StartsWith("sha256:", StringComparison.Ordinal) || !Digest().IsMatch(hash[7..]))
-                throw new InvalidDataException("Релиз не содержит проверяемый SHA-256 установщика.");
-            var size = asset.GetProperty("size").GetInt64();
-            if (size <= 0 || size > 1024L * 1024 * 1024) throw new InvalidDataException("Неверный размер пакета.");
-            return new(version, new Uri(url), hash[7..].ToLowerInvariant(), size);
+            if (file.GetProperty("kind").GetString() != "installer") continue;
+            // Имя идёт в адрес загрузки, поэтому оно обязано быть ровно тем, что публикует выпуск.
+            if (file.GetProperty("name").GetString() != name) throw new InvalidDataException("Неверное имя установщика.");
+            var hash = file.GetProperty("sha256").GetString() ?? "";
+            if (!Digest().IsMatch(hash)) throw new InvalidDataException("Выпуск не содержит проверяемый SHA-256 установщика.");
+            var size = file.GetProperty("size").GetInt64();
+            if (size <= 0 || size > SizeLimit) throw new InvalidDataException("Неверный размер пакета.");
+            return new(version, new Uri(Manifest, $"v{version}/{name}"), hash.ToLowerInvariant(), size);
         }
-        return null;
+        throw new InvalidDataException("В выпуске нет установщика.");
     }
 
-    public static CordRelease? ParseMirror(string json, Version current, string architecture)
-    {
-        using var document = JsonDocument.Parse(json);
-        if (document.RootElement.GetProperty("repository").GetString() != Repository)
-            throw new InvalidDataException("Неверный источник релиза.");
-        var release = Parse(json, current, architecture);
-        return release is null ? null : release with
-        {
-            Package = new Uri(MirrorLatest, $"v{release.Version}/Cord-Setup-{release.Version}-x64.exe")
-        };
-    }
-
-    /// <summary>
-    /// Обновление спрашивается только у зеркала Cord. GitHub из клиента убран: репозиторий
-    /// закрыт (анонимный запрос — 404), и Cord как продукт не ходит на чужие адреса. Метаданные
-    /// на зеркале — это релиз сборочного конвейера как есть, поэтому адрес и SHA-256 установщика
-    /// проверяются так же строго; подделка останавливает обновление, а не ищет другой источник.
-    /// </summary>
     public async Task<CordRelease?> CheckAsync(Version current, string architecture, CancellationToken token)
     {
-        using var mirror = await GetAsync(MirrorLatest, token);
-        if (mirror.StatusCode == HttpStatusCode.NotFound) return null;
-        mirror.EnsureSuccessStatusCode();
-        return ParseMirror(await mirror.Content.ReadAsStringAsync(token), current, architecture);
+        using var response = await GetAsync(Manifest, token);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        return Parse(await response.Content.ReadAsStringAsync(token), current, architecture);
     }
 
     // Redirects are followed explicitly: an HTTPS release must never redirect to HTTP or an unrelated origin.
@@ -77,7 +66,7 @@ public sealed partial class ReleaseClient(HttpClient http)
     {
         for (var redirects = 0; redirects < 6; redirects++)
         {
-            var mirror = uri.IdnHost == MirrorLatest.IdnHost && uri.AbsolutePath.StartsWith("/downloads/windows/", StringComparison.Ordinal) && uri.Query.Length == 0;
+            var mirror = uri.IdnHost == Manifest.IdnHost && uri.AbsolutePath.StartsWith("/downloads/windows/", StringComparison.Ordinal) && uri.Query.Length == 0;
             if (uri.Scheme != "https" || !uri.IsDefaultPort || uri.UserInfo.Length != 0 || !mirror)
                 throw new InvalidDataException("Недопустимый адрес загрузки.");
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
