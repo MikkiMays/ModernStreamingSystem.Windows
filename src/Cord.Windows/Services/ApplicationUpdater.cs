@@ -24,25 +24,38 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
                 Path.GetFullPath(location).TrimEnd(Path.DirectorySeparatorChar).Equals(Path.GetFullPath(AppContext.BaseDirectory).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase);
         }
     }
-    public async Task CheckAsync(CancellationToken token)
+    /// <summary>
+    /// Есть ли новее — за <paramref name="budget"/>. Не установленная копия (портативная, сборка
+    /// разработчика) не обновляется вовсе: ей «новее нет». Уже скачанный пакет — это ответ сам по
+    /// себе, второй раз зеркало о нём не спрашиваем.
+    /// </summary>
+    public async Task<UpdateCheck> CheckAsync(TimeSpan budget, CancellationToken token)
     {
-        if (!Installed || Package is not null) return;
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromSeconds(15));
-        Available = await new ReleaseClient(_http).CheckAsync(Version, "x64", timeout.Token);
+        if (!Installed) return new(UpdateVerdict.None);
+        if (Package is not null && Available is not null) return new(UpdateVerdict.Forced, Available);
+        var check = await ForcedUpdate.CheckAsync(new ReleaseClient(_http), Version, "x64", budget, token);
+        // Неответ зеркала не стирает то, что оно уже сказало раньше.
+        if (check.Verdict != UpdateVerdict.Unavailable) Available = check.Release;
+        return check;
     }
-    public async Task DownloadAsync(IProgress<double> progress, CancellationToken token)
+    public async Task<UpdateDownload> DownloadAsync(IProgress<double> progress, CancellationToken token)
     {
         var release = Available ?? throw new InvalidOperationException("Обновление не найдено.");
-        Package = await new ReleaseClient(_http).DownloadAsync(release, _directory, progress, token);
+        var download = await ForcedUpdate.DownloadAsync(
+            (relay, cancel) => new ReleaseClient(_http).DownloadAsync(release, _directory, relay, cancel), progress, ForcedUpdate.StallLimit, TimeProvider.System, token);
+        Package = download.Package;
+        return download;
     }
+    /// <summary>Забыть скачанный пакет, чтобы следующая попытка скачала его заново.</summary>
+    public void DiscardPackage() => Package = null;
     /// <summary>
     /// Чем кончилась прошлая попытка обновиться — один раз, при первом запуске после неё.
     ///
     /// Раньше причина отказа стиралась вместе с файлом, а человек видел «не удалось, повторите» в
     /// плашке с заголовком «Соединение» — и обновлялся снова тем же путём, с тем же исходом. Теперь
     /// итог остаётся рядом (<c>result-last.json</c>), причина называется словами, а успех тоже
-    /// виден: «обновлено до 0.7.5» — единственное доказательство, что новая версия правда встала.
+    /// виден. Номеров версий в этих словах нет (T58): номер показывает только «О программе», а
+    /// ожидаемая и найденная на диске версии остаются в <c>result-last.json</c> и журнале.
     /// </summary>
     public UpdateOutcome? LastResult()
     {
@@ -55,9 +68,9 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
             var ok = root.GetProperty("ok").GetBoolean();
             var expected = Text(root, "version");
             File.Move(path, Path.Combine(_directory, "result-last.json"), true);
-            if (ok && (expected.Length == 0 || expected == DisplayVersion)) return new(true, $"Cord обновлён до версии {DisplayVersion}.");
-            if (ok) return new(false, $"Установщик сообщил об успехе, но запущена версия {DisplayVersion}, а не {expected}. Скачайте установщик со страницы загрузки сервера и запустите его вручную.");
-            return new(false, $"Обновление до {(expected.Length > 0 ? expected : "новой версии")} не установилось: {Reason(root)} Журнал: {Path.Combine(_directory, "update.log")}");
+            if (ok && (expected.Length == 0 || expected == DisplayVersion)) return new(true, "Cord обновлён до последней версии.");
+            if (ok) return new(false, "Установщик сообщил об успехе, но запущена прежняя версия Cord. Скачайте установщик со страницы загрузки сервера и запустите его вручную.");
+            return new(false, $"Обновление не установилось: {Reason(root)} Журнал: {Path.Combine(_directory, "update.log")}");
         }
         catch (Exception e) when (e is IOException or JsonException or KeyNotFoundException or InvalidOperationException or UnauthorizedAccessException)
         {
@@ -77,7 +90,7 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
             ("install", 7) or ("install", 4) or ("install", 5) => $"установщику помешали занятые файлы (код {code}). Закройте все окна Cord и повторите.",
             ("install", 8) => "Windows просит перезагрузку, прежде чем заменить файлы. Перезагрузите компьютер и повторите.",
             ("install", { } other) => $"установщик завершился с кодом {other}.",
-            ("check", _) => $"после установки на диске другая версия ({Text(root, "installed")}).",
+            ("check", _) => "после установки на диске осталась другая версия.",
             ("verify", _) => "скачанный установщик не совпал с опубликованным. Повторите загрузку.",
             _ => Text(root, "detail") is { Length: > 0 } detail ? detail : "причина не записана.",
         };
@@ -85,6 +98,8 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
     public async Task<bool> ApplyAsync(CancellationToken token, Func<bool> canApply)
     {
         if (!Installed || Package is null || Available is null) throw new InvalidOperationException("Обновление не готово.");
+        // Откатов нет: что бы ни лежало в папке обновлений, ставится только версия новее этой.
+        if (!ForcedUpdate.IsUpgrade(Available.Version, Version)) throw new InvalidOperationException("Cord ставит только версию новее установленной.");
         Directory.CreateDirectory(_directory);
         var script = Path.Combine(_directory, "apply.ps1");
         var plan = Path.Combine(_directory, "plan.json");

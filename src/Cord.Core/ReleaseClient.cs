@@ -28,7 +28,7 @@ public sealed partial class ReleaseClient(HttpClient http)
         var root = document.RootElement;
         if (root.GetProperty("draft").GetBoolean() || root.GetProperty("prerelease").GetBoolean()) return null;
         var tag = root.GetProperty("tag_name").GetString() ?? "";
-        if (!StableVersion().IsMatch(tag) || !Version.TryParse(tag.TrimStart('v'), out var version) || version <= new Version(current.Major, current.Minor, Math.Max(0, current.Build))) return null;
+        if (!StableVersion().IsMatch(tag) || !Version.TryParse(tag.TrimStart('v'), out var version) || !ForcedUpdate.IsUpgrade(version, current)) return null;
         var name = $"Cord-Setup-{version}-x64.exe";
         foreach (var asset in root.GetProperty("assets").EnumerateArray())
         {

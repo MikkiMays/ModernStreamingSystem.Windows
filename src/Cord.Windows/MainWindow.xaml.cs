@@ -19,9 +19,17 @@ public sealed partial class MainWindow : Window
     private readonly SemaphoreSlim _dialogs = new(1, 1);
     private ApplicationUpdater? _updater;
     private System.Threading.Timer? _updateTimer;
-    private bool _applyingUpdate;
-    /// <summary>Версия, о которой уже сказали. Второй раз о том же не напоминаем.</summary>
-    private Version? _announcedUpdate;
+    /// <summary>Экран обновления на месте: вторую попытку поверх первой не начинаем.</summary>
+    private bool _updating;
+    /// <summary>
+    /// После сбоя человек выбрал остаться в этой версии. До следующего запуска сами больше не
+    /// настаиваем — повторить можно кнопкой «Обновить» в «О программе».
+    /// </summary>
+    private bool _stayOnVersion;
+    /// <summary>Ответ экрана сбоя: true — «Повторить», false — «Продолжить в этой версии».</summary>
+    private TaskCompletionSource<bool>? _updateChoice;
+    /// <summary>Какую страницу показывает веб: экран перед входом во встречу тоже не прерываем.</summary>
+    private string? _page;
     private DesktopSettings _settings = new();
     private WebWorkspace? _workspace;
     private GlobalMicrophoneHotkey? _microphoneHotkey;
@@ -77,6 +85,19 @@ public sealed partial class MainWindow : Window
         _settings = await _profiles.LoadAsync(_lifetime.Token);
         ApplyTheme(_settings.Theme);
         UpdateSidebar();
+        // Версия — раньше сервера (T58). Есть новее — она ставится сразу, до встреч и избранного;
+        // зеркало молчит — через несколько секунд Cord открывается как обычно и спросит позже.
+        _updater = new ApplicationUpdater(_profiles.Root);
+        TimeSpan nextCheck;
+        try { nextCheck = await UpdateAtStartupAsync(); }
+        catch (Exception e) when (!_closed)
+        {
+            // Что бы ни сломалось в обновлении, запуск оно не останавливает: Cord открывается в
+            // этой версии и спросит зеркало снова, а причина остаётся в last-error.txt.
+            nextCheck = ForcedUpdate.RetrySoon;
+            await RecordErrorAsync(e);
+        }
+        if (_closing || _closed) return;
         // The server comes first. Until it has answered there are no favourites to show and no
         // room to join, so showing the workspace would only be a shell around nothing. Someone
         // who closes that screen without connecting has asked to leave, and the button says so.
@@ -88,10 +109,7 @@ public sealed partial class MainWindow : Window
             return;
         }
         await OpenWorkspaceAsync();
-        _updater = new ApplicationUpdater(_profiles.Root);
-        if (_updater.LastResult() is { } outcome) Model.ReportUpdate(outcome.Ok, outcome.Message);
-        Run(CheckUpdateAsync);
-        _updateTimer = new System.Threading.Timer(_ => DispatcherQueue.TryEnqueue(() => Run(CheckUpdateAsync)), null, TimeSpan.FromHours(6), TimeSpan.FromHours(6));
+        _updateTimer = new System.Threading.Timer(_ => DispatcherQueue.TryEnqueue(() => Run(CheckUpdateAsync)), null, nextCheck, ForcedUpdate.Period);
     }
 
     /// <summary>
@@ -222,11 +240,12 @@ public sealed partial class MainWindow : Window
                     }
                 }
                 Title = "Cord";
-                if (!Model.InCall) Run(ApplyUpdateIfReadyAsync);
+                _page = message.Page;
+                Run(UpdateIfIdleAsync);
                 break;
             case "call-state":
                 if (message.InCall is { } inCall) Model.InCall = inCall;
-                if (!Model.InCall) Run(ApplyUpdateIfReadyAsync);
+                Run(UpdateIfIdleAsync);
                 break;
             case "preferences.changed":
                 _settings = _settings with { ShowPing = message.ShowPing ?? _settings.ShowPing, NotificationSounds = message.NotificationSounds ?? _settings.NotificationSounds };
@@ -250,10 +269,11 @@ public sealed partial class MainWindow : Window
             case "session.expired": Run(RenewSessionAsync); break;
             // Страница о файлах приложения ничего не знает: она умеет только попросить
             // проверить и показать ответ. Раздел «О программе» в вебе и в приложении — один,
-            // и кнопка в нём должна делать что-то и там, и там.
+            // и кнопка в нём должна делать что-то и там, и там. Найденное обновление ставится
+            // само (T58); «Обновить» там остаётся для того, кто после сбоя выбрал эту версию.
             case "update.version": PostUpdateStatus(); break;
-            case "update.check": Run(async () => { await CheckUpdateAsync(); PostUpdateStatus(); }); break;
-            case "update.apply": Run(DownloadUpdateAsync); break;
+            case "update.check": Run(CheckUpdateAsync); break;
+            case "update.apply": Run(UpdateNowAsync); break;
             case "close-ready": _closeReady?.TrySetResult(); break;
         }
     }
@@ -898,7 +918,7 @@ public sealed partial class MainWindow : Window
         _closed = true;
         NetworkChange.NetworkAddressChanged -= NetworkChanged;
         _microphoneHotkey?.Dispose();
-        _updateTimer?.Dispose(); _updater?.Dispose(); Notifications.Release();
+        _updateTimer?.Dispose(); _updater?.Dispose();
         _networkTimer?.Dispose(); _lifetime.Cancel(); _workspace?.Dispose(); _http.Dispose();
     }
     private void UpdateSidebar()
@@ -950,65 +970,223 @@ public sealed partial class MainWindow : Window
         _settings = _settings with { CompactSidebar = !_settings.CompactSidebar };
         UpdateSidebar(); Run(() => _profiles.SaveAsync(_settings, _lifetime.Token));
     }
-    /// <summary>Что оболочка знает про обновление — в том виде, в каком это покажет страница.</summary>
+    /// <summary>Что оболочка знает про обновление — в том виде, в каком это покажет «О программе».</summary>
     private void PostUpdateStatus() =>
         _workspace?.Post(new("update.status", Name: ApplicationUpdater.DisplayVersion, Detail: Model.UpdateStatus, Available: Model.UpdateAvailable));
 
+    /// <summary>Можно ли закрыть Cord ради установки прямо сейчас — по тому, что сказала страница.</summary>
+    private bool CanInterrupt() => ForcedUpdate.CanInterrupt(Model.InCall, _page);
+
+    /// <summary>
+    /// Запуск: сначала — чем кончилась прошлая попытка, затем — есть ли новее. Возвращает, когда
+    /// спросить зеркало снова: не ответившее — скоро, ответившее — через обычные шесть часов.
+    /// </summary>
+    private async Task<TimeSpan> UpdateAtStartupAsync()
+    {
+        var updater = _updater!;
+        if (updater.LastResult() is { } outcome)
+        {
+            // Прошлая установка не встала — заново сами не начинаем. Иначе сбой установщика
+            // превратился бы в круг «обновился — перезапустился прежним — снова обновляется»,
+            // из которого не выйти. Причина — на экране обновления, решение — за человеком.
+            if (!outcome.Ok)
+            {
+                await ForceUpdateAsync(outcome.Message);
+                return ForcedUpdate.Period;
+            }
+            Model.ReportUpdate(true, outcome.Message);
+        }
+        var check = await updater.CheckAsync(ForcedUpdate.StartupBudget, _lifetime.Token);
+        ReportCheck(check);
+        if (check.Verdict == UpdateVerdict.Forced) await ForceUpdateAsync();
+        return ForcedUpdate.NextCheck(check.Verdict);
+    }
+
+    /// <summary>
+    /// Проверка, пока Cord открыт, — по таймеру и по кнопке в «О программе». Найденная версия
+    /// ставится сразу, если встречи нет; во встрече она ждёт её конца (<see cref="UpdateIfIdleAsync"/>),
+    /// а если Cord закроют раньше — встанет при следующем запуске.
+    /// </summary>
     private async Task CheckUpdateAsync()
     {
-        if (_updater is null || Model.UpdateBusy || _closed) return;
-        try
-        {
-            await _updater.CheckAsync(_lifetime.Token);
-            Model.UpdateAvailable = _updater.Available is not null;
-            if (Model.UpdateAvailable)
-            {
-                Model.UpdateButton = "Обновить";
-                Model.UpdateStatus = "Доступна версия " + _updater.Available!.Version;
-                // Проверка идёт раз в шесть часов, в том числе когда окно свёрнуто, и строка
-                // в боковой панели в этот момент никому не видна. Уведомление показывается
-                // один раз на версию: напоминать о том же самом каждые шесть часов — травля.
-                if (_announcedUpdate != _updater.Available.Version)
-                {
-                    _announcedUpdate = _updater.Available.Version;
-                    Notifications.Activated = () => DispatcherQueue.TryEnqueue(Activate);
-                    Notifications.Announce("Обновление Cord", $"Доступна версия {_updater.Available.Version}. Откройте Cord, чтобы установить.");
-                }
-            }
-            else Model.UpdateStatus = "Установлена последняя версия";
-        }
-        catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException or System.Text.Json.JsonException)
-        {
-            if (!_closed) { Model.UpdateStatus = "Не удалось проверить обновления"; Model.UpdateAvailable = true; Model.UpdateButton = "Повторить"; }
-        }
+        if (_updater is null || _updating || _closed) return;
+        var check = await _updater.CheckAsync(ForcedUpdate.BackgroundBudget, _lifetime.Token);
+        if (_closed || _updating) return;
+        _updateTimer?.Change(ForcedUpdate.NextCheck(check.Verdict), ForcedUpdate.Period);
+        ReportCheck(check);
+        if (check.Verdict == UpdateVerdict.Forced) await UpdateIfIdleAsync();
     }
-    private async Task DownloadUpdateAsync()
+
+    /// <summary>Ответ зеркала — словами для «О программе». Номер версии там и так написан.</summary>
+    private void ReportCheck(UpdateCheck check)
     {
-        if (_updater is null || Model.UpdateBusy) return;
-        if (_updater.Available is null) { await CheckUpdateAsync(); return; }
-        Model.UpdateBusy = true;
+        // Выбравший после сбоя эту версию видит в «О программе» причину и «Обновить», пока
+        // обновление есть, — а не «скоро установится» и не «не удалось проверить».
+        if (_stayOnVersion && _updater?.Available is not null)
+        {
+            PostUpdateStatus();
+            return;
+        }
         Model.UpdateAvailable = false;
+        Model.UpdateStatus = check.Verdict switch
+        {
+            UpdateVerdict.Forced => CanInterrupt() ? "Устанавливаем новую версию…" : "Новая версия установится после встречи",
+            UpdateVerdict.None => "Установлена последняя версия",
+            _ => "Не удалось проверить обновления. Cord спросит ещё раз позже",
+        };
+        PostUpdateStatus();
+    }
+
+    /// <summary>Встреча кончилась или её не было — найденное обновление ставится сейчас.</summary>
+    private async Task UpdateIfIdleAsync()
+    {
+        if (_updater?.Available is null || _updating || _stayOnVersion || _closed || !CanInterrupt()) return;
+        await ForceUpdateAsync();
+    }
+
+    /// <summary>«Обновить» в «О программе»: после сбоя это то же, что «Повторить».</summary>
+    private async Task UpdateNowAsync()
+    {
+        if (_updater is null || _updating || _closed) return;
+        _stayOnVersion = false;
+        if (!CanInterrupt())
+        {
+            Model.UpdateAvailable = false;
+            Model.UpdateStatus = "Новая версия установится после встречи";
+            PostUpdateStatus();
+            return;
+        }
+        await ForceUpdateAsync();
+    }
+
+    /// <summary>
+    /// Экран «Обновление Cord…» во всё окно (T58) — без «позже» и без крестика: скачать,
+    /// проверить так же строго, как всегда, поставить молча и перезапуститься. Новый Cord
+    /// запускает помощник обновления (<c>Update.ps1</c>), когда установка закончится.
+    ///
+    /// <para>Запереть человека здесь нельзя. Сбой проверки, загрузки или установки — это причина
+    /// словами, «Повторить» и «Продолжить в этой версии». Встреча, начавшаяся, пока готовились,
+    /// откладывает установку до своего конца, а не прерывается.</para>
+    /// </summary>
+    /// <param name="failure">Начать не с попытки, а с причины прошлого сбоя.</param>
+    private async Task ForceUpdateAsync(string? failure = null)
+    {
+        if (_updater is null || _updating || _closed) return;
+        _updating = true;
+        ShowUpdate(true);
         try
         {
-            Model.UpdateStatus = "Скачиваем обновление…";
-            await _updater.DownloadAsync(new Progress<double>(value => Model.UpdateProgress = value * 100), _lifetime.Token);
-            Model.UpdateStatus = Model.InCall ? "Обновим после завершения встречи" : "Применяем обновление…";
-            await ApplyUpdateIfReadyAsync();
+            while (!_closed)
+            {
+                failure ??= await UpdateOnceAsync();
+                // Без причины — значит, Cord уже закрывается ради установки, ставить нечего или
+                // началась встреча. Экран больше не нужен.
+                if (failure is null) return;
+                Model.UpdateTitle = "Не удалось обновить Cord";
+                Model.UpdatePhase = failure;
+                Model.UpdateWorking = false;
+                Model.UpdateFailed = true;
+                _updateChoice = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                if (!await _updateChoice.Task.WaitAsync(_lifetime.Token))
+                {
+                    _stayOnVersion = true;
+                    Model.UpdateAvailable = true;
+                    Model.UpdateStatus = failure;
+                    PostUpdateStatus();
+                    return;
+                }
+                failure = null;
+            }
         }
-        catch (Exception e) when (e is HttpRequestException or IOException or OperationCanceledException)
+        finally
         {
-            if (!_closed) { Model.UpdateStatus = e is InvalidDataException ? e.Message : "Загрузка не завершена. Повторите попытку."; Model.UpdateAvailable = true; Model.UpdateButton = "Повторить"; }
+            _updating = false;
+            _updateChoice = null;
+            if (!_closing && !_closed) ShowUpdate(false);
         }
-        finally { Model.UpdateBusy = false; }
     }
-    private async Task ApplyUpdateIfReadyAsync()
+
+    /// <summary>Одна попытка: узнать (если ещё не), скачать (если ещё не), поставить. Null — сбоя нет.</summary>
+    private async Task<string?> UpdateOnceAsync()
     {
-        if (_closed || _applyingUpdate || Model.InCall || _updater?.Package is null) return;
-        _applyingUpdate = true;
-        try { if (await _updater.ApplyAsync(_lifetime.Token, () => !Model.InCall && !_closed)) { _closing = true; Close(); } else _applyingUpdate = false; }
-        catch { _applyingUpdate = false; Model.UpdateStatus = "Не удалось запустить обновление"; Model.UpdateAvailable = true; throw; }
+        var updater = _updater!;
+        if (updater.Available is null)
+        {
+            ShowUpdatePhase("Проверяем, какая версия последняя…", null);
+            var check = await updater.CheckAsync(ForcedUpdate.BackgroundBudget, _lifetime.Token);
+            if (check.Verdict == UpdateVerdict.Unavailable)
+                return "Сервер обновлений не отвечает. Проверьте соединение и повторите — или продолжите в этой версии.";
+            if (check.Verdict == UpdateVerdict.None)
+            {
+                ReportCheck(check);
+                return null;
+            }
+        }
+        if (updater.Package is null)
+        {
+            ShowUpdatePhase("Скачиваем новую версию…", 0);
+            var download = await updater.DownloadAsync(new Progress<double>(ShowUpdateProgress), _lifetime.Token);
+            if (!download.Ok) return download.Problem;
+        }
+        ShowUpdatePhase("Устанавливаем. Cord закроется и откроется снова сам.", null);
+        try
+        {
+            if (await updater.ApplyAsync(_lifetime.Token, () => !_closed && CanInterrupt()))
+            {
+                _closing = true;
+                Close();
+                return null;
+            }
+        }
+        catch (Exception e) when (!_closed && e is IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception)
+        {
+            // Пакет мог испортиться на диске (его держал или забрал антивирус): «Повторить»
+            // скачает его заново, а не споткнётся о тот же файл.
+            updater.DiscardPackage();
+            await RecordErrorAsync(e);
+            return "Не удалось запустить установку. Повторите — или продолжите в этой версии.";
+        }
+        // Пока готовились, началась встреча — она важнее. Пакет уже скачан и проверен; установка
+        // начнётся, как только встреча кончится.
+        Model.UpdateStatus = "Новая версия установится после встречи";
+        PostUpdateStatus();
+        return null;
     }
-    private void Update_Click(object sender, RoutedEventArgs e) => Run(DownloadUpdateAsync);
+
+    private void ShowUpdate(bool shown)
+    {
+        if (shown)
+        {
+            // Ни показ встречи во весь экран, ни открытый диалог не должны оказаться поверх.
+            SetMediaFullScreen(false);
+            CloseOpenDialog();
+        }
+        Model.UpdateForced = shown;
+        PaneToggle.Visibility = shown ? Visibility.Collapsed : Visibility.Visible;
+        // Клавиатура уходит со страницы под экраном: Enter не должен нажимать то, чего не видно.
+        if (shown) UpdateOverlay.Focus(FocusState.Programmatic);
+    }
+
+    private void ShowUpdatePhase(string phase, double? progress)
+    {
+        Model.UpdateTitle = "Обновление Cord…";
+        Model.UpdatePhase = phase;
+        Model.UpdateFailed = false;
+        Model.UpdateWorking = true;
+        Model.UpdateIndeterminate = progress is null;
+        Model.UpdateProgress = progress ?? 0;
+    }
+
+    private void ShowUpdateProgress(double fraction)
+    {
+        if (!Model.UpdateForced || Model.UpdateFailed) return;
+        var percent = Math.Clamp(fraction * 100, 0, 100);
+        Model.UpdateProgress = percent;
+        Model.UpdatePhase = $"Скачиваем новую версию… {percent:0}\u00a0%";
+    }
+
+    private void UpdateRetry_Click(object sender, RoutedEventArgs e) => _updateChoice?.TrySetResult(true);
+    private void UpdateContinue_Click(object sender, RoutedEventArgs e) => _updateChoice?.TrySetResult(false);
     private void FavoriteSettings_Click(object sender, RoutedEventArgs e) { if (sender is Button { Tag: string id }) _workspace?.Post(new("favorite.settings", RoomId: id)); }
     private void Home_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("home"));
     private void Create_Click(object sender, RoutedEventArgs e) => Run(() => NavigateAsync("create"));
@@ -1036,8 +1214,12 @@ public sealed partial class MainWindow : Window
             if (_closed) return;
             Model.Loading = false;
             Model.Report(e is ArgumentException ? e.Message : "Не удалось выполнить действие. Проверьте сервер и установленный WebView2 Runtime.");
-            try { await File.WriteAllTextAsync(Path.Combine(_profiles.Root, "last-error.txt"), $"{e.GetType().FullName}\n0x{e.HResult:X8}\n{e.StackTrace}"); }
-            catch (IOException) { /* Error reporting must not crash the window. */ }
+            await RecordErrorAsync(e);
         }
+    }
+    private async Task RecordErrorAsync(Exception e)
+    {
+        try { await File.WriteAllTextAsync(Path.Combine(_profiles.Root, "last-error.txt"), $"{e.GetType().FullName}\n0x{e.HResult:X8}\n{e.StackTrace}"); }
+        catch (IOException) { /* Error reporting must not crash the window. */ }
     }
 }
