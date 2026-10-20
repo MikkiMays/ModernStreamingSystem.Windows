@@ -9,14 +9,15 @@
  * Версия приложения нигде не показывается, кроме «О программе» в вебе (`invoke('update.status')`).
  */
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, powerSaveBlocker, safeStorage, screen, type WebContents } from 'electron';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
+import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
 import { FEATURES, IPC, type Bootstrap } from '../shared/bridge';
 import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
 import { buildConfig } from './config';
 import { CaptureSelection, loopbackFor, type AudioMode } from './capture';
-import { Catalog, CatalogServer, defaultServer, parseCatalogPayload, verifyCatalog } from './catalog';
+import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
 import { showNotification } from './notifications';
@@ -143,7 +144,9 @@ class Shell {
     this.pendingLink = deepLinkFromArgv(process.argv);
     // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) пишет settings.autostart.
     if (process.platform === 'win32' && app.isPackaged) app.setLoginItemSettings({ openAtLogin: this.settings.get().autostart, args: ['--hidden'] });
-    await this.loadCatalog();
+    this.loadCatalog();
+    // Свежий каталог — в фоне, параллельно с заставкой: пять секунд сети не должны держать запуск.
+    void this.refreshCatalog();
     await this.splashThenMain();
   }
 
@@ -255,26 +258,69 @@ class Shell {
     return list;
   }
 
-  /** Каталог: подписанный JWS с главного сервера, иначе снимок из сборки. Неверный — остаётся прежний. */
-  private async loadCatalog(): Promise<void> {
-    const snapshot = join(app.getAppPath(), 'dist', 'shell', 'catalog.json');
+  private catalogKeys: KeyObject[] = [];
+  private readonly catalogCache = join(app.getPath('userData'), 'catalog.jws');
+
+  /**
+   * Каталог при запуске (ADR §8): последний хороший — сохранённый с прошлого раза или снимок из
+   * установщика, самый новый из проверенных. Ключи — `dist/catalog-keys.json` (копия
+   * `contracts/catalog-keys.json` ядра). Ни одного — сервер из сборки.
+   */
+  private loadCatalog(): void {
+    const read = (path: PathLike) => {
+      try {
+        return existsSync(path) ? readFileSync(path, 'utf8') : null;
+      } catch {
+        return null;
+      }
+    };
     try {
-      const { readFileSync, existsSync } = await import('node:fs');
-      if (existsSync(snapshot)) this.catalog = parseCatalogPayload(readFileSync(snapshot, 'utf8'));
+      this.catalogKeys = parseCatalogKeys(read(join(app.getAppPath(), 'dist', 'catalog-keys.json')) ?? '');
     } catch (error) {
-      log(`снимок каталога: ${(error as Error).message}`);
+      log(`ключи каталога: ${(error as Error).message}`);
+      return;
     }
-    const keys = (this.config as { catalogKeys?: string[] }).catalogKeys ?? [];
-    if (keys.length === 0 || smoke) return;
+    const picked = pickCatalog(
+      [
+        { source: 'cache', jws: read(this.catalogCache) },
+        { source: 'snapshot', jws: read(join(app.getAppPath(), 'dist', 'shell', 'catalog.jws')) },
+      ],
+      this.catalogKeys,
+      this.settings.get().catalogSeq,
+    );
+    if (!picked) {
+      log('каталог: ни сохранённый, ни снимок не прошли проверку — сервер из сборки');
+      return;
+    }
+    this.catalog = picked.catalog;
+    if (picked.catalog.seq > this.settings.get().catalogSeq) this.settings.update({ catalogSeq: picked.catalog.seq });
+    log(`каталог: ${picked.source}, seq ${picked.catalog.seq}`);
+  }
+
+  /** Свежий подписанный каталог из ядра (`GET /api/v1/catalog`): текущий сервер, затем главный. Неверный — остаётся прежний. */
+  private async refreshCatalog(): Promise<void> {
+    if (this.catalogKeys.length === 0) return;
+    const origins = [ServerOrigin.tryParse(this.settings.get().serverUrl)?.url, this.config.defaultServer].filter(
+      (url, index, list): url is string => !!url && list.indexOf(url) === index,
+    );
+    const fresh = await fetchCatalog(
+      origins,
+      (url) => net.fetch(url, { signal: AbortSignal.timeout(5000), headers: { Accept: 'application/jose+json, application/json' } }),
+      this.catalogKeys,
+      this.settings.get().catalogSeq,
+      Date.now(),
+      log,
+    );
+    if (!fresh) return;
+    this.catalog = fresh.catalog;
+    this.settings.update({ catalogSeq: fresh.catalog.seq });
     try {
-      const response = await net.fetch(new URL('/api/v1/catalog', this.config.defaultServer).toString(), { signal: AbortSignal.timeout(5000) });
-      if (!response.ok) return;
-      const catalog = verifyCatalog(await response.text(), keys.map(publicKey), this.settings.get().catalogSeq);
-      this.catalog = catalog;
-      this.settings.update({ catalogSeq: catalog.seq });
+      writeFileSync(this.catalogCache + '.tmp', fresh.jws, 'utf8');
+      renameSync(this.catalogCache + '.tmp', this.catalogCache);
     } catch (error) {
-      log(`каталог: ${(error as Error).message}`);
+      log(`каталог: не сохранён — ${(error as Error).message}`);
     }
+    log(`каталог: из сети, seq ${fresh.catalog.seq}`);
   }
 
   private catalogServers(): (CatalogServer & { current: boolean })[] {
@@ -644,14 +690,14 @@ class Shell {
   }
 }
 
-/** Медиана трёх `HEAD /api/v1/health`, в миллисекундах; null — не ответил. */
+/** Медиана трёх `HEAD /api/v1/ping` (открытый маршрут ядра), в миллисекундах; null — не ответил. */
 async function ping(origin: ServerOrigin): Promise<number | null> {
   const samples: number[] = [];
   for (let attempt = 0; attempt < 3; attempt++) {
     const started = performance.now();
     try {
-      const response = await net.fetch(new URL('/api/v1/health', origin.url).toString(), { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-      if (response.ok || response.status === 405) samples.push(performance.now() - started);
+      const response = await net.fetch(new URL('/api/v1/ping', origin.url).toString(), { method: 'HEAD', signal: AbortSignal.timeout(3000) });
+      if (response.ok) samples.push(performance.now() - started);
     } catch {
       /* не ответил */
     }

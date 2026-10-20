@@ -1,0 +1,9 @@
+{
+  "payload": "eyJmb3JtYXQiOiJjb3JkLnNlcnZlcnMvMSIsInNlcSI6MSwiaXNzdWVkQXQiOiIyMDI2LTEwLTIwVDE5OjM2OjI2WiIsImV4cGlyZXNBdCI6IjIwMjctMDQtMThUMTk6MzY6MjZaIiwic2VydmVycyI6W3siaWQiOiJubC0xIiwibmFtZSI6eyJydSI6ItCd0LjQtNC10YDQu9Cw0L3QtNGLIiwiZW4iOiJOZXRoZXJsYW5kcyJ9LCJjb3VudHJ5IjoiTkwiLCJ1cmwiOiJodHRwczovL2NvcmQubmlrZy50ZWNoLyIsIm9yZGVyIjoxMCwiZGVmYXVsdCI6dHJ1ZX1dfQ",
+  "signatures": [
+    {
+      "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6InVxS09kelF4ODljeEc2dzJQaElKOF9pcUpwbFMzaFlTMjNHSk5BaUV6Z3cifQ",
+      "signature": "27mZUAPZnY-9qft7dhcbLZ1WiblqCS5J0F4_LhLQ5purAMys07mf0CDyGkhMfLNe849p4SRpHpz7NTI4hpTxDQ"
+    }
+  ]
+}
