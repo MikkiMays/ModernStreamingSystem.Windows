@@ -1,0 +1,70 @@
+# Cord для Windows — установщик NSIS (ADR 0001 §6, T54, T15, П15).
+# Ссылок нет намеренно: ни `repository`/`homepage` в package.json (иначе electron-builder впишет их в
+# карточку «Установленных приложений»), ни uninstallUrl*. Канал обновлений — только зеркало Cord
+# (`publish: generic`, адрес вшит в build/update-keys.json и в latest.yml).
+appId: tech.cord.desktop
+productName: Cord
+copyright: © Cord
+artifactName: Cord-Setup-${version}.${ext}
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+  resetAdHocDarwinSignature: false
+publish:
+  provider: generic
+  url: https://cord.nikg.tech/downloads/windows/desktop/
+  channel: latest
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  executableName: Cord
+  legalTrademarks: Cord
+  requestedExecutionLevel: asInvoker
+  # Подпись Authenticode — из секретов CI (CSC_LINK/CSC_KEY_PASSWORD); без них сборка неподписанная.
+  signtoolOptions:
+    publisherName: Cord
+    signingHashAlgorithms: [sha256]
+  verifyUpdateCodeSignature: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  # Ярлык на рабочем столе — своя галочка в мастере, включена по умолчанию (T15): build/installer.nsh.
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  shortcutName: Cord
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+  uninstallDisplayName: Cord
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeader: build/installerHeader.bmp
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/installerSidebar.bmp
+  include: build/installer.nsh
+  language: 1049
+  multiLanguageInstaller: true
+  displayLanguageSelector: false
+  artifactName: Cord-Setup-${version}.${ext}
+  differentialPackage: true
+  warningsAsErrors: false
+protocols:
+  - name: Cord
+    schemes: [cord]
+    role: Viewer

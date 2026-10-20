@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Cord</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  /* Полноэкранная загрузка (T55, П14): сцена во всё окно, пока грузится интерфейс с сервера. */
+  body { display: grid; place-items: center; }
+  .scene { display: grid; justify-items: center; gap: 22px; }
+  .mark { animation: breathe 1.6s ease-in-out infinite; }
+  @keyframes breathe { 0%, 100% { transform: scale(1); opacity: .9; } 50% { transform: scale(1.06); opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .mark { animation: none; } }
+  .caption { color: var(--cord-muted); }
+  .titlebar { position: fixed; inset: 0 0 auto 0; height: 36px; }
+</style>
+</head>
+<body>
+  <div class="titlebar drag"></div>
+  <div class="scene" role="status" aria-live="polite">
+    <div class="mark"><img src="mark.svg" alt="" width="46" height="46"></div>
+    <p class="caption">Открываем Cord…</p>
+  </div>
+</body>
+</html>

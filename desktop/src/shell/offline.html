@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Cord</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  body { display: grid; place-items: center; }
+  .scene { display: grid; justify-items: center; gap: 16px; text-align: center; max-width: 360px; padding: 0 16px; }
+  h1 { font-size: 17px; margin: 8px 0 0; }
+  p { margin: 0; color: var(--cord-muted); }
+  .titlebar { position: fixed; inset: 0 0 auto 0; height: 36px; }
+</style>
+</head>
+<body>
+  <div class="titlebar drag"></div>
+  <div class="scene">
+    <div class="mark"><img src="mark.svg" alt="" width="46" height="46"></div>
+    <h1>Нет связи с сервером</h1>
+    <p id="server">Cord не смог открыть сервер. Проверьте подключение к интернету и повторите.</p>
+    <button class="btn no-drag" id="retry" type="button">Повторить</button>
+  </div>
+  <script src="offline.js"></script>
+</body>
+</html>

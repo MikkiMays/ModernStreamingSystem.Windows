@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Что показать</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  /* Выбор источника показа (T10, ADR §4.1): экраны и окна с миниатюрами, звук отдельным переключателем. */
+  body { background: #15181f; display: grid; grid-template-rows: auto auto 1fr auto; }
+  header { height: 44px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; font-size: 14px; }
+  header .spacer { flex: 1; }
+  header .close { width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--cord-muted); font-size: 18px; cursor: pointer; }
+  .tabs { display: flex; gap: 6px; padding: 0 16px 8px; }
+  .tabs button { border: 0; border-radius: 8px; padding: 6px 12px; background: rgba(255,255,255,.06); color: var(--cord-text); font: inherit; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--cord-accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; padding: 0 16px; overflow: auto; align-content: start; }
+  .source { border: 2px solid transparent; border-radius: 10px; padding: 6px; background: rgba(255,255,255,.04); cursor: pointer; display: grid; gap: 6px; text-align: left; color: inherit; font: inherit; }
+  .source:hover { background: rgba(255,255,255,.08); }
+  .source[aria-pressed="true"] { border-color: var(--cord-accent); }
+  .source img.thumb { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; background: #000; }
+  .source .label { display: flex; align-items: center; gap: 6px; font-size: 12px; overflow: hidden; }
+  .source .label img { width: 16px; height: 16px; }
+  .source .label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  footer { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 12px 16px 14px; }
+  footer label { display: flex; align-items: center; gap: 8px; color: var(--cord-muted); font-size: 12px; }
+  footer .hint { grid-column: 1 / -1; color: var(--cord-muted); font-size: 11px; margin: 0; }
+  .empty { padding: 24px 16px; color: var(--cord-muted); text-align: center; }
+</style>
+</head>
+<body>
+  <header class="drag">Что показать<span class="spacer"></span><button class="close no-drag" id="close" type="button" aria-label="Закрыть">×</button></header>
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" data-kind="screen" aria-selected="true">Экран</button>
+    <button type="button" role="tab" data-kind="window" aria-selected="false">Окно</button>
+  </div>
+  <div class="grid" id="grid" role="group" aria-label="Источники"></div>
+  <footer>
+    <label id="audio-row"><input type="checkbox" id="audio"> Со звуком системы</label>
+    <button class="btn" id="share" type="button" disabled>Показать</button>
+    <p class="hint" id="hint"></p>
+  </footer>
+  <script src="picker.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+/* Страницы оболочки Cord: тёмные всегда — они появляются раньше, чем Cord прочтёт выбранную тему. */
+:root {
+  --cord-accent: #3564f3;
+  --cord-bg: #111419;
+  --cord-bg-2: #1a2547;
+  --cord-text: #e9ecf1;
+  --cord-muted: #9aa3b5;
+  --cord-link: #9db4ff;
+  --cord-danger: #e5484d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  font: 13px/1.45 'Segoe UI Variable', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: var(--cord-text);
+  background: radial-gradient(80% 60% at 50% 34%, var(--cord-bg-2) 0%, var(--cord-bg) 100%);
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+}
+.drag { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+.mark {
+  width: 88px; height: 88px; border-radius: 22px; background: var(--cord-accent);
+  display: grid; place-items: center; margin: 0 auto;
+}
+.mark svg { width: 46px; height: 46px; }
+.btn {
+  appearance: none; border: 0; border-radius: 10px; height: 36px; padding: 0 24px;
+  background: var(--cord-accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.link { background: none; border: 0; color: var(--cord-link); font: inherit; font-size: 12px; cursor: pointer; }
+.hidden { display: none !important; }

@@ -90,7 +90,8 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
   const data: Record<string, unknown> = payload && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
   if (payload !== undefined && payload !== null && data !== payload) return null;
   if (JSON.stringify(data).length > MESSAGE_LIMIT) return null;
-  switch (type as PageMessage) {
+  const kind = type as PageMessage;
+  switch (kind) {
     case 'state': {
       if (data.page !== 'home' && data.page !== 'prejoin' && data.page !== 'room') return null;
       const name = text(data.name, 40);
@@ -100,12 +101,12 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       const ref = room(data.room);
       if (ref === undefined) return null;
       const theme = data.theme === 'light' || data.theme === 'dark' ? data.theme : 'system';
-      return { type, page: data.page, inCall: data.inCall === true, name, avatar, theme, room: ref };
+      return { type: kind, page: data.page, inCall: data.inCall === true, name, avatar, theme, room: ref };
     }
     case 'call.state': {
       const ref = room(data.room);
       if (ref === undefined) return null;
-      return { type, inCall: data.inCall === true, mic: data.mic === true, camera: data.camera === true, screen: data.screen === true, room: ref };
+      return { type: kind, inCall: data.inCall === true, mic: data.mic === true, camera: data.camera === true, screen: data.screen === true, room: ref };
     }
     case 'hotkeys.configure': {
       const list = Array.isArray(data.bindings) ? data.bindings : data.bindings === undefined || data.bindings === null ? [] : null;
@@ -119,7 +120,7 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
         if (!validHotkey(binding.key)) return null;
         bindings.push({ action: binding.action as HotkeyAction, mode: binding.mode, key: { ...binding.key } });
       }
-      return { type, bindings };
+      return { type: kind, bindings };
     }
     case 'favorites.changed':
     case 'servers.open':
@@ -127,15 +128,15 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
     case 'update.check':
     case 'update.apply':
     case 'attention':
-      return { type };
+      return { type: kind };
     case 'preferences.changed': {
       const showPing = bool(data.showPing);
       const notificationSounds = bool(data.notificationSounds);
-      return { type, ...(showPing !== undefined ? { showPing } : {}), ...(notificationSounds !== undefined ? { notificationSounds } : {}) };
+      return { type: kind, ...(showPing !== undefined ? { showPing } : {}), ...(notificationSounds !== undefined ? { notificationSounds } : {}) };
     }
     case 'server.autoconnect': {
       const autoConnect = bool(data.autoConnect);
-      return autoConnect === undefined ? null : { type, autoConnect };
+      return autoConnect === undefined ? null : { type: kind, autoConnect };
     }
     case 'overlay.state': {
       if (!Array.isArray(data.participants) || data.participants.length > 20) return null;
@@ -147,7 +148,7 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
         if (name === undefined || typeof entry.tier !== 'number' || entry.tier < 0 || entry.tier > 4) return null;
         participants.push({ name, tier: Math.floor(entry.tier), speaking: entry.speaking === true });
       }
-      return { type, participants };
+      return { type: kind, participants };
     }
     case 'notify': {
       const title = text(data.title, 80);
@@ -166,20 +167,20 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
           actions.push({ id: action.id, text: label });
         }
       }
-      return { type, title, body, ...(tag ? { tag } : {}), ...(actions ? { actions } : {}) };
+      return { type: kind, title, body, ...(tag ? { tag } : {}), ...(actions ? { actions } : {}) };
     }
     case 'progress': {
       if (typeof data.value !== 'number' || !Number.isFinite(data.value)) return null;
-      return { type, value: Math.min(1, Math.max(-1, data.value)) };
+      return { type: kind, value: Math.min(1, Math.max(-1, data.value)) };
     }
     case 'badge': {
       if (typeof data.count !== 'number' || !Number.isInteger(data.count) || data.count < 0) return null;
-      return { type, count: Math.min(data.count, 999) };
+      return { type: kind, count: Math.min(data.count, 999) };
     }
     case 'capture.select': {
       if (typeof data.id !== 'string' || !/^(screen|window):\d+:\d+$/.test(data.id)) return null;
       if (data.audio !== 'none' && data.audio !== 'system' && data.audio !== 'app' && data.audio !== 'system-except-cord') return null;
-      return { type, id: data.id, audio: data.audio };
+      return { type: kind, id: data.id, audio: data.audio };
     }
   }
   return null;

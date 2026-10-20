@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Cord</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  /* Оверлей (T23): полупрозрачный список участников в левом верхнем углу; говорящие — градация E04. */
+  body { background: transparent; }
+  ul { list-style: none; margin: 0; padding: 6px; display: grid; gap: 4px; align-content: start; }
+  li { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 8px; background: rgba(17,20,25,.62); color: #fff; font-weight: 600; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,.6); max-width: 300px; }
+  li .dot { width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,.35); flex: none; }
+  li[data-tier="1"] .dot { background: #8bd9a8; }
+  li[data-tier="2"] .dot { background: #5ccf8c; }
+  li[data-tier="3"] .dot { background: #3ddc84; }
+  li[data-tier="4"] .dot { background: #19f07a; box-shadow: 0 0 8px #19f07a; }
+  li[data-speaking="true"] { outline: 2px solid rgba(61,220,132,.8); }
+  li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+  <ul id="list" aria-label="Участники"></ul>
+  <script src="overlay.js"></script>
+</body>
+</html>

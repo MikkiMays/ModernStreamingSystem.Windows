@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Cord</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  /* Заставка при запуске (T58): 300×360, знак Cord и одна строка. Номера версии здесь нет. */
+  .splash { height: 100%; display: grid; grid-template-rows: 1fr auto; padding: 0 28px 24px; }
+  .splash .mark { align-self: center; margin-top: 24px; }
+  .status { min-height: 57px; text-align: center; margin: 0 0 14px; white-space: pre-wrap; }
+  .bar { width: 180px; height: 3px; margin: 0 auto 14px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; position: relative; }
+  .bar > i { position: absolute; inset: 0; width: 0; background: var(--cord-accent); transition: width .2s ease-out; }
+  .bar.busy > i { width: 40%; animation: slide 1.2s ease-in-out infinite; }
+  @keyframes slide { from { left: -40%; } to { left: 100%; } }
+  .choice { display: grid; justify-items: center; gap: 4px; }
+</style>
+</head>
+<body class="drag">
+  <div class="splash">
+    <div class="mark"><img src="mark.svg" alt="" width="46" height="46"></div>
+    <div>
+      <p class="status" id="status" role="status" aria-live="polite">Проверяем обновления…</p>
+      <div class="bar busy" id="bar" aria-hidden="true"><i></i></div>
+      <div class="choice hidden no-drag" id="choice">
+        <button class="btn" id="retry" type="button">Повторить</button>
+        <button class="link" id="open" type="button">Открыть Cord</button>
+      </div>
+    </div>
+  </div>
+  <script src="splash.js"></script>
+</body>
+</html>

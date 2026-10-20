@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Серверы</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  /* Серверы (T05): флаг страны в круге слева, имя, пинг справа; выбранный — фон и полоска у левого края. Адреса руками нет. */
+  body { background: #15181f; display: grid; grid-template-rows: auto 1fr auto; }
+  header { height: 44px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; font-size: 14px; }
+  header .spacer { flex: 1; }
+  header .close { width: 32px; height: 32px; border: 0; border-radius: 8px; background: transparent; color: var(--cord-muted); font-size: 18px; cursor: pointer; }
+  header .close:hover { background: rgba(255,255,255,.08); color: var(--cord-text); }
+  ul { list-style: none; margin: 0; padding: 8px; overflow: auto; }
+  li { position: relative; display: grid; grid-template-columns: 36px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+  li:hover { background: rgba(255,255,255,.06); }
+  li[aria-selected="true"] { background: rgba(53,100,243,.16); }
+  li[aria-selected="true"]::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--cord-accent); }
+  .flag { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; overflow: hidden; }
+  .flag svg { width: 100%; height: 100%; }
+  .name { display: grid; }
+  .name small { color: var(--cord-muted); }
+  .ping { color: var(--cord-muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+  .ping[data-tone="good"] { color: #3ddc84; }
+  .ping[data-tone="fair"] { color: #f5c542; }
+  footer { padding: 8px 16px 14px; color: var(--cord-muted); font-size: 12px; }
+</style>
+</head>
+<body>
+  <header class="drag">Серверы<span class="spacer"></span><button class="close no-drag" id="close" type="button" aria-label="Закрыть">×</button></header>
+  <ul id="list" role="listbox" aria-label="Серверы Cord"></ul>
+  <footer>Список серверов даёт Cord. Смена сервера закрывает текущую встречу.</footer>
+  <script src="servers.js"></script>
+</body>
+</html>

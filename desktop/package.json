@@ -7,7 +7,7 @@
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-shell.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/bundle-preload.mjs && node scripts/copy-shell.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:e2e": "playwright test -c test/e2e/playwright.config.ts",
@@ -25,6 +25,7 @@
     "@types/node": "24.19.2",
     "electron": "44.9.1",
     "electron-builder": "26.15.3",
+    "esbuild": "^0.27.2",
     "typescript": "5.9.3",
     "vitest": "5.0.5"
   }

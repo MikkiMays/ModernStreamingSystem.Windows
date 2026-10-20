@@ -1,0 +1,120 @@
+name: Build and publish Cord desktop (Electron)
+# Клиент Windows на Electron (ADR 0001 §9): сборка, проверки и выпуск на windows-2022.
+# windows.yml (WinUI) не трогается, пока новый клиент не прошёл приёмку.
+on:
+  push:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  # На main прогон выкладывает релиз; отмена посреди загрузки оставляет черновик (см. windows.yml).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+defaults:
+  run:
+    working-directory: desktop
+jobs:
+  desktop:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84a9c4d2bf0df0d4f # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests (bridge boundaries, manifest signature, splash flow, hotkeys, catalog)
+        run: npm test
+      - name: Build main, preload and shell pages
+        run: npm run build
+      - name: Smoke test (Playwright _electron against the stand)
+        env:
+          CORD_SMOKE_SERVER: https://cord.nikg.tech/
+        run: npm run test:e2e
+      - name: Package NSIS installer
+        env:
+          # Пустые секреты = неподписанная сборка, как sign.ps1 сейчас. Сертификат — шаг владельца.
+          CSC_LINK: ${{ secrets.CORD_SIGN_PFX_BASE64 }}
+          CSC_KEY_PASSWORD: ${{ secrets.CORD_SIGN_PASSWORD }}
+          CORD_UPDATE_CHANNEL: ${{ vars.CORD_UPDATE_CHANNEL }}
+        run: npx electron-builder --win nsis --x64 --publish never
+      - name: Sign the update manifest (Ed25519, layer 1)
+        env:
+          CORD_UPDATE_SIGN_KEY: ${{ secrets.CORD_UPDATE_SIGN_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$CORD_UPDATE_SIGN_KEY" ]; then
+            echo "::warning::CORD_UPDATE_SIGN_KEY не задан: latest.yml не подписан, клиенты такое обновление не примут"
+          else
+            node scripts/sign-manifest.mjs release
+          fi
+      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut, uninstall)
+        shell: pwsh
+        run: .\scripts\test-installer.ps1 -Release release
+      - name: Checksums
+        shell: bash
+        run: |
+          cd release
+          for f in Cord-Setup-*.exe Cord-Setup-*.exe.blockmap; do sha256sum "$f" > "$f.sha256"; done
+          ls -la
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # Квота артефактов (решение E00): один день, и сбой загрузки не красит прогон.
+        continue-on-error: true
+        with:
+          name: Cord-desktop-win-x64
+          path: |
+            desktop/release/Cord-Setup-*.exe
+            desktop/release/Cord-Setup-*.exe.sha256
+            desktop/release/Cord-Setup-*.exe.blockmap
+            desktop/release/Cord-Setup-*.exe.blockmap.sha256
+            desktop/release/latest.yml
+            desktop/release/latest.yml.sig
+          retention-days: 1
+          if-no-files-found: error
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: desktop
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: Cord-desktop-win-x64
+          path: artifacts
+      - name: Publish the verified desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./desktop/package.json').version")
+          tag="desktop-v$version"
+          state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
+          if [ "$state" = "false" ]; then
+            echo "Release $tag already exists; preserving its artifacts."
+            exit 0
+          fi
+          if [ "$state" = "true" ]; then
+            echo "Draft $tag left by an interrupted run; replacing it."
+            gh release delete "$tag" --yes
+          fi
+          cd artifacts
+          sha256sum --check Cord-Setup-*.exe.sha256 Cord-Setup-*.exe.blockmap.sha256
+          test -s latest.yml
+          notes="../docs/releases/desktop-$version.md"
+          [ -f "$notes" ] || { echo "# Cord $version" > /tmp/notes.md; notes=/tmp/notes.md; }
+          gh release create "$tag" --target "$GITHUB_SHA" --title "Cord desktop $version" \
+            --notes-file "$notes" \
+            Cord-Setup-*.exe Cord-Setup-*.exe.sha256 Cord-Setup-*.exe.blockmap Cord-Setup-*.exe.blockmap.sha256 \
+            latest.yml $(ls latest.yml.sig 2>/dev/null)

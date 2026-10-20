@@ -1,0 +1,9 @@
+{
+  "format": "cord.servers/1",
+  "seq": 1,
+  "issuedAt": "2026-10-20T12:00:00Z",
+  "expiresAt": "2027-10-20T12:00:00Z",
+  "servers": [
+    { "id": "nl-1", "name": { "ru": "Нидерланды", "en": "Netherlands" }, "country": "NL", "url": "https://cord.nikg.tech/", "order": 10, "default": true }
+  ]
+}

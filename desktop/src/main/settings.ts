@@ -1,0 +1,160 @@
+/**
+ * Настройки приложения — `settings.json` в `userData` (`%LOCALAPPDATA%\Cord\desktop`) — и секрет
+ * профиля на каждый сервер (`profile-<key>.dat`, зашифрован `safeStorage`, то есть DPAPI
+ * этого пользователя Windows). Совместимости с файлами WinUI нет (решение В-2).
+ */
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { HotkeyBinding } from './bridge/messages';
+import { ServerOrigin } from './origins';
+
+export interface ServerEntry {
+  url: string;
+  name: string;
+  autoConnect: boolean;
+}
+
+export interface Settings {
+  serverUrl: string;
+  theme: 'light' | 'dark' | 'system';
+  showPing: boolean;
+  notificationSounds: boolean;
+  autoConnect: boolean;
+  servers: ServerEntry[];
+  catalogSeq: number;
+  hotkeys: HotkeyBinding[];
+  overlayEnabled: boolean;
+  autostart: boolean;
+  sidebarWidth: number;
+  window: { width: number; height: number; x?: number; y?: number; maximized: boolean } | null;
+  /** Версия, которую ждём после `quitAndInstall`; стоит старее — установщик отказал. */
+  expectedVersion: string | null;
+}
+
+const DEFAULTS: Settings = {
+  serverUrl: '',
+  theme: 'system',
+  showPing: false,
+  notificationSounds: true,
+  autoConnect: true,
+  servers: [],
+  catalogSeq: 0,
+  hotkeys: [],
+  overlayEnabled: false,
+  autostart: false,
+  sidebarWidth: 280,
+  window: null,
+  expectedVersion: null,
+};
+
+export interface SecretStore {
+  isEncryptionAvailable(): boolean;
+  encryptString(plain: string): Buffer;
+  decryptString(encrypted: Buffer): string;
+}
+
+export class SettingsStore {
+  private state: Settings;
+  private readonly file: string;
+
+  constructor(
+    private readonly root: string,
+    private readonly secrets: SecretStore,
+  ) {
+    mkdirSync(root, { recursive: true });
+    this.file = join(root, 'settings.json');
+    this.state = { ...DEFAULTS };
+    try {
+      if (existsSync(this.file)) this.state = { ...DEFAULTS, ...sanitize(JSON.parse(readFileSync(this.file, 'utf8'))) };
+    } catch {
+      // Нечитаемый файл — значения по умолчанию; файл перепишется при первом изменении.
+    }
+  }
+
+  get(): Settings {
+    return this.state;
+  }
+
+  update(patch: Partial<Settings>): Settings {
+    this.state = { ...this.state, ...patch };
+    const temporary = this.file + '.tmp';
+    writeFileSync(temporary, JSON.stringify(this.state, null, 2) + '\n', 'utf8');
+    renameSync(temporary, this.file);
+    return this.state;
+  }
+
+  /** Секрет профиля для origin: 43 символа base64url (32 байта), как писал WinUI. Создаётся при первом запросе. */
+  async profileFor(origin: ServerOrigin): Promise<string> {
+    const path = join(this.root, `profile-${await origin.storageKey()}.dat`);
+    if (existsSync(path)) {
+      try {
+        const value = this.secrets.isEncryptionAvailable() ? this.secrets.decryptString(readFileSync(path)) : readFileSync(path, 'utf8');
+        if (/^[A-Za-z0-9_-]{43}$/.test(value)) return value;
+      } catch {
+        // Не расшифровался (другой пользователь Windows) — создаём новый: избранное на сервере останется за старым секретом.
+      }
+    }
+    const fresh = randomBytes(32).toString('base64url');
+    writeFileSync(path, this.secrets.isEncryptionAvailable() ? this.secrets.encryptString(fresh) : fresh);
+    return fresh;
+  }
+
+  forgetProfile(origin: ServerOrigin): void {
+    void origin.storageKey().then((key) => {
+      const path = join(this.root, `profile-${key}.dat`);
+      if (existsSync(path)) unlinkSync(path);
+    });
+  }
+}
+
+function sanitize(raw: unknown): Partial<Settings> {
+  if (!raw || typeof raw !== 'object') return {};
+  const data = raw as Record<string, unknown>;
+  const result: Partial<Settings> = {};
+  const origin = ServerOrigin.tryParse(data.serverUrl);
+  if (origin) result.serverUrl = origin.url;
+  if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') result.theme = data.theme;
+  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'overlayEnabled', 'autostart'] as const)
+    if (typeof data[flag] === 'boolean') result[flag] = data[flag] as boolean;
+  if (typeof data.catalogSeq === 'number' && Number.isInteger(data.catalogSeq) && data.catalogSeq >= 0) result.catalogSeq = data.catalogSeq;
+  if (typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 600) result.sidebarWidth = Math.round(data.sidebarWidth);
+  if (typeof data.expectedVersion === 'string' && /^\d+\.\d+\.\d+$/.test(data.expectedVersion)) result.expectedVersion = data.expectedVersion;
+  if (Array.isArray(data.servers)) {
+    const seen = new Set<string>();
+    result.servers = [];
+    for (const item of data.servers.slice(0, 20)) {
+      const entry = (item ?? {}) as Record<string, unknown>;
+      const url = ServerOrigin.tryParse(entry.url);
+      if (!url || seen.has(url.url)) continue;
+      seen.add(url.url);
+      result.servers.push({ url: url.url, name: typeof entry.name === 'string' ? entry.name.trim().slice(0, 60) : '', autoConnect: entry.autoConnect !== false });
+    }
+  }
+  if (Array.isArray(data.hotkeys)) result.hotkeys = data.hotkeys.filter(validBinding).slice(0, 8) as HotkeyBinding[];
+  if (data.window && typeof data.window === 'object') {
+    const window = data.window as Record<string, unknown>;
+    if (typeof window.width === 'number' && typeof window.height === 'number' && window.width >= 400 && window.height >= 300)
+      result.window = {
+        width: Math.round(window.width),
+        height: Math.round(window.height),
+        ...(typeof window.x === 'number' ? { x: Math.round(window.x) } : {}),
+        ...(typeof window.y === 'number' ? { y: Math.round(window.y) } : {}),
+        maximized: window.maximized === true,
+      };
+  }
+  return result;
+}
+
+function validBinding(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const binding = value as Record<string, unknown>;
+  const key = binding.key as Record<string, unknown> | undefined;
+  return (
+    ['mic.toggle', 'ptt', 'deafen', 'overlay.toggle'].includes(binding.action as string) &&
+    (binding.mode === 'toggle' || binding.mode === 'hold') &&
+    !!key &&
+    typeof key.code === 'string' &&
+    ['ctrl', 'alt', 'shift', 'meta'].every((name) => typeof key[name] === 'boolean')
+  );
+}
