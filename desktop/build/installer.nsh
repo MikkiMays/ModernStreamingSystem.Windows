@@ -3,6 +3,10 @@
 ; и учитывается при тихом обновлении. Ни одной ссылки — ни в тексте, ни в карточке Windows.
 !include "nsDialogs.nsh"
 !include "LogicLib.nsh"
+; electron-builder подключает MUI2 позже этого файла, а функция страницы ярлыка ниже уже зовёт
+; MUI_HEADER_TEXT: без раннего подключения makensis не знает макроса. MUI2 защищён от повторного
+; подключения, а его настройки читаются при вставке страниц, так что порядок им не мешает.
+!include "MUI2.nsh"
 
 Var CordDesktopShortcut
 Var CordDesktopCheckbox
