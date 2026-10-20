@@ -2,6 +2,7 @@
 
 - **Статус:** предложено (E01, этап A), 19.10.2026. Технология — решение владельца (T53, `DECISIONS.md` П1); этот ADR решает, **как** строить, и что доказывает прототип.
 - **Изменено 20.10.2026** (решение владельца по T58): обновление — заставкой при запуске, как у Discord (§5.1); обратной совместимости со старыми клиентами нет — ни прокладки моста v1 (§3.2), ни переходного Inno-выпуска (§7.2).
+- **Изменено 20.10.2026** (E01-B2): `capture.select` — запрос с ответом (`invoke`), а не сообщение: веб ждёт ответа до `getDisplayMedia` (§4.1); переключатели §4.4 — `invoke('app.settings', патч)` и событие `app.settings`, флаги `app.settings`, `tray`, `sleep`, `autostart`, а `capture.system-audio`, `thumbar`, `badge`, `autostart` объявляются только в Windows; каталог (§8) — JWKS `contracts/catalog-keys.json`, подписанный снимок `src/shell/catalog.jws`, последний хороший — `userData/catalog.jws`; `metrics.json` (§10) — `scripts/test-installer.ps1 -Metrics`.
 - **Область:** новый клиент Windows вместо WinUI 3 + WebView2 (`src/Cord.Windows`, 0.7.x).
 - **Версии на дату решения:** Electron 44.9 (stable), electron-builder 26.15 (27 — alpha), electron-updater 6.8, @napi-rs/cli 3.10, livekit-client 2.23. Electron поддерживает три последних мажора с циклом ~8 недель, поэтому мажор обновляем не реже раза в 16 недель ([timelines](https://www.electronjs.org/docs/latest/tutorial/electron-timelines)).
 
@@ -168,7 +169,8 @@ interface CordDesktop {
 | `session.expired` | `invoke('session.renew')` → токен | Запрос/ответ вместо пары сообщений |
 | `close-ready` | `close.ready` | Закрытие в звонке (ждём ≤ 2,5 с, как сейчас) |
 | `update.version`, `update.check`, `update.apply` | `invoke('update.status')`, `update.check`, `update.apply` | «О программе» |
-| — | `invoke('capture.sources')`, `capture.select` | Своё окно выбора источника и режим звука (§4.1) |
+| — | `invoke('capture.sources')`, `invoke('capture.select')` | Своё окно выбора источника и режим звука (§4.1) |
+| — | `invoke('app.settings', патч)` | Переключатели §4.4 в настройках веба (раздел «Windows», E03): трей, кнопки миниатюры, значок, мигание, запрет сна, оверлей, автозапуск |
 | — | `overlay.state` | Участники и кто говорит (≤ 10 Гц), без аватаров |
 | — | `notify`, `attention`, `progress`, `badge` | Уведомление с действиями, мигание кнопки, прогресс файла, значок непрочитанного |
 
@@ -178,6 +180,7 @@ interface CordDesktop {
 | `hotkey.status` | `hotkeys.status` | Что удалось зарегистрировать |
 | `navigate`, `theme.changed`, `preferences.changed`, `settings.open`, `favorite.settings`, `favorites.changed`, `profile.changed`, `network.changed`, `close-request`, `update.status`, `session.token` | те же имена через `on()` | Смысл прежний |
 | — | `thumbar` `{action: mic\|camera\|leave}`, `deeplink` `{room}`, `notification.action`, `power` `{suspend\|resume\|lock}`, `capture.ended` | Новые возможности |
+| — | `app.settings` | Значения переключателей §4.4, когда их сменила сама оболочка (клавиша `overlay.toggle`) |
 
 ## 4. Нативные возможности
 
@@ -188,7 +191,7 @@ interface CordDesktop {
 **Своё окно выбора** рисует веб по дизайну E16, как в Discord:
 
 1. `invoke('capture.sources')` — экраны и окна с миниатюрами (≤ 320 px) и иконками; видит только origin сервера.
-2. `capture.select {id, audio: 'none'|'app'|'system-except-cord'}` — выбор живёт 10 с, только для этого кадра и при жесте пользователя.
+2. `invoke('capture.select', {id, audio: 'none'|'system'|'app'|'system-except-cord'})` — выбор живёт 10 с, только для этого кадра и при жесте пользователя; веб ждёт ответа и только потом зовёт `getDisplayMedia`.
 3. Веб вызывает `getDisplayMedia`, и обработчик в main отдаёт именно этот источник.
 
 Публикация в LiveKit — по правилам качества E05 (П2: потолок 1080p60, кадр целевого качества раньше показа).
