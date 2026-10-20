@@ -6,7 +6,12 @@ using Microsoft.Win32;
 
 namespace Cord.Windows.Services;
 
-public sealed class ApplicationUpdater(string profileRoot) : IDisposable
+/// <summary>
+/// Обновлятор установленной копии: спросить зеркало, скачать, запустить помощника установки. Один
+/// на всё приложение — его делят заставка и главное окно. Шаги и их порядок — в
+/// <see cref="ForcedUpdate.SplashAsync"/>.
+/// </summary>
+public sealed class ApplicationUpdater(string profileRoot) : IUpdateSteps, IDisposable
 {
     private readonly HttpClient _http = new(new SocketsHttpHandler { AllowAutoRedirect = false }) { Timeout = TimeSpan.FromMinutes(20) };
     private readonly string _directory = Path.Combine(profileRoot, "updates");
@@ -49,53 +54,26 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
     /// <summary>Забыть скачанный пакет, чтобы следующая попытка скачала его заново.</summary>
     public void DiscardPackage() => Package = null;
     /// <summary>
-    /// Чем кончилась прошлая попытка обновиться — один раз, при первом запуске после неё.
-    ///
-    /// Раньше причина отказа стиралась вместе с файлом, а человек видел «не удалось, повторите» в
-    /// плашке с заголовком «Соединение» — и обновлялся снова тем же путём, с тем же исходом. Теперь
-    /// итог остаётся рядом (<c>result-last.json</c>), причина называется словами, а успех тоже
-    /// виден. Номеров версий в этих словах нет (T58): номер показывает только «О программе», а
-    /// ожидаемая и найденная на диске версии остаются в <c>result-last.json</c> и журнале.
+    /// Чем кончилась прошлая установка — один раз, при первом запуске после неё. Итог пишет
+    /// помощник (<c>result.json</c>); прочитанный он остаётся рядом, в <c>result-last.json</c>,
+    /// вместе с ожидаемой и найденной на диске версией и хвостом журнала установщика.
     /// </summary>
-    public UpdateOutcome? LastResult()
+    public string? TakeInstallFailure()
     {
         var path = Path.Combine(_directory, "result.json");
         if (!File.Exists(path)) return null;
-        try
-        {
-            using var result = JsonDocument.Parse(File.ReadAllText(path));
-            var root = result.RootElement;
-            var ok = root.GetProperty("ok").GetBoolean();
-            var expected = Text(root, "version");
-            File.Move(path, Path.Combine(_directory, "result-last.json"), true);
-            if (ok && (expected.Length == 0 || expected == DisplayVersion)) return new(true, "Cord обновлён до последней версии.");
-            if (ok) return new(false, "Установщик сообщил об успехе, но запущена прежняя версия Cord. Скачайте установщик со страницы загрузки сервера и запустите его вручную.");
-            return new(false, $"Обновление не установилось: {Reason(root)} Журнал: {Path.Combine(_directory, "update.log")}");
-        }
-        catch (Exception e) when (e is IOException or JsonException or KeyNotFoundException or InvalidOperationException or UnauthorizedAccessException)
-        {
-            return new(false, "Не удалось прочитать результат обновления.");
-        }
+        string result;
+        try { result = File.ReadAllText(path); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return "Обновление не установилось."; }
+        try { File.Move(path, Path.Combine(_directory, "result-last.json"), true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* Прочитанное покажем и так; файл переложит следующий запуск. */ }
+        return ForcedUpdate.InstallFailure(result);
     }
-    private static string Text(JsonElement root, string name) =>
-        root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
-    /// <summary>Причина отказа словами: помощник пишет её по-английски (он обязан быть ASCII), а коды — это коды Inno Setup.</summary>
-    private static string Reason(JsonElement root)
-    {
-        var stage = Text(root, "stage");
-        var code = root.TryGetProperty("code", out var value) && value.ValueKind == JsonValueKind.Number ? value.GetInt32() : (int?)null;
-        return (stage, code) switch
-        {
-            ("wait", _) => "прежняя версия Cord не закрылась за минуту.",
-            ("install", 7) or ("install", 4) or ("install", 5) => $"установщику помешали занятые файлы (код {code}). Закройте все окна Cord и повторите.",
-            ("install", 8) => "Windows просит перезагрузку, прежде чем заменить файлы. Перезагрузите компьютер и повторите.",
-            ("install", { } other) => $"установщик завершился с кодом {other}.",
-            ("check", _) => "после установки на диске осталась другая версия.",
-            ("verify", _) => "скачанный установщик не совпал с опубликованным. Повторите загрузку.",
-            _ => Text(root, "detail") is { Length: > 0 } detail ? detail : "причина не записана.",
-        };
-    }
-    public async Task<bool> ApplyAsync(CancellationToken token, Func<bool> canApply)
+    /// <summary>
+    /// Запустить помощника (<c>Update.ps1</c>) и дождаться, пока он сверит пакет и будет готов.
+    /// Дальше Cord обязан закрыться: помощник ждёт этого, ставит молча и открывает новую версию.
+    /// </summary>
+    public async Task ApplyAsync(CancellationToken token)
     {
         if (!Installed || Package is null || Available is null) throw new InvalidOperationException("Обновление не готово.");
         // Откатов нет: что бы ни лежало в папке обновлений, ставится только версия новее этой.
@@ -111,7 +89,6 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
         var start = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"))
         { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = _directory };
         foreach (var arg in new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-PlanFile", plan }) start.ArgumentList.Add(arg);
-        if (!canApply()) return false;
         using var helper = Process.Start(start) ?? throw new IOException("Не удалось запустить обновление.");
         try
         {
@@ -124,9 +101,6 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
                 if (helper.HasExited) throw new IOException("Помощник обновления завершился до готовности.");
                 await Task.Delay(100, timeout.Token);
             }
-            if (canApply()) return true;
-            if (!helper.HasExited) helper.Kill();
-            return false;
         }
         catch { if (!helper.HasExited) helper.Kill(); throw; }
         finally { if (File.Exists(ready)) File.Delete(ready); }
@@ -135,6 +109,5 @@ public sealed class ApplicationUpdater(string profileRoot) : IDisposable
 }
 /// <param name="Version">Какая версия должна оказаться на диске: помощник сверяет её с файлом, а не верит коду выхода.</param>
 public sealed record UpdatePlan(int ProcessId, string Package, string Sha256, string InstallDirectory, string UpdateDirectory, string ReadyFile, string Version);
-public sealed record UpdateOutcome(bool Ok, string Message);
 [System.Text.Json.Serialization.JsonSerializable(typeof(UpdatePlan))]
 internal partial class UpdaterJson : System.Text.Json.Serialization.JsonSerializerContext;

@@ -4,7 +4,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 if (!$Publication) { $Publication = Join-Path $projectRoot 'artifacts\Cord-win-x64' }
 $Publication = [IO.Path]::GetFullPath($Publication)
 $exe = Join-Path $Publication 'Cord.exe'
-foreach ($resource in @('Cord.exe', 'Cord.pri', 'App.xbf', 'MainWindow.xbf', 'Assets\Cord.ico')) {
+foreach ($resource in @('Cord.exe', 'Cord.pri', 'App.xbf', 'MainWindow.xbf', 'SplashWindow.xbf', 'Assets\Cord.ico')) {
   if (!(Test-Path -LiteralPath (Join-Path $Publication $resource) -PathType Leaf)) { throw "Missing $resource" }
 }
 $previousProfile = $env:CORD_PROFILE_DIRECTORY
@@ -15,5 +15,5 @@ try {
   $probe = Start-Process -FilePath $exe -ArgumentList '--verify-resources' -WorkingDirectory $Publication -WindowStyle Hidden -PassThru
   if (!$probe.WaitForExit(20000)) { $probe.Kill(); throw 'Resource probe timed out.' }
   if ($probe.ExitCode -ne 0) { throw "Resource probe failed: $($probe.ExitCode)" }
-  Write-Output 'Cord resource probe passed: self-contained runtime and MainWindow XAML loaded.'
+  Write-Output 'Cord resource probe passed: self-contained runtime, SplashWindow and MainWindow XAML loaded.'
 } finally { $env:CORD_PROFILE_DIRECTORY = $previousProfile }

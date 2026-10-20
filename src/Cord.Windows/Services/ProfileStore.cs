@@ -34,7 +34,7 @@ public sealed class ProfileStore
         catch (Exception error) when (error is JsonException or ArgumentException) { return Normalized(new()); }
     }
 
-    /// <summary>Settings written before the server list existed carry only a single address.</summary>
+    /// <summary>The saved list is clean and always holds the server in use: see <see cref="ServerList.Normalize"/>.</summary>
     private static DesktopSettings Normalized(DesktopSettings settings) =>
         settings with { Servers = ServerList.Normalize(settings.Servers, settings.ServerUrl) };
 

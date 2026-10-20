@@ -73,8 +73,7 @@ public static class BridgeProtocol
                 localStorage.setItem('cord:preferences:v1', JSON.stringify(saved));
                 let server = {};
                 try { server = JSON.parse(localStorage.getItem('cord:servers:v1')) || {}; } catch {}
-                if (Array.isArray(server)) server = server[0] || {};
-                if (typeof server !== 'object' || server === null) server = {};
+                if (typeof server !== 'object' || server === null || Array.isArray(server)) server = {};
                 server.url = location.origin + '/';
                 server.autoConnect = {{automatic}};
                 localStorage.setItem('cord:servers:v1', JSON.stringify(server));

@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 if (!$SkipPublish) { & (Join-Path $PSScriptRoot 'build.ps1') -Publish }
 $publication = Join-Path $projectRoot 'artifacts\Cord-win-x64'
-foreach ($required in @('Cord.exe', 'Cord.pri', 'App.xbf', 'MainWindow.xbf', 'Assets\Cord.ico')) {
+foreach ($required in @('Cord.exe', 'Cord.pri', 'App.xbf', 'MainWindow.xbf', 'SplashWindow.xbf', 'Assets\Cord.ico')) {
   $candidate = Join-Path $publication $required
   if (!(Test-Path -LiteralPath $candidate -PathType Leaf) -or (Get-Item -LiteralPath $candidate).Length -eq 0) {
     throw "Incomplete publication: $required. Run build.ps1 -Publish."

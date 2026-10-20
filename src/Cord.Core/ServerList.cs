@@ -11,8 +11,6 @@ public static class ServerList
 
     /// <summary>
     /// Drops unparseable and duplicate entries and guarantees the active server is present.
-    /// Settings written by an older build carry no list at all, so one is derived from the
-    /// single address it did store.
     /// </summary>
     public static IReadOnlyList<ServerEntry> Normalize(
         IReadOnlyList<ServerEntry>? servers,

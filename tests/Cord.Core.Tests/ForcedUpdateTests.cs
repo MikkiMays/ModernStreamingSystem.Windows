@@ -7,10 +7,11 @@ using Cord.Core;
 using Xunit;
 
 /// <summary>
-/// T58: при запуске Cord спрашивает зеркало о версии. Новее — ставится сразу; та же или старее —
-/// ничего не происходит; зеркало молчит или отвечает не тем — Cord запускается как обычно и
-/// спросит позже. Сбой загрузки отпускает человека в текущую версию, а не запирает на экране
-/// обновления.
+/// T58: при запуске Cord сначала показывает заставку и спрашивает зеркало о версии. Новее —
+/// скачивается и ставится, и только потом открывается Cord; та же или старее — заставка сразу
+/// уступает место приложению; зеркало молчит или отвечает не тем — Cord открывается как обычно и
+/// спросит позже. Сбой загрузки или установки останавливается на заставке с причиной, «Повторить»
+/// и «Открыть Cord» — человека не запирают.
 /// </summary>
 public class ForcedUpdateTests
 {
@@ -243,6 +244,220 @@ public class ForcedUpdateTests
             Assert.False(download.Ok);
             Assert.Contains("остановилась", download.Problem, StringComparison.Ordinal);
         });
+    }
+
+    private static readonly UpdateCheck Found = new(UpdateVerdict.Forced, new CordRelease(new(0, 7, 8), new Uri("https://meet.nikg.tech/downloads/windows/v0.7.8/Cord-Setup-0.7.8-x64.exe"), new string('a', 64), 4));
+
+    /// <summary>Ставить нечего — заставка сказала одно «Проверяем обновления…» и открывает Cord.</summary>
+    [Fact]
+    public async Task TheSplashOpensCordWhenThereIsNothingToInstall()
+    {
+        var steps = new Steps();
+        var screen = new Screen();
+        var result = await Splash(steps, screen);
+        Assert.Equal(SplashOutcome.OpenCord, result.Outcome);
+        Assert.Equal(["Проверяем обновления…"], screen.Texts);
+        Assert.Equal(["failure", "check"], steps.Calls);
+        Assert.Equal(ForcedUpdate.StartupBudget, steps.Budget);
+        Assert.Equal(ForcedUpdate.Period, result.NextCheck);
+    }
+
+    /// <summary>Зеркало не ответило за отведённые секунды — Cord открывается и спросит снова скоро.</summary>
+    [Fact]
+    public async Task TheSplashOpensCordWhenTheMirrorCannotAnswer()
+    {
+        var steps = new Steps { Checks = { new(UpdateVerdict.Unavailable) } };
+        var result = await Splash(steps, new Screen());
+        Assert.Equal(SplashOutcome.OpenCord, result.Outcome);
+        Assert.DoesNotContain("download", steps.Calls);
+        Assert.Equal(ForcedUpdate.RetrySoon, result.NextCheck);
+    }
+
+    /// <summary>Есть новее: проверка, загрузка с процентами, установка — и Cord закрывается ради неё.</summary>
+    [Fact]
+    public async Task TheSplashDownloadsInstallsAndRestarts()
+    {
+        var steps = new Steps { Checks = { Found } };
+        var screen = new Screen();
+        var result = await Splash(steps, screen);
+        Assert.Equal(SplashOutcome.Restarting, result.Outcome);
+        Assert.Equal(["Проверяем обновления…", "Загружаем обновление… 0%", "Загружаем обновление… 42%", "Загружаем обновление… 100%", "Устанавливаем…"], screen.Texts);
+        Assert.Equal(["failure", "check", "download", "apply"], steps.Calls);
+    }
+
+    /// <summary>Загрузка не удалась — заставка останавливается на причине, ставить нечего.</summary>
+    [Fact]
+    public async Task AFailedDownloadStopsAtTheSplashWithTheReason()
+    {
+        var steps = new Steps { Checks = { Found }, Download = new(null, "Не удалось скачать обновление. Проверьте соединение.") };
+        var result = await Splash(steps, new Screen());
+        Assert.Equal(SplashOutcome.Failed, result.Outcome);
+        Assert.Equal("Не удалось скачать обновление. Проверьте соединение.", result.Problem);
+        Assert.DoesNotContain("apply", steps.Calls);
+        Assert.Equal(ForcedUpdate.Period, result.NextCheck);
+    }
+
+    /// <summary>
+    /// Помощник не запустился или не дождался готовности — причина короткая, исключение остаётся
+    /// для журнала, а пакет забывается: «Повторить» скачает его заново, а не споткнётся о тот же файл.
+    /// </summary>
+    [Theory]
+    [InlineData("io")]
+    [InlineData("timeout")]
+    [InlineData("not-ready")]
+    public async Task AnInstallThatCouldNotStartIsDownloadedAgainOnRetry(string failure)
+    {
+        Exception error = failure switch
+        {
+            "io" => new IOException("Помощник обновления завершился до готовности."),
+            "timeout" => new TaskCanceledException(),
+            _ => new InvalidOperationException("Обновление не готово."),
+        };
+        var steps = new Steps { Checks = { Found }, ApplyError = error };
+        var result = await Splash(steps, new Screen());
+        Assert.Equal(SplashOutcome.Failed, result.Outcome);
+        Assert.Equal("Не удалось запустить установку.", result.Problem);
+        Assert.Same(error, result.Error);
+        Assert.Equal("discard", steps.Calls[^1]);
+    }
+
+    /// <summary>
+    /// Прошлая установка не встала — заставка сразу показывает причину и сама второй раз не
+    /// ставит: иначе сбой установщика стал бы кругом «обновился — открылся прежним — снова
+    /// обновляется». «Повторить» проходит весь путь заново.
+    /// </summary>
+    [Fact]
+    public async Task ALastFailedInstallIsShownNotRepeated()
+    {
+        var steps = new Steps { Failure = "Обновление не установилось: файлы Cord заняты.", Checks = { Found } };
+        var first = await Splash(steps, new Screen());
+        Assert.Equal(SplashOutcome.Failed, first.Outcome);
+        Assert.Equal("Обновление не установилось: файлы Cord заняты.", first.Problem);
+        Assert.Equal(["failure"], steps.Calls);
+        var retry = await Splash(steps, new Screen());
+        Assert.Equal(SplashOutcome.Restarting, retry.Outcome);
+        Assert.Equal(["failure", "failure", "check", "download", "apply"], steps.Calls);
+    }
+
+    /// <summary>Закрытая заставка — не сбой обновления: отмена доходит до окна как отмена.</summary>
+    [Fact]
+    public async Task ClosingTheSplashIsNotAFailure()
+    {
+        using var early = new CancellationTokenSource();
+        await early.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Splash(new Steps { Checks = { Found } }, new Screen(), early.Token));
+        using var late = new CancellationTokenSource();
+        var installing = new Steps
+        {
+            Checks = { Found },
+            Applying = async () =>
+            {
+                await late.CancelAsync();
+                late.Token.ThrowIfCancellationRequested();
+            },
+        };
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Splash(installing, new Screen(), late.Token));
+        Assert.DoesNotContain("discard", installing.Calls);
+    }
+
+    /// <summary>Одна короткая строка, проценты целые и не больше ста, номера версии нет.</summary>
+    [Fact]
+    public void TheSplashSpeaksInOneShortLineWithoutAVersion()
+    {
+        Assert.Equal("Проверяем обновления…", new SplashState(SplashStage.Checking).Text);
+        Assert.Equal("Загружаем обновление… 99%", new SplashState(SplashStage.Downloading, 0.999).Text);
+        Assert.Equal("Загружаем обновление… 100%", new SplashState(SplashStage.Downloading, 1.7).Text);
+        Assert.Equal("Загружаем обновление… 0%", new SplashState(SplashStage.Downloading, -1).Text);
+        Assert.Equal("Устанавливаем…", new SplashState(SplashStage.Installing).Text);
+        Assert.Equal("Нет связи.", new SplashState(SplashStage.Failed, Problem: "Нет связи.").Text);
+        Assert.DoesNotContain(new[] { SplashStage.Checking, SplashStage.Installing }, stage => new SplashState(stage).Text.Any(char.IsDigit));
+    }
+
+    /// <summary>Итог помощника — словами и коротко; успех — не повод что-то показывать.</summary>
+    [Theory]
+    [InlineData("""{"ok":true,"stage":"check","code":0,"version":"0.7.8","installed":"0.7.8"}""", null)]
+    [InlineData("""{"ok":false,"stage":"install","code":5,"version":"0.7.8"}""", "заняты")]
+    [InlineData("""{"ok":false,"stage":"install","code":7}""", "заняты")]
+    [InlineData("""{"ok":false,"stage":"install","code":8}""", "перезагрузки")]
+    [InlineData("""{"ok":false,"stage":"install","code":2}""", "код 2")]
+    [InlineData("""{"ok":false,"stage":"wait","code":null}""", "не закрылся")]
+    [InlineData("""{"ok":false,"stage":"verify","code":null}""", "повреждён")]
+    [InlineData("""{"ok":false,"stage":"check","code":0,"version":"0.7.8","installed":"0.7.7"}""", "прежняя версия")]
+    [InlineData("""{"ok":false,"stage":"close","code":null,"detail":"Access denied"}""", "Обновление не установилось.")]
+    [InlineData("<html>", "Обновление не установилось.")]
+    public void ALastInstallIsToldInWords(string result, string? expected)
+    {
+        var failure = ForcedUpdate.InstallFailure(result);
+        if (expected is null)
+        {
+            Assert.Null(failure);
+            return;
+        }
+        Assert.NotNull(failure);
+        Assert.StartsWith("Обновление не установилось", failure, StringComparison.Ordinal);
+        Assert.Contains(expected, failure, StringComparison.Ordinal);
+        // Номер версии показывает только «О программе»; английский текст помощника — журналу.
+        Assert.DoesNotContain("0.7", failure, StringComparison.Ordinal);
+        Assert.DoesNotContain("Access", failure, StringComparison.Ordinal);
+    }
+
+    private static Task<SplashResult> Splash(Steps steps, Screen screen, CancellationToken? token = null) =>
+        ForcedUpdate.SplashAsync(steps, screen, token ?? TestContext.Current.CancellationToken);
+
+    /// <summary>Обновлятор понарошку: отвечает заданным и записывает, о чём его просили.</summary>
+    private sealed class Steps : IUpdateSteps
+    {
+        public string? Failure { get; set; }
+        /// <summary>Ответы зеркала по очереди; кончились — «новее нет».</summary>
+        public List<UpdateCheck> Checks { get; } = [];
+        public UpdateDownload Download { get; set; } = new("Cord-Setup-0.7.8-x64.exe");
+        public Exception? ApplyError { get; set; }
+        public Func<Task>? Applying { get; set; }
+        public List<string> Calls { get; } = [];
+        public TimeSpan? Budget { get; private set; }
+
+        public string? TakeInstallFailure()
+        {
+            Calls.Add("failure");
+            var failure = Failure;
+            Failure = null;
+            return failure;
+        }
+
+        public Task<UpdateCheck> CheckAsync(TimeSpan budget, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            Calls.Add("check");
+            Budget = budget;
+            if (Checks.Count == 0) return Task.FromResult(new UpdateCheck(UpdateVerdict.None));
+            var check = Checks[0];
+            Checks.RemoveAt(0);
+            return Task.FromResult(check);
+        }
+
+        public Task<UpdateDownload> DownloadAsync(IProgress<double> progress, CancellationToken token)
+        {
+            Calls.Add("download");
+            progress.Report(0.42);
+            progress.Report(1.0);
+            return Task.FromResult(Download);
+        }
+
+        public Task ApplyAsync(CancellationToken token)
+        {
+            Calls.Add("apply");
+            if (Applying is not null) return Applying();
+            return ApplyError is null ? Task.CompletedTask : Task.FromException(ApplyError);
+        }
+
+        public void DiscardPackage() => Calls.Add("discard");
+    }
+
+    /// <summary>Что заставка показала, по порядку.</summary>
+    private sealed class Screen : IProgress<SplashState>
+    {
+        public List<string> Texts { get; } = [];
+        public void Report(SplashState value) => Texts.Add(value.Text);
     }
 
     private static CordRelease Signed(byte[] bytes) =>

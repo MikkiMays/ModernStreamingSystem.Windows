@@ -92,8 +92,8 @@
             </StackPanel>
           </ScrollViewer>
           <!--
-            Ни номера версии, ни плашки обновления в панели больше нет (T58): номер показывает только
-            «О программе», а найденное обновление не ждёт нажатия — ставится само, экраном во всё окно.
+            Ни номера версии, ни плашки обновления в панели нет (T58): номер показывает только «О программе»,
+            а найденное обновление не ждёт нажатия — его ставит заставка при запуске (SplashWindow).
           -->
           <StackPanel Grid.Row="2" Spacing="14">
             <Button Click="Settings_Click" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Height="48" Background="Transparent" BorderThickness="0" CornerRadius="10">
@@ -153,28 +153,9 @@
                 <Button Content="Открыть повторно" Click="Retry_Click" />
               </InfoBar.ActionButton>
             </InfoBar>
-            <InfoBar IsOpen="{x:Bind Model.HasUpdateNotice, Mode=TwoWay}" Title="Обновление" Message="{x:Bind Model.UpdateNotice, Mode=OneWay}" Severity="{x:Bind Model.UpdateSeverity, Mode=OneWay}" />
           </StackPanel>
         </Grid>
       </Border>
     </SplitView>
-    <!--
-      Обновление (T58) — во всё окно под шапкой и без «позже»: пока оно идёт, ни панель, ни страница
-      не нужны. Кнопки появляются только при сбое — «Повторить» или остаться в этой версии. Номера
-      версии здесь нет: его показывает только «О программе».
-    -->
-    <ContentControl x:Name="UpdateOverlay" Grid.Row="1" IsTabStop="True" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Visibility="{x:Bind Model.UpdateForced, Mode=OneWay}" AutomationProperties.Name="Обновление Cord">
-      <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-        <StackPanel MaxWidth="440" Margin="24" Spacing="16" HorizontalAlignment="Center" VerticalAlignment="Center">
-          <TextBlock Text="{x:Bind Model.UpdateTitle, Mode=OneWay}" FontSize="24" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap" />
-          <TextBlock Text="{x:Bind Model.UpdatePhase, Mode=OneWay}" FontSize="14" LineHeight="21" TextAlignment="Center" TextWrapping="Wrap" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-          <ProgressBar Width="320" Maximum="100" Value="{x:Bind Model.UpdateProgress, Mode=OneWay}" IsIndeterminate="{x:Bind Model.UpdateIndeterminate, Mode=OneWay}" Visibility="{x:Bind Model.UpdateWorking, Mode=OneWay}" />
-          <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Visibility="{x:Bind Model.UpdateFailed, Mode=OneWay}">
-            <Button Content="Повторить" Click="UpdateRetry_Click" Height="40" Padding="20,0" Background="{StaticResource CordAccent}" Foreground="White" BorderThickness="0" CornerRadius="10" />
-            <Button Content="Продолжить в этой версии" Click="UpdateContinue_Click" Height="40" Padding="20,0" CornerRadius="10" />
-          </StackPanel>
-        </StackPanel>
-      </Grid>
-    </ContentControl>
   </Grid>
 </Window>

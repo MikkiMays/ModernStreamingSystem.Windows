@@ -76,7 +76,7 @@ try {
   $stage = 'check'
   $file = [Version](Get-Item -LiteralPath (Join-Path $plan.InstallDirectory 'Cord.exe')).VersionInfo.FileVersion
   $installed = '{0}.{1}.{2}' -f $file.Major, $file.Minor, $file.Build
-  if ($plan.Version -and $installed -ne $plan.Version) { throw "Installed version is $installed, expected $($plan.Version)." }
+  if ($installed -ne $plan.Version) { throw "Installed version is $installed, expected $($plan.Version)." }
   $ok = $true
 } catch {
   $detail = $_.Exception.Message

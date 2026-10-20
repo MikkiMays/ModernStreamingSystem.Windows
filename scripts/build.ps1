@@ -17,7 +17,7 @@ try {
     $output = Join-Path $projectRoot 'artifacts\Cord-win-x64'
     & $dotnet publish src/Cord.Windows/Cord.Windows.csproj -c Release -p:Platform=x64 --self-contained true -p:PublishTrimmed=false -o $output
     if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
-    foreach ($resource in @('Cord.exe', 'Cord.pri', 'App.xbf', 'MainWindow.xbf', 'Assets\Cord.ico')) {
+    foreach ($resource in @('Cord.exe', 'Cord.pri', 'App.xbf', 'MainWindow.xbf', 'SplashWindow.xbf', 'Assets\Cord.ico')) {
       $resourcePath = Join-Path $output $resource
       if (!(Test-Path -LiteralPath $resourcePath -PathType Leaf) -or (Get-Item -LiteralPath $resourcePath).Length -eq 0) {
         throw "Incomplete Windows publication: $resource is missing or empty."
