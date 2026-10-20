@@ -56,9 +56,18 @@ jobs:
           else
             node scripts/sign-manifest.mjs release
           fi
-      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut, uninstall)
+      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut, metrics, uninstall)
         shell: pwsh
-        run: .\scripts\test-installer.ps1 -Release release
+        # metrics.json (ADR §10): размер установщика и установленного, холодный старт (медиана 5 запусков),
+        # память в покое через 60 с после главной. Пороги — предупреждения: на раннере нет GPU.
+        run: |
+          .\scripts\test-installer.ps1 -Release release -Metrics release\metrics.json -Runs 5
+          if (Test-Path release\metrics.json) {
+            "## Cord desktop: metrics.json" >> $env:GITHUB_STEP_SUMMARY
+            '```json' >> $env:GITHUB_STEP_SUMMARY
+            Get-Content release\metrics.json >> $env:GITHUB_STEP_SUMMARY
+            '```' >> $env:GITHUB_STEP_SUMMARY
+          }
       - name: Checksums
         shell: bash
         run: |
@@ -77,6 +86,7 @@ jobs:
             desktop/release/Cord-Setup-*.exe.blockmap.sha256
             desktop/release/latest.yml
             desktop/release/latest.yml.sig
+            desktop/release/metrics.json
           retention-days: 1
           if-no-files-found: error
   release:

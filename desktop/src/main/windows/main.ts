@@ -69,7 +69,7 @@ export function guardNavigation(contents: WebContents, host: MainWindowHost): vo
     const verdict = url.startsWith(SHELL_ORIGIN) || url.startsWith(OVERLAY_ORIGIN) ? 'allow' : decideNavigation(url, allowed);
     if (verdict === 'allow') return;
     event.preventDefault();
-    if (verdict === 'external') void shell.openExternal(url);
+    if (verdict === 'external') openExternal(url, host);
     else host.log(`${what} ${url}: отказ`);
   };
   contents.on('will-navigate', (event, url) => decide(event, url, 'переход'));
@@ -84,9 +84,22 @@ export function guardNavigation(contents: WebContents, host: MainWindowHost): vo
   contents.on('will-redirect', (event, url) => decide(event, url, 'перенаправление'));
   contents.on('will-attach-webview', (event) => event.preventDefault());
   contents.setWindowOpenHandler(({ url }) => {
-    if (isExternalWebLink(url)) void shell.openExternal(url);
+    if (isExternalWebLink(url)) openExternal(url, host);
     return { action: 'deny' };
   });
+}
+
+/**
+ * Внешняя https-ссылка — в браузер системы. В дымовом прогоне (`CORD_SMOKE=1`) — только в журнал:
+ * на Linux `xdg-open` запускал Firefox, тот наследовал stdout/stderr Electron и держал их открытыми,
+ * и Playwright ждал закрытия этих каналов до таймаута разбора воркера (3 минуты, код 1).
+ */
+function openExternal(url: string, host: Pick<MainWindowHost, 'log'>): void {
+  if (process.env.CORD_SMOKE === '1') {
+    host.log(`внешняя ссылка ${url}: в дымовом прогоне не открывается`);
+    return;
+  }
+  void shell.openExternal(url);
 }
 
 export class MainWindow {

@@ -70,14 +70,24 @@ test('заставка, затем главное окно с сервером �
   } finally {
     // Выход как у человека: окно закрывается крестиком, звонка нет — приложение выходит само.
     // `app.close()` Playwright под Xvfb на этом стенде зависал при живом сервере, поэтому выход
-    // проверяется напрямую: процесс обязан завершиться с кодом 0 за 15 с, иначе SIGKILL и сбой.
+    // проверяется напрямую: процесс обязан завершиться с кодом 0 за 30 с (под нагрузкой стенда 15 с не хватало), иначе SIGKILL и сбой.
     console.log('[smoke] закрываем', new Date().toISOString());
     const exited = new Promise<number | null>((resolve) => app.process().once('exit', (code) => resolve(code)));
-    const killer = setTimeout(() => app.process().kill('SIGKILL'), 15_000);
+    const killer = setTimeout(() => app.process().kill('SIGKILL'), 30_000);
     void app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w) => w.close())).catch(() => {});
     const code = await exited;
     clearTimeout(killer);
     console.log('[smoke] процесс вышел', code, new Date().toISOString());
+    // Playwright ждёт закрытия stdout/stderr Electron, а не выхода процесса: всё, что унаследовало их
+    // (раньше — Firefox из xdg-open на «внешнюю» ссылку), держало воркер до таймаута разбора, 3 минуты.
+    // Внешние ссылки в дымовом прогоне больше не открываются; остатки группы процессов — добиваются.
+    if (process.platform !== 'win32') {
+      try {
+        process.kill(-app.process().pid!, 'SIGKILL');
+      } catch {
+        /* группы уже нет — так и должно быть */
+      }
+    }
     // Соединение Playwright с уже вышедшим процессом закрывается не всегда — не ждать его дольше 5 с.
     await Promise.race([app.close().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 5_000))]);
     expect(code).toBe(0);

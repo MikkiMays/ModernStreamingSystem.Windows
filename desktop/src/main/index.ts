@@ -21,6 +21,7 @@ import { CaptureSelection, captureSourceViews, loopbackFor, readCaptureSelect, t
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
+import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { showNotification } from './notifications';
 import { ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME, shellUrl } from './protocol';
@@ -50,6 +51,10 @@ function log(message: string): void {
   }
   if (process.env.CORD_DEVTOOLS || smoke) console.log(message);
 }
+
+// Цифры для CI (ADR §10): только если задан CORD_METRICS_FILE — у человека ничего не меряется.
+const metricsFile = process.env.CORD_METRICS_FILE ?? '';
+const metrics = metricsFile ? new StartupMetrics(process.getCreationTime() ?? Date.now()) : null;
 
 registerShellScheme();
 appUserModelId();
@@ -147,6 +152,7 @@ class Shell {
   // ----- старт -----
 
   async start(): Promise<void> {
+    this.installMetrics();
     installShellProtocol();
     installShellProtocol(cordSession());
     configureSession(cordSession(), this.windowHost);
@@ -352,21 +358,28 @@ class Shell {
     log(`каталог: ${picked.source}, seq ${picked.catalog.seq}`);
   }
 
-  /** Свежий подписанный каталог из ядра (`GET /api/v1/catalog`): текущий сервер, затем главный. Неверный — остаётся прежний. */
-  private async refreshCatalog(): Promise<void> {
+  /**
+   * Свежий подписанный каталог из ядра (`GET /api/v1/catalog`): текущий сервер, затем главный.
+   * Неверный — остаётся прежний. Не вышло при запуске (сеть ещё не поднялась, машина занята) —
+   * ещё одна попытка через минуту, уже в покое.
+   */
+  private async refreshCatalog(retry = true): Promise<void> {
     if (this.catalogKeys.length === 0) return;
     const origins = [ServerOrigin.tryParse(this.settings.get().serverUrl)?.url, this.config.defaultServer].filter(
       (url, index, list): url is string => !!url && list.indexOf(url) === index,
     );
     const fresh = await fetchCatalog(
       origins,
-      (url) => net.fetch(url, { signal: AbortSignal.timeout(5000), headers: { Accept: 'application/jose+json, application/json' } }),
+      (url) => net.fetch(url, { signal: AbortSignal.timeout(10_000), headers: { Accept: 'application/jose+json, application/json' } }),
       this.catalogKeys,
       this.settings.get().catalogSeq,
       Date.now(),
       log,
     );
-    if (!fresh) return;
+    if (!fresh) {
+      if (retry && !this.quitting) setTimeout(() => void this.refreshCatalog(false), 60_000).unref();
+      return;
+    }
     this.catalog = fresh.catalog;
     this.settings.update({ catalogSeq: fresh.catalog.seq });
     try {
@@ -418,6 +431,10 @@ class Shell {
     switch (message.type) {
       case 'state':
         this.page = message.page;
+        if (message.page === 'home' && metrics && !metrics.marks.home) {
+          metrics.mark('home');
+          this.scheduleMetrics(Number(process.env.CORD_METRICS_IDLE_MS ?? 60_000));
+        }
         this.updateCall({ ...this.call, inCall: message.inCall });
         if (message.theme !== this.settings.get().theme && (message.theme === 'light' || message.theme === 'dark' || message.theme === 'system')) {
           this.settings.update({ theme: message.theme });
@@ -523,6 +540,37 @@ class Shell {
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) this.hotkeys.apply(this.settings.get().hotkeys);
     this.overlay.setVisible(next.inCall && this.settings.get().overlayEnabled);
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();
+  }
+
+  // ----- метрики CI (ADR §10) -----
+
+  private metricsTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private installMetrics(): void {
+    if (!metrics) return;
+    app.on('browser-window-created', (_, window) =>
+      window.once('ready-to-show', () => {
+        const mark = markFor(window.webContents.getURL());
+        if (mark) metrics.mark(mark);
+      }),
+    );
+    // Главная так и не пришла (стенд недоступен) — записать, что есть, через две с половиной минуты.
+    this.scheduleMetrics(150_000);
+  }
+
+  /** Память в покое — через `idleMs` после главной; файл пишется один раз. */
+  private scheduleMetrics(idleMs: number): void {
+    if (this.metricsTimer) clearTimeout(this.metricsTimer);
+    this.metricsTimer = setTimeout(() => {
+      if (!metrics) return;
+      const summary = metrics.summary(sumMemory(app.getAppMetrics()), process.platform, app.getVersion());
+      try {
+        writeFileSync(metricsFile, JSON.stringify(summary, null, 2) + '\n', 'utf8');
+        log(`метрики: ${JSON.stringify(summary)}`);
+      } catch (error) {
+        log(`метрики: не записаны — ${(error as Error).message}`);
+      }
+    }, Math.max(0, idleMs));
   }
 
   // ----- deep links -----
