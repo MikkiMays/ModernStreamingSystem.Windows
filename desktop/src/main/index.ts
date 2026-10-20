@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { featuresFor, IPC, type Bootstrap } from '../shared/bridge';
 import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
+import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type AppSettings } from './app-settings';
 import { buildConfig } from './config';
 import { CaptureSelection, captureSourceViews, loopbackFor, readCaptureSelect, type AudioMode, type CaptureSourceView } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
@@ -102,11 +103,15 @@ class Shell {
     rememberExpected: (version) => void this.settings.update({ expectedVersion: version }),
     log,
   });
-  private readonly taskbar = new Taskbar(app.getAppPath(), {
-    open: () => this.focus(),
-    toggleMicrophone: () => this.router.post('thumbar', { action: 'mic' }),
-    quit: () => this.quit(),
-  });
+  private readonly taskbar = new Taskbar(
+    app.getAppPath(),
+    {
+      open: () => this.focus(),
+      toggleMicrophone: () => this.router.post('thumbar', { action: 'mic' }),
+      quit: () => this.quit(),
+    },
+    () => this.settings.get(),
+  );
   private readonly hotkeys = new HotkeyRegistry(
     {
       register: (accelerator, callback) => {
@@ -118,7 +123,11 @@ class Shell {
       },
       unregister: (accelerator) => globalShortcut.unregister(accelerator),
     },
-    (action) => this.router.post('hotkey', { action, phase: 'down' }),
+    (action) => {
+      // Оверлей — окно оболочки: клавиша переключает его здесь же, веб узнаёт событием app.settings.
+      if (action === 'overlay.toggle') this.applyAppSettings({ overlay: !this.settings.get().overlayEnabled }, true);
+      else this.router.post('hotkey', { action, phase: 'down' });
+    },
   );
   private readonly capture = new CaptureSelection();
   private readonly overlay = new OverlayWindow(this.preloadDir);
@@ -130,6 +139,8 @@ class Shell {
   private call: CallState = { inCall: false, mic: false, camera: false, screen: false };
   private sleepBlocker: number | null = null;
   private pendingLink: DeepLink | null = null;
+  /** Запуск вместе с Windows (`--hidden`): первое главное окно открывается свёрнутым. */
+  private startMinimized = process.argv.includes('--hidden');
   private checkTimer: ReturnType<typeof setTimeout> | null = null;
   private quitting = false;
 
@@ -143,8 +154,8 @@ class Shell {
     this.installShellCalls();
     this.installDisplayMedia();
     this.pendingLink = deepLinkFromArgv(process.argv);
-    // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) пишет settings.autostart.
-    if (process.platform === 'win32' && app.isPackaged) app.setLoginItemSettings({ openAtLogin: this.settings.get().autostart, args: ['--hidden'] });
+    // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) — app.settings.
+    this.applyAutostart();
     this.loadCatalog();
     // Свежий каталог — в фоне, параллельно с заставкой: пять секунд сети не должны держать запуск.
     void this.refreshCatalog();
@@ -171,13 +182,10 @@ class Shell {
 
   private async openMain(): Promise<void> {
     const saved = this.settings.get();
-    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme);
+    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, this.startMinimized);
+    this.startMinimized = false;
     this.main = main;
-    try {
-      this.taskbar.installTray();
-    } catch (error) {
-      log(`трей: ${(error as Error).message}`);
-    }
+    if (saved.tray) this.installTray();
     await main.showLoading();
     const origin = this.currentOrigin();
     await this.router.prepareBootstrap(origin);
@@ -220,6 +228,52 @@ class Shell {
       ipcMain.on(IPC.send, onReady);
       this.router.post('close-request');
     });
+  }
+
+  private installTray(): void {
+    try {
+      this.taskbar.installTray();
+    } catch (error) {
+      log(`трей: ${(error as Error).message}`);
+    }
+  }
+
+  private applyAutostart(): void {
+    if (process.platform !== 'win32' || !app.isPackaged) return;
+    try {
+      app.setLoginItemSettings({ openAtLogin: this.settings.get().autostart, args: ['--hidden'] });
+    } catch (error) {
+      log(`автозапуск: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Переключатели раздела «Windows» (E03, T53): записать и сразу применить. `announce` — изменение
+   * пришло не от веба (клавиша оверлея), и открытые настройки должны его увидеть.
+   */
+  private applyAppSettings(patch: Partial<AppSettings>, announce = false): AppSettings {
+    const next = Object.keys(patch).length ? this.settings.update(settingsPatchOf(patch)) : this.settings.get();
+    const window = this.main?.window ?? null;
+    if (patch.tray !== undefined) {
+      if (!next.tray) this.taskbar.removeTray();
+      else if (this.main) this.installTray();
+    }
+    if (patch.autostart !== undefined) this.applyAutostart();
+    if (patch.overlay !== undefined) this.overlay.setVisible(this.call.inCall && next.overlayEnabled);
+    if (patch.thumbar !== undefined || patch.badge !== undefined) this.taskbar.refresh(window);
+    if (patch.sleepBlocker !== undefined) this.applySleepBlocker();
+    const values = appSettingsOf(next);
+    if (announce) this.router.post('app.settings', { ...values });
+    return values;
+  }
+
+  private applySleepBlocker(): void {
+    const awake = keepAwake(this.call, this.settings.get());
+    if (awake && this.sleepBlocker === null) this.sleepBlocker = powerSaveBlocker.start('prevent-display-sleep');
+    if (!awake && this.sleepBlocker !== null) {
+      powerSaveBlocker.stop(this.sleepBlocker);
+      this.sleepBlocker = null;
+    }
   }
 
   private quit(): void {
@@ -436,6 +490,12 @@ class Shell {
         return { token: null };
       case 'capture.sources':
         return this.captureSources();
+      case 'app.settings': {
+        // Пустой патч — чтение; чужое имя или не true/false — отказ целиком.
+        const patch = readAppSettingsPatch(payload);
+        if (!patch) throw new Error('Недоступно.');
+        return this.applyAppSettings(patch);
+      }
       case 'capture.select': {
         // Запрос с ответом, а не сообщение: веб ждёт ответа и только потом зовёт getDisplayMedia —
         // иначе запрос захвата мог бы обогнать выбор, и человек увидел бы второе окно выбора.
@@ -459,12 +519,7 @@ class Shell {
       camera: () => this.router.post('thumbar', { action: 'camera' }),
       leave: () => this.router.post('thumbar', { action: 'leave' }),
     });
-    const keepAwake = next.inCall || next.screen;
-    if (keepAwake && this.sleepBlocker === null) this.sleepBlocker = powerSaveBlocker.start('prevent-display-sleep');
-    if (!keepAwake && this.sleepBlocker !== null) {
-      powerSaveBlocker.stop(this.sleepBlocker);
-      this.sleepBlocker = null;
-    }
+    this.applySleepBlocker();
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) this.hotkeys.apply(this.settings.get().hotkeys);
     this.overlay.setVisible(next.inCall && this.settings.get().overlayEnabled);
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();

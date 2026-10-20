@@ -24,6 +24,12 @@ export interface Settings {
   servers: ServerEntry[];
   catalogSeq: number;
   hotkeys: HotkeyBinding[];
+  /** Переключатели раздела «Windows» в настройках веба (`app-settings.ts`, ADR §4.4). */
+  tray: boolean;
+  thumbar: boolean;
+  badge: boolean;
+  flash: boolean;
+  sleepBlocker: boolean;
   overlayEnabled: boolean;
   autostart: boolean;
   sidebarWidth: number;
@@ -41,6 +47,11 @@ const DEFAULTS: Settings = {
   servers: [],
   catalogSeq: 0,
   hotkeys: [],
+  tray: true,
+  thumbar: true,
+  badge: true,
+  flash: true,
+  sleepBlocker: true,
   overlayEnabled: false,
   autostart: false,
   sidebarWidth: 280,
@@ -115,7 +126,7 @@ function sanitize(raw: unknown): Partial<Settings> {
   const origin = ServerOrigin.tryParse(data.serverUrl);
   if (origin) result.serverUrl = origin.url;
   if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') result.theme = data.theme;
-  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'overlayEnabled', 'autostart'] as const)
+  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart'] as const)
     if (typeof data[flag] === 'boolean') result[flag] = data[flag] as boolean;
   if (typeof data.catalogSeq === 'number' && Number.isInteger(data.catalogSeq) && data.catalogSeq >= 0) result.catalogSeq = data.catalogSeq;
   if (typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 600) result.sidebarWidth = Math.round(data.sidebarWidth);

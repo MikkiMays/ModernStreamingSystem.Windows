@@ -22,11 +22,15 @@ export const FEATURES = [
   'servers',
   'update',
   'power',
+  'app.settings', // переключатели раздела «Windows» в настройках веба: invoke('app.settings', патч), событие app.settings
+  'tray', // значок в трее
+  'sleep', // запрет сна во время встречи (powerSaveBlocker)
+  'autostart', // запуск вместе с Windows
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
-/** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки — API панели задач Windows. */
-const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge']);
+/** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки (API панели задач), автозапуск. */
+const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge', 'autostart']);
 
 /** Флаги этой машины: веб не показывает переключатель того, чего здесь нет. */
 export function featuresFor(platform: NodeJS.Platform): Feature[] {
@@ -55,7 +59,7 @@ export const PAGE_MESSAGES = [
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
 
 /** Запросы страницы с ответом (`invoke`). */
-export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select'] as const;
+export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select', 'app.settings'] as const;
 export type PageCall = (typeof PAGE_CALLS)[number];
 
 /** Сообщения оболочки странице (`on`). */
@@ -78,6 +82,7 @@ export const HOST_MESSAGES = [
   'notification.action',
   'power',
   'capture.ended',
+  'app.settings',
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 

@@ -93,7 +93,7 @@ export class MainWindow {
   readonly window: BrowserWindow;
   private closing = false;
 
-  constructor(preloadDir: string, private readonly host: MainWindowHost, saved: Settings['window'], theme: Settings['theme']) {
+  constructor(preloadDir: string, private readonly host: MainWindowHost, saved: Settings['window'], theme: Settings['theme'], minimized = false) {
     nativeTheme.themeSource = theme;
     const dark = nativeTheme.shouldUseDarkColors;
     this.window = new BrowserWindow({
@@ -141,7 +141,8 @@ export class MainWindow {
       });
     });
     this.window.on('closed', () => host.onClosed());
-    this.window.once('ready-to-show', () => this.window.show());
+    // Запуск вместе с Windows — свёрнутым в панель задач, без фокуса: человек не просил окно прямо сейчас.
+    this.window.once('ready-to-show', () => (minimized ? this.window.minimize() : this.window.show()));
   }
 
   remember(): void {

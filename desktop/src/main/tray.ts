@@ -7,6 +7,7 @@
 import { app, BrowserWindow, Menu, nativeImage, Tray, type NativeImage } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { overlayIconFor, showThumbar, type AppSettings } from './app-settings';
 
 export interface TrayHost {
   open(): void;
@@ -33,13 +34,19 @@ function dot(color: string): NativeImage {
   return nativeImage.createFromDataURL('data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64'));
 }
 
+export type TaskbarOptions = Pick<AppSettings, 'thumbar' | 'badge' | 'flash' | 'sleepBlocker'>;
+
 export class Taskbar {
   private tray: Tray | null = null;
   private state: CallState = { inCall: false, mic: false, camera: false, screen: false };
+  private unread = 0;
+  private actions: { mic(): void; camera(): void; leave(): void } = { mic() {}, camera() {}, leave() {} };
 
   constructor(
     private readonly appPath: string,
     private readonly host: TrayHost,
+    /** Переключатели раздела «Windows» (E03) — читаются при каждом обновлении, а не запоминаются. */
+    private readonly options: () => TaskbarOptions,
   ) {}
 
   installTray(): void {
@@ -62,29 +69,56 @@ export class Taskbar {
     );
   }
 
+  /** Убрать значок из трея — переключатель «Значок в трее» выключили. */
+  removeTray(): void {
+    this.tray?.destroy();
+    this.tray = null;
+  }
+
   /** Кнопки на миниатюре и значок поверх иконки — по состоянию звонка. */
   applyCall(window: BrowserWindow | null, state: CallState, actions: { mic(): void; camera(): void; leave(): void }): void {
     this.state = state;
+    this.actions = actions;
     this.refreshTray();
-    if (!window || window.isDestroyed()) return;
-    if (process.platform !== 'win32') return;
-    if (!state.inCall) {
-      window.setThumbarButtons([]);
-      window.setOverlayIcon(null, '');
-      return;
-    }
-    window.setThumbarButtons([
-      { tooltip: state.mic ? 'Выключить микрофон' : 'Включить микрофон', icon: dot(state.mic ? '#3ddc84' : '#8a93a6'), click: actions.mic },
-      { tooltip: state.camera ? 'Выключить камеру' : 'Включить камеру', icon: dot(state.camera ? '#3564f3' : '#8a93a6'), click: actions.camera },
-      { tooltip: 'Завершить', icon: dot('#e5484d'), click: actions.leave },
-    ]);
-    window.setOverlayIcon(dot(state.mic ? '#3ddc84' : '#e5484d'), state.mic ? 'Во встрече' : 'Микрофон выключен');
+    this.render(window);
   }
 
   setBadge(window: BrowserWindow | null, count: number): void {
-    if (!window || window.isDestroyed() || process.platform !== 'win32' || this.state.inCall) return;
-    if (count <= 0) window.setOverlayIcon(null, '');
-    else window.setOverlayIcon(dot('#3564f3'), `${count} непрочитанных`);
+    this.unread = count;
+    this.render(window);
+  }
+
+  /** Перерисовать после смены переключателей. */
+  refresh(window: BrowserWindow | null): void {
+    this.render(window);
+  }
+
+  private render(window: BrowserWindow | null): void {
+    if (!window || window.isDestroyed() || process.platform !== 'win32') return;
+    const options = this.options();
+    const state = this.state;
+    window.setThumbarButtons(
+      showThumbar(state, options)
+        ? [
+            { tooltip: state.mic ? 'Выключить микрофон' : 'Включить микрофон', icon: dot(state.mic ? '#3ddc84' : '#8a93a6'), click: () => this.actions.mic() },
+            { tooltip: state.camera ? 'Выключить камеру' : 'Включить камеру', icon: dot(state.camera ? '#3564f3' : '#8a93a6'), click: () => this.actions.camera() },
+            { tooltip: 'Завершить', icon: dot('#e5484d'), click: () => this.actions.leave() },
+          ]
+        : [],
+    );
+    switch (overlayIconFor(state, this.unread, options)) {
+      case 'in-call':
+        window.setOverlayIcon(dot('#3ddc84'), 'Во встрече');
+        return;
+      case 'muted':
+        window.setOverlayIcon(dot('#e5484d'), 'Микрофон выключен');
+        return;
+      case 'unread':
+        window.setOverlayIcon(dot('#3564f3'), `${this.unread} непрочитанных`);
+        return;
+      case null:
+        window.setOverlayIcon(null, '');
+    }
   }
 
   setProgress(window: BrowserWindow | null, value: number): void {
@@ -93,7 +127,7 @@ export class Taskbar {
   }
 
   attention(window: BrowserWindow | null): void {
-    if (!window || window.isDestroyed() || window.isFocused()) return;
+    if (!this.options().flash || !window || window.isDestroyed() || window.isFocused()) return;
     window.flashFrame(true);
     window.once('focus', () => window.flashFrame(false));
   }
