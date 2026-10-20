@@ -27,7 +27,6 @@ import { ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME, shellUrl } from './protocol';
 import { SettingsStore } from './settings';
 import { Taskbar, type CallState } from './tray';
-import { publicKey } from './update/manifest';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
 import { CordUpdater } from './update/updater';
 import { appUserModelId, configureSession, cordSession, MainWindow } from './windows/main';
@@ -163,7 +162,7 @@ class Shell {
     // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) — app.settings.
     this.applyAutostart();
     this.loadCatalog();
-    // Свежий каталог — в фоне, параллельно с заставкой: пять секунд сети не должны держать запуск.
+    // Свежий каталог — в фоне, параллельно с заставкой: ожидание сети не должно держать запуск.
     void this.refreshCatalog();
     await this.splashThenMain();
   }
