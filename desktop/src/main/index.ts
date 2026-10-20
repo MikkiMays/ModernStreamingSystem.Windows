@@ -141,6 +141,8 @@ class Shell {
     this.installShellCalls();
     this.installDisplayMedia();
     this.pendingLink = deepLinkFromArgv(process.argv);
+    // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) пишет settings.autostart.
+    if (process.platform === 'win32' && app.isPackaged) app.setLoginItemSettings({ openAtLogin: this.settings.get().autostart, args: ['--hidden'] });
     await this.loadCatalog();
     await this.splashThenMain();
   }

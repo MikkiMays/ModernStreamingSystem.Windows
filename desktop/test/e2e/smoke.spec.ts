@@ -28,7 +28,11 @@ test('заставка, затем главное окно с сервером �
   });
   try {
     const splash = await windowWithUrl(app, 'cord-app://shell/splash.html', 30_000);
-    await expect(splash.locator('#status')).toContainText(/Проверяем обновления|Не удалось|остановилась/);
+    // В сборке разработчика зеркало не спрашивается, и заставка уступает место окну за доли секунды.
+    if (!splash.isClosed()) {
+      const status = await splash.locator('#status').textContent().catch(() => null);
+      if (status !== null) expect(status).toMatch(/Проверяем обновления|Не удалось|остановилась|Загружаем|Устанавливаем/);
+    }
     // Зеркало недоступно (порт 9): через ≤ 5 с заставка уступает место главному окну.
     const main = await windowWithUrl(app, server, 60_000);
     console.log('[smoke] главное окно на сервере', new Date().toISOString());
@@ -64,8 +68,18 @@ test('заставка, затем главное окно с сервером �
     const version = await app.evaluate(({ app: electronApp }) => electronApp.getVersion());
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
   } finally {
+    // Выход как у человека: окно закрывается крестиком, звонка нет — приложение выходит само.
+    // `app.close()` Playwright под Xvfb на этом стенде зависал при живом сервере, поэтому выход
+    // проверяется напрямую: процесс обязан завершиться с кодом 0 за 15 с, иначе SIGKILL и сбой.
     console.log('[smoke] закрываем', new Date().toISOString());
-    await app.close();
-    console.log('[smoke] закрыто', new Date().toISOString());
+    const exited = new Promise<number | null>((resolve) => app.process().once('exit', (code) => resolve(code)));
+    const killer = setTimeout(() => app.process().kill('SIGKILL'), 15_000);
+    void app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w) => w.close())).catch(() => {});
+    const code = await exited;
+    clearTimeout(killer);
+    console.log('[smoke] процесс вышел', code, new Date().toISOString());
+    // Соединение Playwright с уже вышедшим процессом закрывается не всегда — не ждать его дольше 5 с.
+    await Promise.race([app.close().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+    expect(code).toBe(0);
   }
 });
