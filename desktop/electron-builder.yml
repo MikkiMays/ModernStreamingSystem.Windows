@@ -58,6 +58,10 @@ nsis:
   installerSidebar: build/installerSidebar.bmp
   uninstallerSidebar: build/installerSidebar.bmp
   include: build/installer.nsh
+  # Языки мастера — языки Cord (П9, T03): мастер говорит на языке Windows, остальным — по-английски
+  # (первый в списке). Окна выбора языка нет: тот же язык Windows возьмёт и приложение, а сменить его
+  # можно в настройках Cord. Тексты своих страниц — LangString в build/installer.nsh, по одному на язык.
+  installerLanguages: [en_US, ru_RU, es_ES, fr_FR, it_IT, zh_CN, de_DE, pt_BR]
   language: 1049
   multiLanguageInstaller: true
   displayLanguageSelector: false
