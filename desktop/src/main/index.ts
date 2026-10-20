@@ -12,11 +12,11 @@ import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, n
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
-import { FEATURES, IPC, type Bootstrap } from '../shared/bridge';
+import { featuresFor, IPC, type Bootstrap } from '../shared/bridge';
 import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
 import { buildConfig } from './config';
-import { CaptureSelection, loopbackFor, type AudioMode } from './capture';
+import { CaptureSelection, captureSourceViews, loopbackFor, readCaptureSelect, type AudioMode, type CaptureSourceView } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
@@ -91,6 +91,7 @@ class Shell {
     message: (message, sender) => this.onMessage(message, sender),
     call: (method, payload) => this.onCall(method, payload),
     version: () => app.getVersion(),
+    features: () => featuresFor(process.platform),
     log,
   });
   private readonly updater = new CordUpdater({
@@ -433,17 +434,15 @@ class Shell {
       case 'session.renew':
         // Пароль сервера оболочка не хранит (В-2): рукопожатие делает сама страница.
         return { token: null };
-      case 'capture.sources': {
-        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
-        return sources
-          .filter((source) => !source.name.startsWith('Cord'))
-          .map((source) => ({
-            id: source.id,
-            name: source.name.slice(0, 80),
-            kind: source.id.startsWith('screen') ? 'screen' : 'window',
-            thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
-            icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.resize({ width: 24 }).toDataURL() : '',
-          }));
+      case 'capture.sources':
+        return this.captureSources();
+      case 'capture.select': {
+        // Запрос с ответом, а не сообщение: веб ждёт ответа и только потом зовёт getDisplayMedia —
+        // иначе запрос захвата мог бы обогнать выбор, и человек увидел бы второе окно выбора.
+        const selection = readCaptureSelect(payload);
+        if (!selection) throw new Error('Недоступно.');
+        this.capture.select(selection.id, selection.audio);
+        return { ok: true };
       }
       default:
         void payload;
@@ -532,6 +531,13 @@ class Shell {
   }
 
   // ----- захват -----
+
+  /** Экраны и окна для окна выбора (веба или оболочки): миниатюры ≤ 320 px, без своих окон Cord. */
+  private async captureSources(): Promise<{ systemAudio: boolean; sources: CaptureSourceView[] }> {
+    const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
+    const own = new Set(BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId()));
+    return { systemAudio: process.platform === 'win32', sources: captureSourceViews(sources, own) };
+  }
 
   private picker: BrowserWindow | null = null;
   private pickerResolve: ((selection: { id: string; audio: AudioMode } | null) => void) | null = null;
@@ -653,21 +659,8 @@ class Shell {
           this.router.attach(this.main.window.webContents, origin);
           return this.main.open(origin);
         }
-        case 'capture.sources': {
-          const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
-          return {
-            systemAudio: process.platform === 'win32',
-            sources: sources
-              .filter((source) => !source.name.startsWith('Cord'))
-              .map((source) => ({
-                id: source.id,
-                name: source.name.slice(0, 80),
-                kind: source.id.startsWith('screen') ? 'screen' : 'window',
-                thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
-                icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.resize({ width: 24 }).toDataURL() : '',
-              })),
-          };
-        }
+        case 'capture.sources':
+          return this.captureSources();
         case 'capture.pick': {
           const id = typeof data.id === 'string' && /^(screen|window):\d+:\d+$/.test(data.id) ? data.id : null;
           const audio: AudioMode = data.audio === 'system' ? 'system' : 'none';
@@ -678,7 +671,7 @@ class Shell {
           this.finishPicker(null);
           return true;
         case 'shell.features':
-          return { features: FEATURES, version: app.getVersion() };
+          return { features: featuresFor(process.platform), version: app.getVersion() };
         default:
           return null;
       }

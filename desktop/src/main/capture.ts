@@ -49,3 +49,54 @@ export class CaptureSelection {
 export function loopbackFor(audio: AudioMode, platform: NodeJS.Platform): 'loopback' | null {
   return audio === 'system' && platform === 'win32' ? 'loopback' : null;
 }
+
+/** Источник показа так, как его видит окно выбора веба (`invoke('capture.sources')`). */
+export interface CaptureSourceView {
+  id: string;
+  name: string;
+  kind: 'screen' | 'window';
+  /** `data:image/png` ≤ 320×180 или пустая строка. */
+  thumbnail: string;
+  /** Значок приложения 24 px или пустая строка. */
+  icon: string;
+}
+
+interface Picture {
+  isEmpty(): boolean;
+  toDataURL(): string;
+}
+export interface RawSource {
+  id: string;
+  name: string;
+  thumbnail: Picture;
+  appIcon?: (Picture & { resize(options: { width: number }): { toDataURL(): string } }) | null;
+}
+
+/**
+ * Источники из `desktopCapturer.getSources` → строки окна выбора. Свои окна Cord (главное, выбор,
+ * оверлей) убираются по id источника (`BrowserWindow.getMediaSourceId()`), а не по заголовку: чужое
+ * окно с «Cord» в имени — например, заметки о встрече — показывать можно.
+ */
+export function captureSourceViews(sources: readonly RawSource[], own: ReadonlySet<string>): CaptureSourceView[] {
+  return sources
+    .filter((source) => !own.has(source.id))
+    .map((source) => ({
+      id: source.id,
+      name: source.name.slice(0, 80),
+      kind: source.id.startsWith('screen:') ? ('screen' as const) : ('window' as const),
+      thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
+      icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.resize({ width: 24 }).toDataURL() : '',
+    }));
+}
+
+const SOURCE_ID = /^(screen|window):\d+:\d+$/;
+const AUDIO_MODES: readonly AudioMode[] = ['none', 'system', 'app', 'system-except-cord'];
+
+/** `capture.select {id, audio}` — одна проверка и для `invoke`, и для прежнего `send`. */
+export function readCaptureSelect(payload: unknown): { id: string; audio: AudioMode } | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const data = payload as Record<string, unknown>;
+  if (typeof data.id !== 'string' || !SOURCE_ID.test(data.id)) return null;
+  if (!AUDIO_MODES.includes(data.audio as AudioMode)) return null;
+  return { id: data.id, audio: data.audio as AudioMode };
+}

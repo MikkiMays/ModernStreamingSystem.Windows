@@ -15,6 +15,8 @@ export interface BridgeHandlers {
   call(method: string, payload: unknown, sender: WebContents): Promise<unknown>;
   /** Версия приложения — только для «О программы» в вебе. */
   version(): string;
+  /** Флаги этой машины (`featuresFor`) — preload отдаёт их странице вместо полного списка. */
+  features(): readonly string[];
   log(message: string): void;
 }
 
@@ -52,7 +54,7 @@ export class BridgeRouter {
       const origin = this.current;
       // sendSync не умеет ждать — bootstrap готовится заранее (`prepareBootstrap`), здесь только отдаётся.
       const bootstrap = this.prepared.get(origin.origin);
-      event.returnValue = bootstrap ? { bootstrap, version: this.handlers.version() } : null;
+      event.returnValue = bootstrap ? { bootstrap, version: this.handlers.version(), features: this.handlers.features() } : null;
     });
     ipcMain.on(IPC.send, (event, type: unknown, payload: unknown) => {
       if (!this.trusted(event.senderFrame, event.sender)) return;
