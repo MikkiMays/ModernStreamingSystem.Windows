@@ -52,9 +52,9 @@ jobs:
         run: npm run build:native
       - name: Typecheck
         run: npm run typecheck
-      - name: Unit tests (bridge boundaries, manifest signature, splash flow, hotkeys, catalog, native client)
+      - name: Unit tests (bridge boundaries, manifest signature, splash flow, hotkeys, catalog, native client, close policy, settings migration, tray icon)
         run: npm test
-      - name: Build main, preload and shell pages
+      - name: Build main, preload and shell pages (ends with scripts/check-dist.mjs — tray.ico and shell pages must be in dist)
         run: npm run build
       - name: Check the native module is in dist
         run: node scripts/build-native.mjs --check
@@ -79,7 +79,7 @@ jobs:
           else
             node scripts/sign-manifest.mjs release
           fi
-      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut, native module loads, metrics, uninstall)
+      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall)
         shell: pwsh
         # metrics.json (ADR §10): размер установщика и установленного, холодный старт (медиана 5 запусков),
         # память в покое через 60 с после главной. Пороги — предупреждения: на раннере нет GPU.
