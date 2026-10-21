@@ -9,6 +9,14 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+/**
+ * AppUserModelID приложения (R59). Тот же, что `appId` в `electron-builder.yml`: установщик пишет
+ * его в ярлыки меню «Пуск» и рабочего стола (`WinShell::SetLnkAUMI`), а процесс объявляет его через
+ * `app.setAppUserModelId`. Расходятся — Windows не показывает уведомления и не группирует окна
+ * на панели задач. Совпадение сверяет `test/unit/config.test.ts`.
+ */
+export const APP_ID = 'tech.cord.desktop';
+
 export interface BuildConfig {
   /** Канал обновлений: каталог с `latest.yml`, `latest.yml.sig` и установщиком. */
   updateChannel: string;

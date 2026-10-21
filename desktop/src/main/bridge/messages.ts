@@ -42,7 +42,7 @@ export type Validated =
   | { type: 'update.check' }
   | { type: 'update.apply' }
   | { type: 'overlay.state'; participants: { name: string; tier: number; speaking: boolean }[] }
-  | { type: 'notify'; title: string; body: string; tag?: string; actions?: { id: string; text: string }[] }
+  | { type: 'notify'; title: string; body: string; tag?: string; silent?: boolean; actions?: { id: string; text: string }[] }
   | { type: 'attention' }
   | { type: 'progress'; value: number }
   | { type: 'badge'; count: number }
@@ -169,7 +169,8 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
           actions.push({ id: action.id, text: label });
         }
       }
-      return { type: kind, title, body, ...(tag ? { tag } : {}), ...(actions ? { actions } : {}) };
+      // `silent` — без системного звука: веб озвучивает событие сам (R59).
+      return { type: kind, title, body, ...(tag ? { tag } : {}), ...(data.silent === true ? { silent: true } : {}), ...(actions ? { actions } : {}) };
     }
     case 'progress': {
       if (typeof data.value !== 'number' || !Number.isFinite(data.value)) return null;

@@ -36,6 +36,13 @@ if (bootstrap && window === window.top) {
     if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) saved = {};
     saved.showPing = bootstrap.showPing;
     saved.notificationSounds = bootstrap.notificationSounds;
+    // Язык из установщика (R64) — один раз на origin: дальше человек выбирает язык в настройках Cord,
+    // и даже возврат к «языку системы» (null) оболочка не перебивает.
+    const handed = 'cord:installer-language';
+    if (bootstrap.language && localStorage.getItem(handed) !== bootstrap.language) {
+      if (typeof saved.language !== 'string') saved.language = bootstrap.language;
+      localStorage.setItem(handed, bootstrap.language);
+    }
     localStorage.setItem('cord:preferences:v1', JSON.stringify(saved));
     let server: Record<string, unknown> = {};
     try {
@@ -168,7 +175,7 @@ const api: CordDesktopApi = {
   protocol: PROTOCOL,
   features,
   app: { version: handed?.version ?? '', arch: process.arch as 'x64' },
-  bootstrap: bootstrap ?? { profile: '', theme: 'system', showPing: false, notificationSounds: true, autoConnect: true },
+  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true },
   send(type, payload) {
     if (!(PAGE_MESSAGES as readonly string[]).includes(type)) return;
     ipcRenderer.send(IPC.send, type, payload ?? {});

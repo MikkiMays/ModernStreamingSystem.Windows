@@ -91,6 +91,7 @@ export const HOST_MESSAGES = [
   'capture.ended',
   'app.settings',
   'capture.audio', // {state: 'ready' | 'failed' | 'ended', mode, reason?} — звук приложения / системы кроме Cord (cord-native)
+  'window.state', // {focused, visible} — окно в фокусе / видно (спрятано в трей, свёрнуто): уведомления только когда человек не смотрит (R59)
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 
@@ -98,6 +99,8 @@ export interface Bootstrap {
   /** Секрет профиля для этого origin — 43 символа base64url, как писал WinUI. */
   profile: string;
   theme: 'light' | 'dark' | 'system';
+  /** Язык, выбранный в установщике (R64); null — веб выбирает сам. Применяется один раз на origin. */
+  language: string | null;
   showPing: boolean;
   notificationSounds: boolean;
   autoConnect: boolean;

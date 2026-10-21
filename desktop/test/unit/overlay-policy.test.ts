@@ -9,8 +9,8 @@ describe('decideOverlay — когда и где оверлей', () => {
     expect(decideOverlay(true, false, { fullscreen: true, cord: false, monitor })).toEqual({ visible: false, anchor: null });
   });
 
-  it('без cord-native — виден во встрече на дисплее главного окна', () => {
-    expect(decideOverlay(true, true, null)).toEqual({ visible: true, anchor: null });
+  it('без сведений о переднем окне (нет cord-native) — не виден: иначе лёг бы поверх самого Cord (R61)', () => {
+    expect(decideOverlay(true, true, null)).toEqual({ visible: false, anchor: null });
   });
 
   it('впереди игра во весь монитор — виден в углу её монитора; впереди Cord или окно поменьше — нет', () => {
