@@ -28,6 +28,10 @@ $target = Join-Path $env:LOCALAPPDATA 'Programs\Cord'
 $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
 if ($process.ExitCode -ne 0) { throw "Тихая установка вернула код $($process.ExitCode)" }
 if (-not (Test-Path (Join-Path $target 'Cord.exe'))) { throw "Cord.exe не найден в $target" }
+# cord-native (ADR §4.6): модуль распакован рядом с asar — иначе utility-процесс его не загрузит.
+$nativeModule = Join-Path $target 'resources\app.asar.unpacked\dist\native\cord-native.win32-x64-msvc.node'
+if (-not (Test-Path $nativeModule)) { throw "Нативный модуль не найден: $nativeModule" }
+Write-Host "cord-native: $([math]::Round((Get-Item $nativeModule).Length / 1KB)) КиБ"
 
 # Карточка Windows: издатель Cord и ни одной ссылки.
 $keys = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { ($_ | Get-ItemProperty).DisplayName -eq 'Cord' }
@@ -91,6 +95,13 @@ for ($run = 1; $run -le $launches; $run++) {
   }
   if ($app.HasExited) { throw "Cord вышел сразу с кодом $($app.ExitCode)" }
   if ($run -eq 1 -and (Test-Path $log)) { Get-Content $log | Select-Object -Last 10 | ForEach-Object { Write-Host "  log: $_" } }
+  if ($run -eq 1) {
+    # Установленный Cord обязан загрузить cord-native в utility-процессе (строка пишется при ответе ready).
+    $nativeLine = if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match 'native: ' } | Select-Object -Last 1 } else { $null }
+    if (-not $nativeLine) { throw 'В журнале нет строки о cord-native: utility-процесс не ответил' }
+    if ($nativeLine -notmatch 'native: загружен') { throw "cord-native не загрузился: $nativeLine" }
+    Write-Host "cord-native в установленном Cord: $nativeLine"
+  }
   Stop-Process -Id $app.Id -Force
   Get-Process Cord -ErrorAction SilentlyContinue | Stop-Process -Force
   Start-Sleep -Seconds 2

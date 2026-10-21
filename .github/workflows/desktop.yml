@@ -29,13 +29,36 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - name: Install locked dependencies
         run: npm ci
+      - name: Rust toolchain (pinned by native/rust-toolchain.toml)
+        # rustup из образа раннера ставит закреплённую версию сам при первом cargo в каталоге крейта.
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          cargo --version
+          rustc --version
+        working-directory: desktop/native
+      - name: Cache cargo registry and native target
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            desktop/native/target
+          key: cord-native-${{ runner.os }}-${{ hashFiles('desktop/native/Cargo.lock', 'desktop/native/rust-toolchain.toml') }}
+          restore-keys: cord-native-${{ runner.os }}-
+      - name: Native unit tests (hotkey matcher, PCM pacer, foreground tracker)
+        run: npm run test:native
+      - name: Build cord-native (Raw Input, process loopback, foreground window)
+        # cargo build --release → dist/native/cord-native.win32-x64-msvc.node (вне asar, ADR §4.6).
+        run: npm run build:native
       - name: Typecheck
         run: npm run typecheck
-      - name: Unit tests (bridge boundaries, manifest signature, splash flow, hotkeys, catalog)
+      - name: Unit tests (bridge boundaries, manifest signature, splash flow, hotkeys, catalog, native client)
         run: npm test
       - name: Build main, preload and shell pages
         run: npm run build
-      - name: Smoke test (Playwright _electron against the stand)
+      - name: Check the native module is in dist
+        run: node scripts/build-native.mjs --check
+      - name: Smoke test (Playwright _electron against the stand; loads cord-native in the utility process)
         env:
           CORD_SMOKE_SERVER: https://cord.nikg.tech/
         run: npm run test:e2e
@@ -56,10 +79,11 @@ jobs:
           else
             node scripts/sign-manifest.mjs release
           fi
-      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut, metrics, uninstall)
+      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut, native module loads, metrics, uninstall)
         shell: pwsh
         # metrics.json (ADR §10): размер установщика и установленного, холодный старт (медиана 5 запусков),
         # память в покое через 60 с после главной. Пороги — предупреждения: на раннере нет GPU.
+        # Нативный модуль: файл в app.asar.unpacked и строка «native: загружен» в журнале установленного Cord.
         run: |
           .\scripts\test-installer.ps1 -Release release -Metrics release\metrics.json -Runs 5
           if (Test-Path release\metrics.json) {

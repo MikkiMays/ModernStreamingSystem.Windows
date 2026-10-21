@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureSourceViews, readCaptureSelect } from '../../src/main/capture';
+import { captureSourceViews, nativeAudioFor, readAudioMode, readCaptureSelect } from '../../src/main/capture';
 import { isPageCall, readPageMessage } from '../../src/main/bridge/messages';
 import { featuresFor, FEATURES } from '../../src/shared/bridge';
 
@@ -39,12 +39,46 @@ describe('capture.select — запрос с ответом и прежнее с
   });
 });
 
-describe('флаги возможностей по платформе', () => {
-  it('Windows — всё; на остальных нет системного звука, кнопок миниатюры, значка и автозапуска', () => {
-    expect(featuresFor('win32')).toEqual([...FEATURES]);
+describe('звук через cord-native (process loopback)', () => {
+  it('app — дерево процессов окна; system-except-cord — всё, кроме Cord; экран без приложения и без модуля — отказ с причиной', () => {
+    expect(nativeAudioFor({ id: 'window:123456:0', audio: 'app' }, true)).toEqual({ kind: 'native', plan: { mode: 'include', hwnd: 123456 } });
+    expect(nativeAudioFor({ id: 'screen:0:0', audio: 'system-except-cord' }, true)).toEqual({ kind: 'native', plan: { mode: 'exclude' } });
+    expect(nativeAudioFor({ id: 'screen:0:0', audio: 'app' }, true)).toEqual({ kind: 'failed', reason: 'not-a-window' });
+    expect(nativeAudioFor({ id: 'window:1:0', audio: 'app' }, false)).toEqual({ kind: 'failed', reason: 'unavailable' });
+    expect(nativeAudioFor({ id: 'screen:0:0', audio: 'system' }, true)).toEqual({ kind: 'none' });
+    expect(nativeAudioFor({ id: 'screen:0:0', audio: 'none' }, false)).toEqual({ kind: 'none' });
+  });
+  it('режим из окна выбора оболочки — только известные имена', () => {
+    expect(readAudioMode('system-except-cord')).toBe('system-except-cord');
+    expect(readAudioMode('app')).toBe('app');
+    expect(readAudioMode('loud')).toBe('none');
+    expect(readAudioMode(undefined)).toBe('none');
+  });
+});
+
+describe('флаги возможностей по платформе и модулю', () => {
+  it('Windows с cord-native — всё; без модуля нет ptt и звука приложения; на остальных нет и API панели задач', () => {
+    expect(featuresFor('win32', true)).toEqual([...FEATURES]);
+    const noNative = featuresFor('win32');
+    expect(noNative).not.toContain('ptt');
+    expect(noNative).not.toContain('capture.app-audio');
+    expect(noNative).toContain('capture.system-audio');
     const linux = featuresFor('linux');
-    for (const flag of ['capture.system-audio', 'thumbar', 'badge']) expect(linux).not.toContain(flag);
+    for (const flag of ['capture.system-audio', 'thumbar', 'badge', 'ptt', 'capture.app-audio']) expect(linux).not.toContain(flag);
     expect(linux).toContain('capture');
     expect(linux).toContain('overlay');
+    // Подмена модуля на Linux (дымовой прогон) объявляет нативные флаги, но не Windows-only.
+    const fake = featuresFor('linux', true);
+    expect(fake).toContain('ptt');
+    expect(fake).not.toContain('thumbar');
+  });
+});
+
+describe('сочетания с кнопками мыши', () => {
+  it('Mouse3–Mouse5 проходят проверку моста, Mouse1/Mouse2 — нет', () => {
+    const binding = (code: string) => ({ action: 'ptt', mode: 'hold', key: { code, ctrl: false, alt: false, shift: false, meta: false } });
+    expect(readPageMessage('hotkeys.configure', { bindings: [binding('Mouse4')] })).toMatchObject({ type: 'hotkeys.configure', bindings: [{ action: 'ptt', mode: 'hold' }] });
+    expect(readPageMessage('hotkeys.configure', { bindings: [binding('Mouse1')] })).toBeNull();
+    expect(readPageMessage('hotkeys.configure', { bindings: [binding('Mouse6')] })).toBeNull();
   });
 });

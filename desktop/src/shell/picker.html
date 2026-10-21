@@ -23,6 +23,9 @@
   .source .label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   footer { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; padding: 12px 16px 14px; }
   footer label { display: flex; align-items: center; gap: 8px; color: var(--cord-muted); font-size: 12px; }
+  .audio { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+  .audio label { cursor: pointer; }
+  .audio label[hidden] { display: none; }
   footer .hint { grid-column: 1 / -1; color: var(--cord-muted); font-size: 11px; margin: 0; }
   .empty { padding: 24px 16px; color: var(--cord-muted); text-align: center; }
 </style>
@@ -35,7 +38,12 @@
   </div>
   <div class="grid" id="grid" role="group" aria-label="Источники"></div>
   <footer>
-    <label id="audio-row"><input type="checkbox" id="audio"> Со звуком системы</label>
+    <div class="audio" id="audio-row" role="radiogroup" aria-label="Звук">
+      <label><input type="radio" name="audio" value="none" checked> Без звука</label>
+      <label data-mode="system"><input type="radio" name="audio" value="system"> Звук системы</label>
+      <label data-mode="app"><input type="radio" name="audio" value="app"> Звук приложения</label>
+      <label data-mode="system-except-cord"><input type="radio" name="audio" value="system-except-cord"> Система кроме Cord</label>
+    </div>
     <button class="btn" id="share" type="button" disabled>Показать</button>
     <p class="hint" id="hint"></p>
   </footer>

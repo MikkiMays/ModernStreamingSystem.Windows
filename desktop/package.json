@@ -1,13 +1,15 @@
 {
   "name": "cord-desktop",
   "productName": "Cord",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Cord — видеовстречи, экран и совместный просмотр",
   "author": "Cord",
   "private": true,
   "main": "dist/main/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/bundle-preload.mjs && node scripts/copy-shell.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "test:native": "cargo test --manifest-path native/Cargo.toml",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:e2e": "playwright test -c test/e2e/playwright.config.ts",

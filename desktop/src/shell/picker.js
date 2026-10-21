@@ -1,13 +1,31 @@
 // Окно выбора источника: показывает экраны и окна, отдаёт выбор оболочке (`capture.pick`).
+// Звук: «Звук системы» — loopback Electron (участники услышат и встречу); «Звук приложения»
+// (только для окна) и «Система кроме Cord» — process loopback в cord-native (ADR 0001 §4.1).
 (() => {
   const grid = document.getElementById('grid');
   const share = document.getElementById('share');
-  const audio = document.getElementById('audio');
   const audioRow = document.getElementById('audio-row');
   const hint = document.getElementById('hint');
+  const HINTS = {
+    none: '',
+    system: 'Участники услышат и голоса встречи. Для звука без эха выберите «Система кроме Cord».',
+    app: 'Только звук выбранного приложения — голоса встречи в показ не попадут.',
+    'system-except-cord': 'Весь звук компьютера, кроме самого Cord.',
+  };
   let sources = [];
   let kind = 'screen';
   let chosen = null;
+  let systemAudio = false;
+  let appAudio = false;
+  const audioMode = () => (audioRow.querySelector('input[name="audio"]:checked') || {}).value || 'none';
+  const renderAudio = () => {
+    const window = chosen ? sources.some((source) => source.id === chosen && source.kind === 'window') : false;
+    const allowed = { system: systemAudio, app: appAudio && window, 'system-except-cord': appAudio };
+    for (const label of audioRow.querySelectorAll('label[data-mode]')) label.hidden = !allowed[label.dataset.mode];
+    if (!allowed[audioMode()] && audioMode() !== 'none') audioRow.querySelector('input[value="none"]').checked = true;
+    audioRow.classList.toggle('hidden', !systemAudio && !appAudio);
+    hint.textContent = HINTS[audioMode()] || '';
+  };
   const render = () => {
     grid.replaceChildren();
     const shown = sources.filter((source) => source.kind === kind);
@@ -43,6 +61,7 @@
         chosen = source.id;
         share.disabled = false;
         render();
+        renderAudio();
       });
       button.addEventListener('dblclick', () => submit());
       grid.append(button);
@@ -50,7 +69,7 @@
   };
   const submit = () => {
     if (!chosen) return;
-    window.cordShell.call('capture.pick', { id: chosen, audio: audio.checked ? 'system' : 'none' });
+    window.cordShell.call('capture.pick', { id: chosen, audio: audioMode() });
   };
   for (const tab of document.querySelectorAll('[role="tab"]')) {
     tab.addEventListener('click', () => {
@@ -64,13 +83,12 @@
   window.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') window.cordShell.call('capture.cancel');
   });
+  audioRow.addEventListener('change', renderAudio);
   window.cordShell.call('capture.sources').then((answer) => {
     sources = (answer && answer.sources) || [];
-    if (!(answer && answer.systemAudio)) {
-      audioRow.classList.add('hidden');
-    } else {
-      hint.textContent = 'Со звуком системы участники услышат и голоса комнаты. Звук отдельного приложения появится позже.';
-    }
+    systemAudio = !!(answer && answer.systemAudio);
+    appAudio = !!(answer && answer.appAudio);
     render();
+    renderAudio();
   });
 })();

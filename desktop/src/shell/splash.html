@@ -13,6 +13,12 @@
   .bar > i { position: absolute; inset: 0; width: 0; background: var(--cord-accent); transition: width .2s ease-out; }
   .bar.busy > i { width: 40%; animation: slide 1.2s ease-in-out infinite; }
   @keyframes slide { from { left: -40%; } to { left: 100%; } }
+  /* Меньше движения (E15-B): полоса не ездит и не плавает — стоит заполненной тусклой, а при загрузке
+     растёт скачками; процент и так в строке состояния. */
+  @media (prefers-reduced-motion: reduce) {
+    .bar > i { transition: none; }
+    .bar.busy > i { animation: none; left: 0; width: 100%; opacity: .45; }
+  }
   .choice { display: grid; justify-items: center; gap: 4px; }
 </style>
 </head>

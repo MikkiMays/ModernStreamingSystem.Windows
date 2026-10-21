@@ -8,7 +8,7 @@
  *
  * Версия приложения нигде не показывается, кроме «О программе» в вебе (`invoke('update.status')`).
  */
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, powerSaveBlocker, safeStorage, screen, type WebContents } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, MessageChannelMain, net, powerSaveBlocker, safeStorage, screen, utilityProcess, type WebContents } from 'electron';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
@@ -17,11 +17,14 @@ import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
 import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type AppSettings } from './app-settings';
 import { buildConfig } from './config';
-import { CaptureSelection, captureSourceViews, loopbackFor, readCaptureSelect, type AudioMode, type CaptureSourceView } from './capture';
+import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readAudioMode, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
 import { markFor, StartupMetrics, sumMemory } from './metrics';
+import { NativeClient } from './native/client';
+import { NATIVE_MODULE_FILE, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
+import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME, shellUrl } from './protocol';
@@ -96,7 +99,30 @@ class Shell {
     message: (message, sender) => this.onMessage(message, sender),
     call: (method, payload) => this.onCall(method, payload),
     version: () => app.getVersion(),
-    features: () => featuresFor(process.platform),
+    features: () => this.features(),
+    log,
+  });
+  /**
+   * Utility-процесс `native` (ADR §2.1): один на приложение, грузит `cord-native.node` из
+   * `dist/native` (вне asar). Нет модуля или не Windows — возможности `ptt` и `capture.app-audio`
+   * не объявляются, клавиши идут через globalShortcut, оверлей — на дисплее главного окна.
+   */
+  private readonly native = new NativeClient({
+    spawn: () => {
+      const appPath = app.getAppPath();
+      const unpacked = appPath.replace(/app\.asar$/, 'app.asar.unpacked');
+      const child = utilityProcess.fork(join(appPath, 'dist', 'native', 'host.js'), [], {
+        serviceName: 'Cord native',
+        env: { ...process.env, CORD_NATIVE_MODULE: join(unpacked, 'dist', 'native', NATIVE_MODULE_FILE) },
+      });
+      return {
+        postMessage: (message, transfer) => child.postMessage(message, transfer as Electron.MessagePortMain[]),
+        onMessage: (listener) => child.on('message', listener),
+        onExit: (listener) => child.on('exit', listener),
+        kill: () => void child.kill(),
+      };
+    },
+    onEvent: (event) => this.onNativeEvent(event),
     log,
   });
   private readonly updater = new CordUpdater({
@@ -127,10 +153,11 @@ class Shell {
       },
       unregister: (accelerator) => globalShortcut.unregister(accelerator),
     },
-    (action) => {
+    (action, _mode, phase) => {
       // Оверлей — окно оболочки: клавиша переключает его здесь же, веб узнаёт событием app.settings.
-      if (action === 'overlay.toggle') this.applyAppSettings({ overlay: !this.settings.get().overlayEnabled }, true);
-      else this.router.post('hotkey', { action, phase: 'down' });
+      if (action === 'overlay.toggle') {
+        if (phase === 'down') this.applyAppSettings({ overlay: !this.settings.get().overlayEnabled }, true);
+      } else this.router.post('hotkey', { action, phase });
     },
   );
   private readonly capture = new CaptureSelection();
@@ -142,6 +169,8 @@ class Shell {
   private page: string | null = null;
   private call: CallState = { inCall: false, mic: false, camera: false, screen: false };
   private sleepBlocker: number | null = null;
+  /** Переднее окно от `cord-native` (монитор, полноэкранность, своё ли); null — модуля нет. */
+  private foreground: NativeForegroundEvent | null = null;
   private pendingLink: DeepLink | null = null;
   /** Запуск вместе с Windows (`--hidden`): первое главное окно открывается свёрнутым. */
   private startMinimized = process.argv.includes('--hidden');
@@ -158,6 +187,8 @@ class Shell {
     this.router.install();
     this.installShellCalls();
     this.installDisplayMedia();
+    this.installCaptureAudio();
+    this.native.start();
     this.pendingLink = deepLinkFromArgv(process.argv);
     // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) — app.settings.
     this.applyAutostart();
@@ -191,8 +222,14 @@ class Shell {
     this.startMinimized = false;
     this.main = main;
     if (saved.tray) this.installTray();
+    main.window.webContents.on('did-start-navigation', (details) => {
+      // Новый документ — прежняя дорожка звука захвата ему не принадлежит.
+      if (details.isMainFrame) this.stopCaptureAudio(false);
+    });
     await main.showLoading();
     const origin = this.currentOrigin();
+    // Флаги моста зависят от модуля: ждём его ответ, но не дольше 3 с — старт важнее.
+    await this.native.whenReady(3000);
     await this.router.prepareBootstrap(origin);
     this.router.attach(main.window.webContents, origin);
     await main.open(origin);
@@ -209,6 +246,7 @@ class Shell {
     onClosed: () => {
       this.main = null;
       this.hotkeys.clear();
+      this.stopCaptureAudio(false);
       this.overlay.setVisible(false);
       if (!this.quitting) this.quit();
     },
@@ -264,7 +302,7 @@ class Shell {
       else if (this.main) this.installTray();
     }
     if (patch.autostart !== undefined) this.applyAutostart();
-    if (patch.overlay !== undefined) this.overlay.setVisible(this.call.inCall && next.overlayEnabled);
+    if (patch.overlay !== undefined) this.updateOverlay();
     if (patch.thumbar !== undefined || patch.badge !== undefined) this.taskbar.refresh(window);
     if (patch.sleepBlocker !== undefined) this.applySleepBlocker();
     const values = appSettingsOf(next);
@@ -284,9 +322,105 @@ class Shell {
   private quit(): void {
     this.quitting = true;
     this.hotkeys.clear();
+    this.stopCaptureAudio(false);
+    this.native.stop();
     this.taskbar.destroy();
     this.overlay.destroy();
     app.quit();
+  }
+
+  // ----- cord-native: флаги, клавиши, переднее окно -----
+
+  private features(): string[] {
+    return featuresFor(process.platform, this.native.available);
+  }
+
+  private onNativeEvent(event: HostEvent): void {
+    switch (event.event) {
+      case 'ready': {
+        const raw = event.available ? { set: (bindings: NativeBinding[]) => this.native.request<string[]>({ type: 'hotkeys.set', bindings }) } : null;
+        void this.hotkeys.setRaw(raw).then((status) => {
+          if (status) this.router.post('hotkeys.status', { status });
+        });
+        if (event.available) {
+          void this.native.request({ type: 'foreground.watch', rootPid: process.pid, intervalMs: 300 }).catch((error: Error) => log(`native: переднее окно — ${error.message}`));
+        } else {
+          this.foreground = null;
+          if (this.captureAudio) this.stopCaptureAudio(true, 'native');
+          this.updateOverlay();
+        }
+        return;
+      }
+      case 'hotkey':
+        this.hotkeys.onRawEvent(event.id, event.phase);
+        return;
+      case 'foreground':
+        this.foreground = event.foreground;
+        this.updateOverlay();
+        return;
+      case 'audio':
+        if (this.captureAudio) this.stopCaptureAudio(true, event.state === 'error' ? (event.reason ?? 'error') : undefined);
+        return;
+    }
+  }
+
+  /** Видимость и монитор оверлея — по звонку, переключателю и переднему окну (`overlay-policy.ts`). */
+  private updateOverlay(): void {
+    const decision = decideOverlay(this.call.inCall, this.settings.get().overlayEnabled, this.foreground);
+    this.overlay.setVisible(decision.visible);
+    if (decision.visible) this.overlay.placeAt(decision.anchor, this.main && !this.main.window.isDestroyed() ? this.main.window.getBounds() : null);
+  }
+
+  // ----- звук захвата через cord-native (ADR §4.1) -----
+
+  private captureAudio: { mode: AudioMode } | null = null;
+
+  private installCaptureAudio(): void {
+    // Preload главного окна сообщает, что страница остановила дорожку, — захват больше не нужен.
+    ipcMain.on(IPC.captureAudio, (event, data: unknown) => {
+      if (event.sender.id !== this.main?.window.webContents.id) return;
+      if ((data as { type?: unknown } | null)?.type === 'stopped') this.stopCaptureAudio(false);
+    });
+  }
+
+  /**
+   * Запустить process loopback в utility-процессе и отдать порт PCM preload'у главного окна.
+   * Отказ — `capture.audio {state: 'failed', reason}`: показ идёт без звука, веб показывает подсказку.
+   */
+  private async startCaptureAudio(plan: NativeAudioPlan, mode: AudioMode): Promise<void> {
+    this.stopCaptureAudio(false);
+    const main = this.main;
+    if (!main) return;
+    try {
+      let pid = process.pid;
+      if (plan.mode === 'include') {
+        const found = await this.native.request<number | null>({ type: 'window.pid', hwnd: plan.hwnd });
+        if (!found) throw new Error('окно источника уже закрыто');
+        pid = found;
+      }
+      const { port1, port2 } = new MessageChannelMain();
+      this.captureAudio = { mode };
+      await this.native.request({ type: 'audio.start', pid, mode: plan.mode }, [port1]);
+      if (this.captureAudio?.mode !== mode || main.window.isDestroyed()) {
+        port2.close();
+        return;
+      }
+      main.window.webContents.postMessage(IPC.captureAudio, { mode, sampleRate: 48_000, channels: 2 }, [port2]);
+      log(`захват: звук ${mode} (${plan.mode}, pid ${pid})`);
+    } catch (error) {
+      log(`захват: звук ${mode} не запустился — ${(error as Error).message}`);
+      this.captureAudio = null;
+      this.router.post('capture.audio', { state: 'failed', mode, reason: (error as Error).message });
+    }
+  }
+
+  /** Остановить захват; `announce` — сказать странице (`ended`, либо `failed` с причиной). */
+  private stopCaptureAudio(announce: boolean, reason?: string): void {
+    const current = this.captureAudio;
+    this.captureAudio = null;
+    if (!current) return;
+    if (this.native.available) void this.native.request({ type: 'audio.stop' }).catch(() => {});
+    if (announce) this.router.post('capture.audio', { state: reason ? 'failed' : 'ended', mode: current.mode, ...(reason ? { reason } : {}) });
   }
 
   focus(): void {
@@ -445,8 +579,7 @@ class Shell {
         return;
       case 'hotkeys.configure': {
         this.settings.update({ hotkeys: message.bindings });
-        const status = this.hotkeys.apply(message.bindings);
-        this.router.post('hotkeys.status', { status });
+        void this.hotkeys.apply(message.bindings).then((status) => this.router.post('hotkeys.status', { status }));
         return;
       }
       case 'favorites.changed':
@@ -536,8 +669,8 @@ class Shell {
       leave: () => this.router.post('thumbar', { action: 'leave' }),
     });
     this.applySleepBlocker();
-    if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) this.hotkeys.apply(this.settings.get().hotkeys);
-    this.overlay.setVisible(next.inCall && this.settings.get().overlayEnabled);
+    if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) void this.hotkeys.apply(this.settings.get().hotkeys);
+    this.updateOverlay();
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();
   }
 
@@ -635,10 +768,10 @@ class Shell {
   // ----- захват -----
 
   /** Экраны и окна для окна выбора (веба или оболочки): миниатюры ≤ 320 px, без своих окон Cord. */
-  private async captureSources(): Promise<{ systemAudio: boolean; sources: CaptureSourceView[] }> {
+  private async captureSources(): Promise<{ systemAudio: boolean; appAudio: boolean; sources: CaptureSourceView[] }> {
     const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
     const own = new Set(BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId()));
-    return { systemAudio: process.platform === 'win32', sources: captureSourceViews(sources, own) };
+    return { systemAudio: process.platform === 'win32', appAudio: this.native.available, sources: captureSourceViews(sources, own) };
   }
 
   private picker: BrowserWindow | null = null;
@@ -670,6 +803,14 @@ class Shell {
             }
             const audio = loopbackFor(selection.audio, process.platform);
             callback({ video: source, ...(audio ? { audio } : {}) });
+            // Звук приложения / системы кроме Cord — отдельной дорожкой через cord-native.
+            this.stopCaptureAudio(false);
+            const decision = nativeAudioFor(selection, this.native.available);
+            if (decision.kind === 'native') void this.startCaptureAudio(decision.plan, selection.audio);
+            else if (decision.kind === 'failed') {
+              log(`захват: звук ${selection.audio} — ${decision.reason}`);
+              this.router.post('capture.audio', { state: 'failed', mode: selection.audio, reason: decision.reason });
+            }
           });
         };
         const fresh = this.capture.take();
@@ -765,7 +906,7 @@ class Shell {
           return this.captureSources();
         case 'capture.pick': {
           const id = typeof data.id === 'string' && /^(screen|window):\d+:\d+$/.test(data.id) ? data.id : null;
-          const audio: AudioMode = data.audio === 'system' ? 'system' : 'none';
+          const audio = readAudioMode(data.audio);
           this.finishPicker(id ? { id, audio } : null);
           return true;
         }
@@ -773,7 +914,7 @@ class Shell {
           this.finishPicker(null);
           return true;
         case 'shell.features':
-          return { features: featuresFor(process.platform), version: app.getVersion() };
+          return { features: this.features(), version: app.getVersion() };
         default:
           return null;
       }

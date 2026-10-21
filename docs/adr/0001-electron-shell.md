@@ -3,6 +3,7 @@
 - **Статус:** предложено (E01, этап A), 19.10.2026. Технология — решение владельца (T53, `DECISIONS.md` П1); этот ADR решает, **как** строить, и что доказывает прототип.
 - **Изменено 20.10.2026** (решение владельца по T58): обновление — заставкой при запуске, как у Discord (§5.1); обратной совместимости со старыми клиентами нет — ни прокладки моста v1 (§3.2), ни переходного Inno-выпуска (§7.2).
 - **Изменено 20.10.2026** (E01-B2): `capture.select` — запрос с ответом (`invoke`), а не сообщение: веб ждёт ответа до `getDisplayMedia` (§4.1); переключатели §4.4 — `invoke('app.settings', патч)` и событие `app.settings`, флаги `app.settings`, `tray`, `sleep`, `autostart`, а `capture.system-audio`, `thumbar`, `badge`, `autostart` объявляются только в Windows; каталог (§8) — JWKS `contracts/catalog-keys.json`, подписанный снимок `src/shell/catalog.jws`, последний хороший — `userData/catalog.jws`; `metrics.json` (§10) — `scripts/test-installer.ps1 -Metrics`.
+- **Изменено 21.10.2026** (E01-B3, `cord-native`): модуль построен — Raw Input (§4.2), process loopback (§4.1), переднее окно (§4.3); состав §4.6 — как собрано (`dpapi` не нужен по В-2, `net` не делался); дорога звука — `MediaStreamTrackGenerator` в preload и элемент `#cord-desktop-capture-audio` на странице, а не AudioWorklet в вебе (§4.1); флаги `ptt` и `capture.app-audio` объявляются только с загруженным модулем; событие `capture.audio` (§3.3); сборка — `cargo build` без `@napi-rs/cli` (§9).
 - **Область:** новый клиент Windows вместо WinUI 3 + WebView2 (`src/Cord.Windows`, 0.7.x).
 - **Версии на дату решения:** Electron 44.9 (stable), electron-builder 26.15 (27 — alpha), electron-updater 6.8, @napi-rs/cli 3.10, livekit-client 2.23. Electron поддерживает три последних мажора с циклом ~8 недель, поэтому мажор обновляем не реже раза в 16 недель ([timelines](https://www.electronjs.org/docs/latest/tutorial/electron-timelines)).
 
@@ -181,6 +182,7 @@ interface CordDesktop {
 | `navigate`, `theme.changed`, `preferences.changed`, `settings.open`, `favorite.settings`, `favorites.changed`, `profile.changed`, `network.changed`, `close-request`, `update.status`, `session.token` | те же имена через `on()` | Смысл прежний |
 | — | `thumbar` `{action: mic\|camera\|leave}`, `deeplink` `{room}`, `notification.action`, `power` `{suspend\|resume\|lock}`, `capture.ended` | Новые возможности |
 | — | `app.settings` | Значения переключателей §4.4, когда их сменила сама оболочка (клавиша `overlay.toggle`) |
+| — | `capture.audio` `{state: ready\|failed\|ended, mode, reason?}` | Звук приложения / системы кроме Cord (§4.1): дорожка готова в `#cord-desktop-capture-audio`, не вышло (`unavailable`, `not-a-window`, текст ошибки активации) или закончилась. Новый подписчик получает текущее состояние сразу |
 
 ## 4. Нативные возможности
 
@@ -207,9 +209,10 @@ interface CordDesktop {
 | Без звука | — | — |
 
 - **Версии Windows.** Документированный минимум [AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS](https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_process_loopback_params) — build 20348, но на деле API работает с Windows 10 2004 (19041): так им пользуется OBS ([Application Audio Capture](https://obsproject.com/kb/application-audio-capture-guide)). Наш `MinVersion` уже 10.0.19041.
-- **Если активация не удалась** — показ идёт без звука, с подсказкой. Системный звук с эхом не включаем.
-- **Дорога звука:** PCM 48 кГц / 10 мс → MessagePort (utility → renderer, [message-ports](https://www.electronjs.org/docs/latest/tutorial/message-ports)) → AudioWorklet → `MediaStreamAudioDestinationNode` → дорожка `ScreenShareAudio` в LiveKit. Это ~384 КБ/с, задержка ~10–20 мс.
-- **Проверить в прототипе** экспериментальное ограничение `restrictOwnAudio` (LiveKit его уже пробрасывает): если Chromium в Electron 44 исполняет его на Windows, режим «кроме Cord» получится без своего кода.
+- **Если активация не удалась** — показ идёт без звука, с подсказкой (`capture.audio {state: 'failed', reason}`). Системный звук с эхом не включаем.
+- **Дорога звука (как собрано, E01-B3):** PCM float32 48 кГц / 10 мс (480 кадров × 2 канала) → `MessageChannelMain`: порт из utility-процесса прямо в preload главного окна ([message-ports](https://www.electronjs.org/docs/latest/tutorial/message-ports)), main порт не трогает → preload собирает `MediaStreamTrackGenerator` (`AudioData` с меткой по счётчику кадров) и кладёт дорожку в скрытый `<audio id="cord-desktop-capture-audio" muted>` → веб читает `element.srcObject.getAudioTracks()[0]` — DOM один на изолированный мир preload и мир страницы, объект `MediaStream` общий (проверено в Electron 44: страница видит `instanceof MediaStream`, дорожка `live`, тон слышен в `AnalyserNode`) → `publishTrack(track, {source: ScreenShareAudio})`. Это ~384 КБ/с, задержка ~10–20 мс. AudioWorklet в вебе не нужен: CSP сервера (`script-src 'self'`) не пустил бы модуль воркера из `cord-app://` или `blob:`, а `MediaStreamTrackGenerator` — просто API Chromium без загрузки кода. Пока приложение молчит, модуль подкладывает тишину по часам (`pcm::Pacer`), чтобы дорожка не рвалась. Веб останавливает дорожку (`track.stop()`) — preload сообщает main, тот гасит захват.
+- **Порядок для веба:** `invoke('capture.select', {id, audio: 'app' | 'system-except-cord'})` → `getDisplayMedia` (оболочка отдаёт только видео) → `on('capture.audio')` → `ready` → взять дорожку из элемента и опубликовать рядом с видео; `failed` — показать подсказку «показ без звука». Звук приложения — только для источника-окна (`window:<hwnd>:0` → PID дерева процессов окна); для экрана — «Система кроме Cord».
+- **`restrictOwnAudio`** (LiveKit его уже пробрасывает): веб просит его у `getDisplayMedia`; исполняет ли его Chromium в Electron 44 на Windows для `loopback`, проверяется на живой машине — если да, режим «кроме Cord» без своего кода остаётся запасным. Для дорожки из `cord-native` проверка `ownAudioLeaks` в вебе не нужна: эха там нет по построению.
 
 ### 4.2 Глобальные клавиши и push-to-talk
 
@@ -223,6 +226,8 @@ interface CordDesktop {
 | Свой WH_KEYBOARD_LL | да | нет | наш | Только если Raw Input где-то не доходит (решает прототип) |
 
 Ограничение UIPI: если игра запущена от администратора, а Cord — нет, Windows не доставит ему ввод, пока игра на переднем плане. Так же ведёт себя Discord — пишем в подсказке настройки. Клавиши работают всегда, пока включены (T27); модель сочетаний общая с E03.
+
+**Как собрано (E01-B3, `native/src/win/input.rs`, `matcher.rs`).** Скрытое окно (`WS_OVERLAPPED`, не message-only — иначе `RIDEV_INPUTSINK` не работает) в потоке `cord-native-input` utility-процесса; `RegisterRawInputDevices` на клавиатуру (usage 1/6) и мышь (1/2) с `RIDEV_INPUTSINK`. Машина состояний: модификаторы совпадают точно (как `matchesHotkey` в вебе), автоповтор не даёт второго «нажал», сочетание отпускается по клавише, по любому своему модификатору и по опросу `GetAsyncKeyState` раз в 50 мс, пока что-то удерживается, — страховка от залипшего push-to-talk, когда UIPI не доставила отпускание. Коды — имена DOM (`KeyM`, `Digit1`, `F1`…`F24`, `Space`) и `Mouse3`–`Mouse5` (средняя и боковые кнопки; левая и правая не регистрируются). Наружу — `{id, phase}`; main превращает в `hotkey {action, phase: down|up}`. Строка состояния `STATUS_GLOBAL_RAW` говорит про отпускание и про игру от администратора. Нет модуля или его процесс упал — набор переезжает на `globalShortcut` (без отпускания и без мыши), вернулся — обратно, веб получает новый `hotkeys.status`.
 
 ### 4.3 Оверлей в играх (T23)
 
@@ -242,6 +247,8 @@ interface CordDesktop {
 - в эксклюзивном полноэкранном режиме DirectX окно поверх не видно; оконный режим и borderless работают (T23 это и просит);
 - внешние ESP-читы тоже рисуют прозрачными окнами, поэтому отдельный античит может такое окно прятать — проверка с FACEIT (CS2) обязательна в приёмке E01-B;
 - по умолчанию оверлей **выключен**: включается переключателем и клавишей, виден только в звонке.
+
+**Как собрано (E01-B3, `overlay-policy.ts`, `native/src/foreground.rs`).** Utility-процесс раз в 300 мс (таймер того же скрытого окна) снимает `GetForegroundWindow` → `GetWindowThreadProcessId`, `GetWindowRect`, `MonitorFromWindow` + `GetMonitorInfo`, `GetClassName`; «во весь экран» — окно накрывает монитор целиком (рамка borderless за краями тоже), кроме рабочего стола (`Progman`/`WorkerW`); «своё» — PID в дереве главного процесса Cord по снимку Toolhelp (`CreateToolhelp32Snapshot`, без `OpenProcess`; карта не чаще раза в 5 с и только при смене окна). Событие уходит только при изменении. Решение в main: виден в звонке, если включён, впереди не Cord и окно во весь монитор — в левом верхнем углу именно этого монитора (`screen.screenToDipPoint` → `getDisplayNearestPoint`); без модуля — как раньше, на дисплее главного окна.
 
 ### 4.4 Мягкое взаимодействие с Windows (T53)
 
@@ -275,15 +282,15 @@ interface CordDesktop {
 
 ### 4.6 Состав `cord-native`
 
-Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все версии Electron. Модуль загружается только в utility-процессе:
+Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все версии Electron. Модуль загружается только в utility-процессе. **Как собрано (E01-B3, `desktop/native/`, крейт `cord-native`, `windows` 0.62, `napi` 3):**
 
-- `hotkeys` — Raw Input;
-- `audio` — process loopback include/exclude;
-- `dpapi` — `CryptProtectData`/`CryptUnprotectData` с энтропией, CurrentUser;
-- `windows` — переднее окно, монитор, полноэкранность, PID по HWND;
-- `net` — `NotifyAddrChange` для `network.changed` (как нынешний `NetworkAddressChanged`).
+- `startInput`/`setBindings`/`stopInput` — Raw Input (§4.2);
+- `startAudio`/`stopAudio` — process loopback include/exclude (§4.1), поток захвата на сеанс, COM MTA;
+- `watchForeground`/`stopForeground`, `windowProcess`, `currentProcess` — переднее окно, монитор, полноэкранность, PID по HWND (§4.3);
+- `dpapi` — **не нужен**: пароль сервера оболочка не хранит (В-2), секрет профиля шифрует `safeStorage`;
+- `net` — не делался: `network.changed` пока не нужен вебу (`navigator.onLine` в странице).
 
-Каждая функция объявляет себя во `features`. Если её нет, веб показывает понятный отказ и не ломается.
+Чистая логика (`keys`, `matcher`, `pcm`, `foreground`) собирается и проверяется `cargo test` на любой платформе; Windows-часть — `src/win/*` за `cfg(windows)`, на остальных — заглушки с отказом. JS: `src/native/host.ts` (utility-процесс, `process.parentPort`, запросы с номерами, события, порт PCM; `CORD_NATIVE_FAKE=1` — подмена для дымового прогона без Windows), `src/main/native/client.ts` (запуск, `ready`, перезапуск через 2 с не чаще трёх раз за 10 минут). Флаги `ptt` и `capture.app-audio` объявляются только с загруженным модулем (`featuresFor(platform, native)`); без него веб показывает понятный отказ и не ломается.
 
 ## 5. Обновления — только с серверов Cord
 
@@ -420,7 +427,7 @@ Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все �
 Новый workflow `desktop.yml` на `windows-2022`, `paths: desktop/**`; `windows.yml` не трогаем.
 
 1. Checkout и `setup-node`, действия закреплены по SHA. Node 24, `npm ci` по lock-файлу.
-2. Rust из образа раннера, версия закреплена в `rust-toolchain.toml`. `napi build --release` → `cord-native.win32-x64-msvc.node` (в `asarUnpack`).
+2. Rust из образа раннера, версия закреплена в `native/rust-toolchain.toml` (1.99.1). `cargo test` (чистая логика) и `cargo build --release` → `scripts/build-native.mjs` копирует `cord_native.dll` в `dist/native/cord-native.win32-x64-msvc.node` (в `asarUnpack`); `@napi-rs/cli` не нужен. Кэш `~/.cargo/registry` и `native/target` — `actions/cache`. Дымовой прогон грузит модуль в utility-процессе и проверяет флаги `ptt`/`capture.app-audio`; `test-installer.ps1` — файл в `app.asar.unpacked` и строку «native: загружен» в журнале установленного Cord.
 3. Типы, линтер, vitest: валидаторы моста (случаи из `BoundaryTests` переносятся), подписи каталога и манифеста, перенос DPAPI на настоящем Windows.
 4. `electron-builder --win nsis --publish never`.
    - Подпись: `CSC_LINK`/`CSC_KEY_PASSWORD` из `CORD_SIGN_PFX_BASE64`/`CORD_SIGN_PASSWORD`, метка времени из `CORD_SIGN_TIMESTAMP_URL`. Подписываются exe, деинсталлятор, установщик и `.node` ([code signing](https://www.electron.build/features/code-signing/code-signing-win)).
