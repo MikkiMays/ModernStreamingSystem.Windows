@@ -1,0 +1,38 @@
+[package]
+name = "cord-native"
+version = "1.0.2"
+edition = "2021"
+publish = false
+description = "Нативный модуль Cord для Windows: Raw Input, process loopback, переднее окно (ADR 0001 §4.6)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3.14", default-features = false, features = ["napi8"] }
+napi-derive = "3.6"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Media_Audio",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+napi-build = "2.6"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
