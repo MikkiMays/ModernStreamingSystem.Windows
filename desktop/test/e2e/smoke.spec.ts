@@ -92,6 +92,18 @@ test('заставка, затем главное окно с сервером �
     const exited = new Promise<number | null>((resolve) => app.process().once('exit', (code) => resolve(code)));
     const killer = setTimeout(() => app.process().kill('SIGKILL'), 30_000);
     void app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach((w) => w.close())).catch(() => {});
+    // R57: со значком в трее крестик прячет окно, а Cord живёт — тогда выход «Выйти» (app.quit).
+    // Без трея (Linux без лотка) приложение выходит само, как раньше.
+    const hidden = await Promise.race([
+      exited.then(() => false),
+      new Promise<boolean>((resolve) => setTimeout(resolve, 3_000)).then(() =>
+        app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && !w.isVisible())).catch(() => false),
+      ),
+    ]);
+    if (hidden) {
+      console.log('[smoke] окно спрятано в трей, Cord жив — выходим через app.quit()', new Date().toISOString());
+      void app.evaluate(({ app: electronApp }) => electronApp.quit()).catch(() => {});
+    }
     const code = await exited;
     clearTimeout(killer);
     console.log('[smoke] процесс вышел', code, new Date().toISOString());

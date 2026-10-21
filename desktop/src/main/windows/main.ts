@@ -4,6 +4,9 @@
  * свёрнутом окне, автовоспроизведение без жеста. Интерфейс встречи — с сервера Cord; локальные
  * страницы оболочки — загрузка и офлайн.
  *
+ * Крестик (R57, `close-policy.ts`): со значком в трее окно прячется, а Cord и встреча живут дальше;
+ * закрывается по-настоящему только при выходе, завершении сеанса Windows или без трея.
+ *
  * Безопасность (§2.3): `sandbox`, `contextIsolation`, без Node; навигация только внутри origin
  * серверов человека; новые окна запрещены, внешняя https-ссылка — в системный браузер;
  * разрешения — только origin сервера и только media/display-capture/notifications/fullscreen/
@@ -11,6 +14,8 @@
  */
 import { app, BrowserWindow, nativeTheme, session, shell, type Session, type WebContents } from 'electron';
 import { join } from 'node:path';
+import type { CloseAction, StartMode } from '../close-policy';
+import { APP_ID } from '../config';
 import { installContextMenu } from '../menu';
 import { decideNavigation, isExternalWebLink, ServerOrigin } from '../origins';
 import { OVERLAY_ORIGIN, SHELL_ORIGIN, shellUrl } from '../protocol';
@@ -23,16 +28,30 @@ const ALLOWED_PERMISSIONS = new Set(['media', 'display-capture', 'notifications'
 /** Базовый CSP, если сервер вдруг не прислал свой (Caddy присылает). */
 const FALLBACK_CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' wss: https:; worker-src 'self' blob:; frame-ancestors 'none'";
 
+/** Что веб знает об окне (`window.state`): в фокусе ли и видно ли — для уведомлений (R59). */
+export interface WindowState {
+  focused: boolean;
+  visible: boolean;
+}
+
 export interface MainWindowHost {
   allowedOrigins(): readonly ServerOrigin[];
   saveWindow(state: Settings['window']): void;
   onClosed(): void;
+  /** Крестик: спрятать в трей или закрыть (`decideClose`). */
+  closeAction(): CloseAction;
+  /** Окно спрятано по крестику — Cord живёт в трее. */
+  onHidden(): void;
+  /** Windows выключается или сеанс завершается: дальше только закрытие. */
+  onSessionEnd(): void;
+  /** Фокус и видимость окна изменились. */
+  onWindowState(state: WindowState): void;
   /** Закрытие окна в звонке: ждать `close.ready` ≤ 2,5 с. */
   requestClose(): Promise<void>;
   log(message: string): void;
 }
 
-export function configureSession(partition: Session, host: MainWindowHost): void {
+export function configureSession(partition: Session, host: Pick<MainWindowHost, 'allowedOrigins' | 'log'>): void {
   partition.setPermissionRequestHandler((contents, permission, callback, details) => {
     const origin = contents.getURL();
     const allowed = host.allowedOrigins().some((server) => server.owns(origin)) && ALLOWED_PERMISSIONS.has(permission);
@@ -63,7 +82,7 @@ export function configureSession(partition: Session, host: MainWindowHost): void
   });
 }
 
-export function guardNavigation(contents: WebContents, host: MainWindowHost): void {
+export function guardNavigation(contents: WebContents, host: Pick<MainWindowHost, 'allowedOrigins' | 'log'>): void {
   const decide = (event: { preventDefault(): void }, url: string, what: string) => {
     const allowed = [...host.allowedOrigins()];
     const verdict = url.startsWith(SHELL_ORIGIN) || url.startsWith(OVERLAY_ORIGIN) ? 'allow' : decideNavigation(url, allowed);
@@ -106,7 +125,7 @@ export class MainWindow {
   readonly window: BrowserWindow;
   private closing = false;
 
-  constructor(preloadDir: string, private readonly host: MainWindowHost, saved: Settings['window'], theme: Settings['theme'], minimized = false) {
+  constructor(preloadDir: string, private readonly host: MainWindowHost, saved: Settings['window'], theme: Settings['theme'], start: StartMode = 'show') {
     nativeTheme.themeSource = theme;
     const dark = nativeTheme.shouldUseDarkColors;
     this.window = new BrowserWindow({
@@ -146,6 +165,14 @@ export class MainWindow {
     this.window.webContents.on('render-process-gone', (_, details) => host.log(`рендерер упал: ${details.reason}`));
     this.window.on('close', (event) => {
       if (this.closing) return;
+      if (host.closeAction() === 'hide') {
+        // В трей: окно остаётся, страница и встреча живут (backgroundThrottling: false).
+        event.preventDefault();
+        this.remember();
+        this.window.hide();
+        host.onHidden();
+        return;
+      }
       event.preventDefault();
       this.closing = true;
       this.remember();
@@ -153,9 +180,30 @@ export class MainWindow {
         if (!this.window.isDestroyed()) this.window.destroy();
       });
     });
+    // Выключение, перезагрузка, выход из сеанса Windows: прятаться некуда — закрыться.
+    this.window.on('session-end', () => host.onSessionEnd());
     this.window.on('closed', () => host.onClosed());
-    // Запуск вместе с Windows — свёрнутым в панель задач, без фокуса: человек не просил окно прямо сейчас.
-    this.window.once('ready-to-show', () => (minimized ? this.window.minimize() : this.window.show()));
+    const announce = () => {
+      if (this.window.isDestroyed()) return;
+      host.onWindowState(this.state());
+    };
+    this.window.on('focus', announce);
+    this.window.on('blur', announce);
+    this.window.on('show', announce);
+    this.window.on('hide', announce);
+    this.window.on('minimize', announce);
+    this.window.on('restore', announce);
+    // Запуск вместе с Windows: в трей (hide) или свёрнутым в панель задач (minimize), без фокуса —
+    // человек не просил окно прямо сейчас.
+    this.window.once('ready-to-show', () => {
+      if (start === 'show') this.window.show();
+      else if (start === 'minimize') this.window.minimize();
+    });
+  }
+
+  state(): WindowState {
+    if (this.window.isDestroyed()) return { focused: false, visible: false };
+    return { focused: this.window.isFocused(), visible: this.window.isVisible() && !this.window.isMinimized() };
   }
 
   remember(): void {
@@ -191,6 +239,7 @@ export class MainWindow {
       this.window.setTitleBarOverlay({ color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#e9ecf1' : '#1a1d24', height: 36 });
   }
 
+  /** Показать и поднять окно — в том числе спрятанное в трей. */
   focus(): void {
     if (this.window.isDestroyed()) return;
     if (this.window.isMinimized()) this.window.restore();
@@ -209,6 +258,7 @@ export function cordSession(): Session {
   return session.fromPartition(SESSION_PARTITION);
 }
 
+/** AUMID процесса = AUMID ярлыков установщика (`APP_ID`, R59) — иначе уведомления Windows не показываются. */
 export function appUserModelId(): void {
-  if (process.platform === 'win32') app.setAppUserModelId('Cord');
+  if (process.platform === 'win32') app.setAppUserModelId(APP_ID);
 }

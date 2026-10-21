@@ -3,11 +3,14 @@
  * «Выйти»; кнопки на миниатюре (микрофон, камера, завершить); значок поверх иконки («во
  * встрече», «микрофон выключен»); список переходов; прогресс файла; мигание при упоминании.
  * Номера версии нигде нет (T58).
+ *
+ * Картинка значка — `dist/shell/tray.ico` (R58, `tray-icon.ts`); не прочиталась — трей не создаётся,
+ * и крестик закрывает Cord по-настоящему (`close-policy.ts`), а не прячет его «в никуда».
  */
 import { app, BrowserWindow, Menu, nativeImage, Tray, type NativeImage } from 'electron';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { overlayIconFor, showThumbar, type AppSettings } from './app-settings';
+import { pickTrayImage, trayIconCandidates } from './tray-icon';
 
 export interface TrayHost {
   open(): void;
@@ -22,10 +25,12 @@ export interface CallState {
   screen: boolean;
 }
 
-function icon(appPath: string, name: string): NativeImage {
-  for (const candidate of [join(appPath, 'build', name), join(appPath, 'dist', 'shell', name)])
-    if (existsSync(candidate)) return nativeImage.createFromPath(candidate);
-  return nativeImage.createEmpty();
+/** Картинка для трея из `dist/shell`; null — ни один файл не прочитался. */
+export function trayImage(appPath: string): NativeImage | null {
+  return pickTrayImage(trayIconCandidates(appPath), {
+    exists: existsSync,
+    load: (path) => nativeImage.createFromPath(path),
+  }) as NativeImage | null;
 }
 
 /** Круглый значок состояния — рисуется из SVG, чтобы не держать PNG на каждый случай. */
@@ -49,16 +54,36 @@ export class Taskbar {
     private readonly options: () => TaskbarOptions,
   ) {}
 
+  /** Значок в трее на месте — есть куда спрятать окно по крестику (R57). */
+  get hasTray(): boolean {
+    return this.tray !== null && !this.tray.isDestroyed();
+  }
+
+  /** Создать значок; без картинки — ошибка, трей остаётся выключенным. */
   installTray(): void {
-    if (this.tray) return;
-    this.tray = new Tray(icon(this.appPath, 'icon.ico'));
+    if (this.hasTray) return;
+    const image = trayImage(this.appPath);
+    if (!image) throw new Error('картинка значка не найдена (dist/shell/tray.ico, icon-256.png)');
+    this.tray = new Tray(image);
     this.tray.setToolTip('Cord');
     this.tray.on('click', () => this.host.open());
+    this.tray.on('double-click', () => this.host.open());
     this.refreshTray();
+  }
+
+  /** Подсказка у значка (Windows): «Cord работает в трее» при первом прятании окна (R57). */
+  hint(title: string, content: string): void {
+    if (!this.tray || process.platform !== 'win32') return;
+    try {
+      this.tray.displayBalloon({ title, content, iconType: 'info' });
+    } catch {
+      /* баллон — не повод падать */
+    }
   }
 
   private refreshTray(): void {
     if (!this.tray) return;
+    this.tray.setToolTip(this.state.inCall ? (this.state.mic ? 'Cord — во встрече' : 'Cord — во встрече, микрофон выключен') : 'Cord');
     this.tray.setContextMenu(
       Menu.buildFromTemplate([
         { label: 'Открыть Cord', click: () => this.host.open() },

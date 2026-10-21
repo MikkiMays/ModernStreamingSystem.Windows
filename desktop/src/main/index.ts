@@ -9,6 +9,7 @@
  * Версия приложения нигде не показывается, кроме «О программе» в вебе (`invoke('update.status')`).
  */
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, MessageChannelMain, net, powerSaveBlocker, safeStorage, screen, utilityProcess, type WebContents } from 'electron';
+import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
@@ -19,8 +20,10 @@ import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type A
 import { buildConfig } from './config';
 import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readAudioMode, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
+import { decideClose, startMode } from './close-policy';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
+import { readInstallerLanguage } from './language';
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
@@ -32,7 +35,7 @@ import { SettingsStore } from './settings';
 import { Taskbar, type CallState } from './tray';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
 import { CordUpdater } from './update/updater';
-import { appUserModelId, configureSession, cordSession, MainWindow } from './windows/main';
+import { appUserModelId, configureSession, cordSession, MainWindow, type WindowState } from './windows/main';
 import { OverlayWindow } from './windows/overlay';
 import { SplashWindow } from './windows/splash';
 import { ServersWindow } from './windows/servers';
@@ -57,6 +60,12 @@ function log(message: string): void {
 // Цифры для CI (ADR §10): только если задан CORD_METRICS_FILE — у человека ничего не меряется.
 const metricsFile = process.env.CORD_METRICS_FILE ?? '';
 const metrics = metricsFile ? new StartupMetrics(process.getCreationTime() ?? Date.now()) : null;
+
+// Звук и таймеры в фоне (R01–R03, ADR §2.1): `backgroundThrottling: false` держит страницу главного
+// окна «видимой», а эти ключи страхуют остальное — окна оболочки и воркеры, когда Cord спрятан в
+// трей (R57) или целиком накрыт игрой (Chromium считает такое окно occluded и иначе усыпил бы его).
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 registerShellScheme();
 appUserModelId();
@@ -172,14 +181,21 @@ class Shell {
   /** Переднее окно от `cord-native` (монитор, полноэкранность, своё ли); null — модуля нет. */
   private foreground: NativeForegroundEvent | null = null;
   private pendingLink: DeepLink | null = null;
-  /** Запуск вместе с Windows (`--hidden`): первое главное окно открывается свёрнутым. */
-  private startMinimized = process.argv.includes('--hidden');
+  /** Запуск вместе с Windows (`--hidden`): первое главное окно — в трей или свёрнутым (`startMode`). */
+  private hiddenFlag = process.argv.includes('--hidden');
   private checkTimer: ReturnType<typeof setTimeout> | null = null;
   private quitting = false;
+  /** Windows выключается или сеанс завершается: крестик больше не прячет окно (R57). */
+  private sessionEnding = false;
 
   // ----- старт -----
 
   async start(): Promise<void> {
+    // «Выйти» из трея, Cmd/Alt+F4 в заставке, завершение сеанса: дальше окно закрывается, а не прячется.
+    app.on('before-quit', () => {
+      this.quitting = true;
+    });
+    this.adoptInstallerLanguage();
     this.installMetrics();
     installShellProtocol();
     installShellProtocol(cordSession());
@@ -216,12 +232,26 @@ class Shell {
     splash.close();
   }
 
+  /**
+   * Первый запуск после установки (файла настроек ещё нет): язык мастера NSIS из
+   * `HKCU\Software\Cord\Language` (R64) — веб получит его через `Bootstrap.language`.
+   */
+  private adoptInstallerLanguage(): void {
+    if (!this.settings.fresh || smoke) return;
+    const language = readInstallerLanguage(process.platform, (key, name) => execFileSync('reg.exe', ['query', key, '/v', name], { encoding: 'utf8', windowsHide: true, timeout: 3000 }));
+    if (language) {
+      this.settings.update({ language });
+      log(`язык установщика: ${language}`);
+    }
+  }
+
   private async openMain(): Promise<void> {
     const saved = this.settings.get();
-    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, this.startMinimized);
-    this.startMinimized = false;
-    this.main = main;
+    // Трей — до окна: от него зависит, куда уходит окно при `--hidden` и по крестику (R57).
     if (saved.tray) this.installTray();
+    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, startMode({ hiddenFlag: this.hiddenFlag, tray: this.taskbar.hasTray }));
+    this.hiddenFlag = false;
+    this.main = main;
     main.window.webContents.on('did-start-navigation', (details) => {
       // Новый документ — прежняя дорожка звука захвата ему не принадлежит.
       if (details.isMainFrame) this.stopCaptureAudio(false);
@@ -250,9 +280,23 @@ class Shell {
       this.overlay.setVisible(false);
       if (!this.quitting) this.quit();
     },
+    closeAction: () => decideClose({ tray: this.taskbar.hasTray, quitting: this.quitting, sessionEnding: this.sessionEnding }),
+    onHidden: () => this.onMainHidden(),
+    onSessionEnd: () => {
+      this.sessionEnding = true;
+    },
+    onWindowState: (state: WindowState) => this.router.post('window.state', { ...state }),
     requestClose: () => this.requestClose(),
     log,
   };
+
+  /** Окно спрятано по крестику (R57): один раз сказать, что Cord живёт в трее; встреча продолжается. */
+  private onMainHidden(): void {
+    log('окно спрятано в трей');
+    if (this.settings.get().trayHintShown) return;
+    this.settings.update({ trayHintShown: true });
+    this.taskbar.hint('Cord работает в трее', 'Встреча продолжается. Открыть — щелчком по значку, выйти — в его меню.');
+  }
 
   /** Закрытие в звонке: страница отвечает `close.ready`, ждём ≤ 2,5 с (как сейчас). */
   private requestClose(): Promise<void> {
@@ -298,8 +342,11 @@ class Shell {
     const next = Object.keys(patch).length ? this.settings.update(settingsPatchOf(patch)) : this.settings.get();
     const window = this.main?.window ?? null;
     if (patch.tray !== undefined) {
-      if (!next.tray) this.taskbar.removeTray();
-      else if (this.main) this.installTray();
+      if (!next.tray) {
+        this.taskbar.removeTray();
+        // Без значка спрятанному окну неоткуда вернуться — показать его.
+        if (this.main && !this.main.window.isVisible()) this.main.focus();
+      } else if (this.main) this.installTray();
     }
     if (patch.autostart !== undefined) this.applyAutostart();
     if (patch.overlay !== undefined) this.updateOverlay();
@@ -553,6 +600,7 @@ class Shell {
     return {
       profile: await this.settings.profileFor(origin),
       theme: saved.theme,
+      language: saved.language,
       showPing: saved.showPing,
       notificationSounds: saved.notificationSounds,
       autoConnect: entry?.autoConnect ?? saved.autoConnect,
