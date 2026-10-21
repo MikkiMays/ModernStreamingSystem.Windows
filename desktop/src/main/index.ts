@@ -9,22 +9,24 @@
  * Версия приложения нигде не показывается, кроме «О программе» в вебе (`invoke('update.status')`).
  */
 import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, net, powerSaveBlocker, safeStorage, screen, type WebContents } from 'electron';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
+import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
-import { FEATURES, IPC, type Bootstrap } from '../shared/bridge';
+import { featuresFor, IPC, type Bootstrap } from '../shared/bridge';
 import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
+import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type AppSettings } from './app-settings';
 import { buildConfig } from './config';
-import { CaptureSelection, loopbackFor, type AudioMode } from './capture';
-import { Catalog, CatalogServer, defaultServer, parseCatalogPayload, verifyCatalog } from './catalog';
+import { CaptureSelection, captureSourceViews, loopbackFor, readCaptureSelect, type AudioMode, type CaptureSourceView } from './capture';
+import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
+import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { showNotification } from './notifications';
 import { ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME, shellUrl } from './protocol';
 import { SettingsStore } from './settings';
 import { Taskbar, type CallState } from './tray';
-import { publicKey } from './update/manifest';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
 import { CordUpdater } from './update/updater';
 import { appUserModelId, configureSession, cordSession, MainWindow } from './windows/main';
@@ -48,6 +50,10 @@ function log(message: string): void {
   }
   if (process.env.CORD_DEVTOOLS || smoke) console.log(message);
 }
+
+// Цифры для CI (ADR §10): только если задан CORD_METRICS_FILE — у человека ничего не меряется.
+const metricsFile = process.env.CORD_METRICS_FILE ?? '';
+const metrics = metricsFile ? new StartupMetrics(process.getCreationTime() ?? Date.now()) : null;
 
 registerShellScheme();
 appUserModelId();
@@ -90,6 +96,7 @@ class Shell {
     message: (message, sender) => this.onMessage(message, sender),
     call: (method, payload) => this.onCall(method, payload),
     version: () => app.getVersion(),
+    features: () => featuresFor(process.platform),
     log,
   });
   private readonly updater = new CordUpdater({
@@ -100,11 +107,15 @@ class Shell {
     rememberExpected: (version) => void this.settings.update({ expectedVersion: version }),
     log,
   });
-  private readonly taskbar = new Taskbar(app.getAppPath(), {
-    open: () => this.focus(),
-    toggleMicrophone: () => this.router.post('thumbar', { action: 'mic' }),
-    quit: () => this.quit(),
-  });
+  private readonly taskbar = new Taskbar(
+    app.getAppPath(),
+    {
+      open: () => this.focus(),
+      toggleMicrophone: () => this.router.post('thumbar', { action: 'mic' }),
+      quit: () => this.quit(),
+    },
+    () => this.settings.get(),
+  );
   private readonly hotkeys = new HotkeyRegistry(
     {
       register: (accelerator, callback) => {
@@ -116,7 +127,11 @@ class Shell {
       },
       unregister: (accelerator) => globalShortcut.unregister(accelerator),
     },
-    (action) => this.router.post('hotkey', { action, phase: 'down' }),
+    (action) => {
+      // Оверлей — окно оболочки: клавиша переключает его здесь же, веб узнаёт событием app.settings.
+      if (action === 'overlay.toggle') this.applyAppSettings({ overlay: !this.settings.get().overlayEnabled }, true);
+      else this.router.post('hotkey', { action, phase: 'down' });
+    },
   );
   private readonly capture = new CaptureSelection();
   private readonly overlay = new OverlayWindow(this.preloadDir);
@@ -128,12 +143,15 @@ class Shell {
   private call: CallState = { inCall: false, mic: false, camera: false, screen: false };
   private sleepBlocker: number | null = null;
   private pendingLink: DeepLink | null = null;
+  /** Запуск вместе с Windows (`--hidden`): первое главное окно открывается свёрнутым. */
+  private startMinimized = process.argv.includes('--hidden');
   private checkTimer: ReturnType<typeof setTimeout> | null = null;
   private quitting = false;
 
   // ----- старт -----
 
   async start(): Promise<void> {
+    this.installMetrics();
     installShellProtocol();
     installShellProtocol(cordSession());
     configureSession(cordSession(), this.windowHost);
@@ -141,9 +159,11 @@ class Shell {
     this.installShellCalls();
     this.installDisplayMedia();
     this.pendingLink = deepLinkFromArgv(process.argv);
-    // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) пишет settings.autostart.
-    if (process.platform === 'win32' && app.isPackaged) app.setLoginItemSettings({ openAtLogin: this.settings.get().autostart, args: ['--hidden'] });
-    await this.loadCatalog();
+    // Автозапуск — выключен по умолчанию (ADR §4.4); переключатель в настройках (E03) — app.settings.
+    this.applyAutostart();
+    this.loadCatalog();
+    // Свежий каталог — в фоне, параллельно с заставкой: ожидание сети не должно держать запуск.
+    void this.refreshCatalog();
     await this.splashThenMain();
   }
 
@@ -167,13 +187,10 @@ class Shell {
 
   private async openMain(): Promise<void> {
     const saved = this.settings.get();
-    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme);
+    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, this.startMinimized);
+    this.startMinimized = false;
     this.main = main;
-    try {
-      this.taskbar.installTray();
-    } catch (error) {
-      log(`трей: ${(error as Error).message}`);
-    }
+    if (saved.tray) this.installTray();
     await main.showLoading();
     const origin = this.currentOrigin();
     await this.router.prepareBootstrap(origin);
@@ -218,6 +235,52 @@ class Shell {
     });
   }
 
+  private installTray(): void {
+    try {
+      this.taskbar.installTray();
+    } catch (error) {
+      log(`трей: ${(error as Error).message}`);
+    }
+  }
+
+  private applyAutostart(): void {
+    if (process.platform !== 'win32' || !app.isPackaged) return;
+    try {
+      app.setLoginItemSettings({ openAtLogin: this.settings.get().autostart, args: ['--hidden'] });
+    } catch (error) {
+      log(`автозапуск: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Переключатели раздела «Windows» (E03, T53): записать и сразу применить. `announce` — изменение
+   * пришло не от веба (клавиша оверлея), и открытые настройки должны его увидеть.
+   */
+  private applyAppSettings(patch: Partial<AppSettings>, announce = false): AppSettings {
+    const next = Object.keys(patch).length ? this.settings.update(settingsPatchOf(patch)) : this.settings.get();
+    const window = this.main?.window ?? null;
+    if (patch.tray !== undefined) {
+      if (!next.tray) this.taskbar.removeTray();
+      else if (this.main) this.installTray();
+    }
+    if (patch.autostart !== undefined) this.applyAutostart();
+    if (patch.overlay !== undefined) this.overlay.setVisible(this.call.inCall && next.overlayEnabled);
+    if (patch.thumbar !== undefined || patch.badge !== undefined) this.taskbar.refresh(window);
+    if (patch.sleepBlocker !== undefined) this.applySleepBlocker();
+    const values = appSettingsOf(next);
+    if (announce) this.router.post('app.settings', { ...values });
+    return values;
+  }
+
+  private applySleepBlocker(): void {
+    const awake = keepAwake(this.call, this.settings.get());
+    if (awake && this.sleepBlocker === null) this.sleepBlocker = powerSaveBlocker.start('prevent-display-sleep');
+    if (!awake && this.sleepBlocker !== null) {
+      powerSaveBlocker.stop(this.sleepBlocker);
+      this.sleepBlocker = null;
+    }
+  }
+
   private quit(): void {
     this.quitting = true;
     this.hotkeys.clear();
@@ -255,26 +318,76 @@ class Shell {
     return list;
   }
 
-  /** Каталог: подписанный JWS с главного сервера, иначе снимок из сборки. Неверный — остаётся прежний. */
-  private async loadCatalog(): Promise<void> {
-    const snapshot = join(app.getAppPath(), 'dist', 'shell', 'catalog.json');
+  private catalogKeys: KeyObject[] = [];
+  private readonly catalogCache = join(app.getPath('userData'), 'catalog.jws');
+
+  /**
+   * Каталог при запуске (ADR §8): последний хороший — сохранённый с прошлого раза или снимок из
+   * установщика, самый новый из проверенных. Ключи — `dist/catalog-keys.json` (копия
+   * `contracts/catalog-keys.json` ядра). Ни одного — сервер из сборки.
+   */
+  private loadCatalog(): void {
+    const read = (path: PathLike) => {
+      try {
+        return existsSync(path) ? readFileSync(path, 'utf8') : null;
+      } catch {
+        return null;
+      }
+    };
     try {
-      const { readFileSync, existsSync } = await import('node:fs');
-      if (existsSync(snapshot)) this.catalog = parseCatalogPayload(readFileSync(snapshot, 'utf8'));
+      this.catalogKeys = parseCatalogKeys(read(join(app.getAppPath(), 'dist', 'catalog-keys.json')) ?? '');
     } catch (error) {
-      log(`снимок каталога: ${(error as Error).message}`);
+      log(`ключи каталога: ${(error as Error).message}`);
+      return;
     }
-    const keys = (this.config as { catalogKeys?: string[] }).catalogKeys ?? [];
-    if (keys.length === 0 || smoke) return;
+    const picked = pickCatalog(
+      [
+        { source: 'cache', jws: read(this.catalogCache) },
+        { source: 'snapshot', jws: read(join(app.getAppPath(), 'dist', 'shell', 'catalog.jws')) },
+      ],
+      this.catalogKeys,
+      this.settings.get().catalogSeq,
+    );
+    if (!picked) {
+      log('каталог: ни сохранённый, ни снимок не прошли проверку — сервер из сборки');
+      return;
+    }
+    this.catalog = picked.catalog;
+    if (picked.catalog.seq > this.settings.get().catalogSeq) this.settings.update({ catalogSeq: picked.catalog.seq });
+    log(`каталог: ${picked.source}, seq ${picked.catalog.seq}`);
+  }
+
+  /**
+   * Свежий подписанный каталог из ядра (`GET /api/v1/catalog`): текущий сервер, затем главный.
+   * Неверный — остаётся прежний. Не вышло при запуске (сеть ещё не поднялась, машина занята) —
+   * ещё одна попытка через минуту, уже в покое.
+   */
+  private async refreshCatalog(retry = true): Promise<void> {
+    if (this.catalogKeys.length === 0) return;
+    const origins = [ServerOrigin.tryParse(this.settings.get().serverUrl)?.url, this.config.defaultServer].filter(
+      (url, index, list): url is string => !!url && list.indexOf(url) === index,
+    );
+    const fresh = await fetchCatalog(
+      origins,
+      (url) => net.fetch(url, { signal: AbortSignal.timeout(10_000), headers: { Accept: 'application/jose+json, application/json' } }),
+      this.catalogKeys,
+      this.settings.get().catalogSeq,
+      Date.now(),
+      log,
+    );
+    if (!fresh) {
+      if (retry && !this.quitting) setTimeout(() => void this.refreshCatalog(false), 60_000).unref();
+      return;
+    }
+    this.catalog = fresh.catalog;
+    this.settings.update({ catalogSeq: fresh.catalog.seq });
     try {
-      const response = await net.fetch(new URL('/api/v1/catalog', this.config.defaultServer).toString(), { signal: AbortSignal.timeout(5000) });
-      if (!response.ok) return;
-      const catalog = verifyCatalog(await response.text(), keys.map(publicKey), this.settings.get().catalogSeq);
-      this.catalog = catalog;
-      this.settings.update({ catalogSeq: catalog.seq });
+      writeFileSync(this.catalogCache + '.tmp', fresh.jws, 'utf8');
+      renameSync(this.catalogCache + '.tmp', this.catalogCache);
     } catch (error) {
-      log(`каталог: ${(error as Error).message}`);
+      log(`каталог: не сохранён — ${(error as Error).message}`);
     }
+    log(`каталог: из сети, seq ${fresh.catalog.seq}`);
   }
 
   private catalogServers(): (CatalogServer & { current: boolean })[] {
@@ -317,6 +430,10 @@ class Shell {
     switch (message.type) {
       case 'state':
         this.page = message.page;
+        if (message.page === 'home' && metrics && !metrics.marks.home) {
+          metrics.mark('home');
+          this.scheduleMetrics(Number(process.env.CORD_METRICS_IDLE_MS ?? 60_000));
+        }
         this.updateCall({ ...this.call, inCall: message.inCall });
         if (message.theme !== this.settings.get().theme && (message.theme === 'light' || message.theme === 'dark' || message.theme === 'system')) {
           this.settings.update({ theme: message.theme });
@@ -387,17 +504,21 @@ class Shell {
       case 'session.renew':
         // Пароль сервера оболочка не хранит (В-2): рукопожатие делает сама страница.
         return { token: null };
-      case 'capture.sources': {
-        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
-        return sources
-          .filter((source) => !source.name.startsWith('Cord'))
-          .map((source) => ({
-            id: source.id,
-            name: source.name.slice(0, 80),
-            kind: source.id.startsWith('screen') ? 'screen' : 'window',
-            thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
-            icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.resize({ width: 24 }).toDataURL() : '',
-          }));
+      case 'capture.sources':
+        return this.captureSources();
+      case 'app.settings': {
+        // Пустой патч — чтение; чужое имя или не true/false — отказ целиком.
+        const patch = readAppSettingsPatch(payload);
+        if (!patch) throw new Error('Недоступно.');
+        return this.applyAppSettings(patch);
+      }
+      case 'capture.select': {
+        // Запрос с ответом, а не сообщение: веб ждёт ответа и только потом зовёт getDisplayMedia —
+        // иначе запрос захвата мог бы обогнать выбор, и человек увидел бы второе окно выбора.
+        const selection = readCaptureSelect(payload);
+        if (!selection) throw new Error('Недоступно.');
+        this.capture.select(selection.id, selection.audio);
+        return { ok: true };
       }
       default:
         void payload;
@@ -414,15 +535,41 @@ class Shell {
       camera: () => this.router.post('thumbar', { action: 'camera' }),
       leave: () => this.router.post('thumbar', { action: 'leave' }),
     });
-    const keepAwake = next.inCall || next.screen;
-    if (keepAwake && this.sleepBlocker === null) this.sleepBlocker = powerSaveBlocker.start('prevent-display-sleep');
-    if (!keepAwake && this.sleepBlocker !== null) {
-      powerSaveBlocker.stop(this.sleepBlocker);
-      this.sleepBlocker = null;
-    }
+    this.applySleepBlocker();
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) this.hotkeys.apply(this.settings.get().hotkeys);
     this.overlay.setVisible(next.inCall && this.settings.get().overlayEnabled);
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();
+  }
+
+  // ----- метрики CI (ADR §10) -----
+
+  private metricsTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private installMetrics(): void {
+    if (!metrics) return;
+    app.on('browser-window-created', (_, window) =>
+      window.once('ready-to-show', () => {
+        const mark = markFor(window.webContents.getURL());
+        if (mark) metrics.mark(mark);
+      }),
+    );
+    // Главная так и не пришла (стенд недоступен) — записать, что есть, через две с половиной минуты.
+    this.scheduleMetrics(150_000);
+  }
+
+  /** Память в покое — через `idleMs` после главной; файл пишется один раз. */
+  private scheduleMetrics(idleMs: number): void {
+    if (this.metricsTimer) clearTimeout(this.metricsTimer);
+    this.metricsTimer = setTimeout(() => {
+      if (!metrics) return;
+      const summary = metrics.summary(sumMemory(app.getAppMetrics()), process.platform, app.getVersion());
+      try {
+        writeFileSync(metricsFile, JSON.stringify(summary, null, 2) + '\n', 'utf8');
+        log(`метрики: ${JSON.stringify(summary)}`);
+      } catch (error) {
+        log(`метрики: не записаны — ${(error as Error).message}`);
+      }
+    }, Math.max(0, idleMs));
   }
 
   // ----- deep links -----
@@ -486,6 +633,13 @@ class Shell {
   }
 
   // ----- захват -----
+
+  /** Экраны и окна для окна выбора (веба или оболочки): миниатюры ≤ 320 px, без своих окон Cord. */
+  private async captureSources(): Promise<{ systemAudio: boolean; sources: CaptureSourceView[] }> {
+    const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
+    const own = new Set(BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId()));
+    return { systemAudio: process.platform === 'win32', sources: captureSourceViews(sources, own) };
+  }
 
   private picker: BrowserWindow | null = null;
   private pickerResolve: ((selection: { id: string; audio: AudioMode } | null) => void) | null = null;
@@ -607,21 +761,8 @@ class Shell {
           this.router.attach(this.main.window.webContents, origin);
           return this.main.open(origin);
         }
-        case 'capture.sources': {
-          const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
-          return {
-            systemAudio: process.platform === 'win32',
-            sources: sources
-              .filter((source) => !source.name.startsWith('Cord'))
-              .map((source) => ({
-                id: source.id,
-                name: source.name.slice(0, 80),
-                kind: source.id.startsWith('screen') ? 'screen' : 'window',
-                thumbnail: source.thumbnail.isEmpty() ? '' : source.thumbnail.toDataURL(),
-                icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.resize({ width: 24 }).toDataURL() : '',
-              })),
-          };
-        }
+        case 'capture.sources':
+          return this.captureSources();
         case 'capture.pick': {
           const id = typeof data.id === 'string' && /^(screen|window):\d+:\d+$/.test(data.id) ? data.id : null;
           const audio: AudioMode = data.audio === 'system' ? 'system' : 'none';
@@ -632,7 +773,7 @@ class Shell {
           this.finishPicker(null);
           return true;
         case 'shell.features':
-          return { features: FEATURES, version: app.getVersion() };
+          return { features: featuresFor(process.platform), version: app.getVersion() };
         default:
           return null;
       }
@@ -644,14 +785,14 @@ class Shell {
   }
 }
 
-/** Медиана трёх `HEAD /api/v1/health`, в миллисекундах; null — не ответил. */
+/** Медиана трёх `HEAD /api/v1/ping` (открытый маршрут ядра), в миллисекундах; null — не ответил. */
 async function ping(origin: ServerOrigin): Promise<number | null> {
   const samples: number[] = [];
   for (let attempt = 0; attempt < 3; attempt++) {
     const started = performance.now();
     try {
-      const response = await net.fetch(new URL('/api/v1/health', origin.url).toString(), { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-      if (response.ok || response.status === 405) samples.push(performance.now() - started);
+      const response = await net.fetch(new URL('/api/v1/ping', origin.url).toString(), { method: 'HEAD', signal: AbortSignal.timeout(3000) });
+      if (response.ok) samples.push(performance.now() - started);
     } catch {
       /* не ответил */
     }

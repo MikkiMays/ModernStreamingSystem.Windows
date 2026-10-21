@@ -7,6 +7,7 @@
  * маршрутизатор (`router.ts`) до того, как сюда попадёт JSON.
  */
 import { AVATAR_LIMIT, MESSAGE_LIMIT, PAGE_CALLS, PAGE_MESSAGES, type PageCall, type PageMessage } from '../../shared/bridge';
+import { readCaptureSelect } from '../capture';
 
 export interface Hotkey {
   code: string;
@@ -178,9 +179,8 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       return { type: kind, count: Math.min(data.count, 999) };
     }
     case 'capture.select': {
-      if (typeof data.id !== 'string' || !/^(screen|window):\d+:\d+$/.test(data.id)) return null;
-      if (data.audio !== 'none' && data.audio !== 'system' && data.audio !== 'app' && data.audio !== 'system-except-cord') return null;
-      return { type: kind, id: data.id, audio: data.audio };
+      const selection = readCaptureSelect(data);
+      return selection ? { type: kind, ...selection } : null;
     }
   }
   return null;

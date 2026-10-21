@@ -10,7 +10,7 @@ export const PROTOCOL = { major: 2, minor: 0 } as const;
 /** Что умеет эта сборка оболочки. Веб показывает понятный отказ там, где флага нет. */
 export const FEATURES = [
   'hotkeys', // глобальные сочетания через globalShortcut (только нажатие, без фазы «отпустил»)
-  'capture', // своё окно выбора источника: capture.sources / capture.select
+  'capture', // своё окно выбора источника в вебе: invoke('capture.sources'), invoke('capture.select') — до getDisplayMedia
   'capture.system-audio', // loopback всего звука системы (Windows); звук приложения — ждёт cord-native
   'overlay', // окно поверх игр без инъекций
   'notify',
@@ -22,8 +22,20 @@ export const FEATURES = [
   'servers',
   'update',
   'power',
+  'app.settings', // переключатели раздела «Windows» в настройках веба: invoke('app.settings', патч), событие app.settings
+  'tray', // значок в трее
+  'sleep', // запрет сна во время встречи (powerSaveBlocker)
+  'autostart', // запуск вместе с Windows
 ] as const;
 export type Feature = (typeof FEATURES)[number];
+
+/** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки (API панели задач), автозапуск. */
+const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge', 'autostart']);
+
+/** Флаги этой машины: веб не показывает переключатель того, чего здесь нет. */
+export function featuresFor(platform: NodeJS.Platform): Feature[] {
+  return FEATURES.filter((feature) => platform === 'win32' || !WINDOWS_ONLY.has(feature));
+}
 
 /** Сообщения страницы оболочке (`send`). */
 export const PAGE_MESSAGES = [
@@ -47,7 +59,7 @@ export const PAGE_MESSAGES = [
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
 
 /** Запросы страницы с ответом (`invoke`). */
-export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources'] as const;
+export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select', 'app.settings'] as const;
 export type PageCall = (typeof PAGE_CALLS)[number];
 
 /** Сообщения оболочки странице (`on`). */
@@ -70,6 +82,7 @@ export const HOST_MESSAGES = [
   'notification.action',
   'power',
   'capture.ended',
+  'app.settings',
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 

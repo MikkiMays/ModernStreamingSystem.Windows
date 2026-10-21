@@ -8,10 +8,14 @@
  * `dataset.desktop`. Так веб читает их здесь так же, как читал в WebView2.
  */
 import { contextBridge, ipcRenderer } from 'electron';
-import { FEATURES, HOST_MESSAGES, IPC, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, type Bootstrap, type CordDesktopApi, type HostMessage } from '../shared/bridge';
+import { FEATURES, HOST_MESSAGES, IPC, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
 
-const handed = ipcRenderer.sendSync(IPC.bootstrap) as { bootstrap: Bootstrap; version: string } | null;
+const handed = ipcRenderer.sendSync(IPC.bootstrap) as { bootstrap: Bootstrap; version: string; features?: unknown } | null;
 const bootstrap = handed?.bootstrap ?? null;
+// Флаги этой машины от main (`featuresFor`): на Windows — все, иначе без API панели задач. Только известные имена.
+const features: readonly Feature[] = Object.freeze(
+  Array.isArray(handed?.features) ? FEATURES.filter((feature) => (handed.features as unknown[]).includes(feature)) : [...FEATURES],
+);
 
 if (bootstrap && window === window.top) {
   try {
@@ -60,7 +64,7 @@ ipcRenderer.on(IPC.host, (_, type: unknown, data: unknown) => {
 
 const api: CordDesktopApi = {
   protocol: PROTOCOL,
-  features: FEATURES,
+  features,
   app: { version: handed?.version ?? '', arch: process.arch as 'x64' },
   bootstrap: bootstrap ?? { profile: '', theme: 'system', showPing: false, notificationSounds: true, autoConnect: true },
   send(type, payload) {

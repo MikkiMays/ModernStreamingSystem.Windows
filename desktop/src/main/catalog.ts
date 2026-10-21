@@ -6,7 +6,7 @@
  *
  * Ручного добавления сервера нет нигде: только выбор из этого списка.
  */
-import { verify as verifySignature, type KeyObject } from 'node:crypto';
+import { createPublicKey, verify as verifySignature, type KeyObject } from 'node:crypto';
 import { ServerOrigin } from './origins';
 
 export interface CatalogServer {
@@ -114,6 +114,100 @@ export function verifyCatalog(jws: string, keys: readonly KeyObject[], lastSeq: 
   if (catalog.seq < lastSeq) throw new CatalogError('Каталог старее уже принятого.', 'rollback');
   if (Date.parse(catalog.expiresAt) + GRACE_MS < now) throw new CatalogError('Срок каталога истёк.', 'expired');
   return catalog;
+}
+
+/**
+ * Ключи из `build/catalog-keys.json` — копии `contracts/catalog-keys.json` ядра: JWKS (RFC 8037),
+ * только Ed25519, порядок `[текущий, следующий]`. Пустой или чужой список — ошибка сборки, а не
+ * «принимать что угодно».
+ */
+export function parseCatalogKeys(json: string): KeyObject[] {
+  let data: unknown;
+  try {
+    data = JSON.parse(json);
+  } catch {
+    throw new CatalogError('Ключи каталога не читаются.', 'keys');
+  }
+  const list = (data as { keys?: unknown } | null)?.keys;
+  if (!Array.isArray(list)) throw new CatalogError('Ключи каталога не читаются.', 'keys');
+  const keys: KeyObject[] = [];
+  for (const item of list) {
+    const jwk = (item ?? {}) as Record<string, unknown>;
+    if (jwk.kty !== 'OKP' || jwk.crv !== 'Ed25519' || typeof jwk.x !== 'string') throw new CatalogError('Ключ каталога — не Ed25519.', 'keys');
+    keys.push(createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: jwk.x }, format: 'jwk' }));
+  }
+  if (keys.length === 0) throw new CatalogError('Нет ключей каталога.', 'keys');
+  return keys;
+}
+
+export interface CatalogCandidate {
+  source: 'cache' | 'snapshot' | 'network';
+  jws: string | null;
+}
+
+export interface AcceptedCatalog {
+  source: CatalogCandidate['source'];
+  jws: string;
+  catalog: Catalog;
+}
+
+/**
+ * Последний хороший каталог при запуске: из сохранённого с прошлого раза (`catalog.jws` в
+ * `userData`) и снимка из установщика — самый новый из тех, что проходят проверку. Ни одного —
+ * `null`, и оболочка берёт сервер из сборки.
+ */
+export function pickCatalog(candidates: readonly CatalogCandidate[], keys: readonly KeyObject[], lastSeq: number, now: number = Date.now()): AcceptedCatalog | null {
+  let best: AcceptedCatalog | null = null;
+  for (const candidate of candidates) {
+    if (!candidate.jws) continue;
+    try {
+      const catalog = verifyCatalog(candidate.jws, keys, lastSeq, now);
+      if (!best || catalog.seq > best.catalog.seq) best = { source: candidate.source, jws: candidate.jws, catalog };
+    } catch {
+      /* битый, чужой, старый или просроченный — следующий */
+    }
+  }
+  return best;
+}
+
+export interface CatalogResponse {
+  ok: boolean;
+  status: number;
+  text(): Promise<string>;
+}
+
+/**
+ * Свежий каталог из ядра: `GET /api/v1/catalog` у серверов по очереди (текущий, затем главный из
+ * сборки). Подпись офлайн, поэтому годится ответ любого сервера Cord — подменить его сервер не
+ * может. Первый прошедший проверку — ответ; никто — `null`, остаётся прежний.
+ */
+export async function fetchCatalog(
+  origins: readonly string[],
+  fetcher: (url: string) => Promise<CatalogResponse>,
+  keys: readonly KeyObject[],
+  lastSeq: number,
+  now: number = Date.now(),
+  log: (line: string) => void = () => {},
+): Promise<AcceptedCatalog | null> {
+  for (const origin of origins) {
+    const url = new URL('/api/v1/catalog', origin).toString();
+    try {
+      const response = await fetcher(url);
+      if (!response.ok) {
+        log(`каталог ${url}: ответ ${response.status}`);
+        continue;
+      }
+      const jws = await response.text();
+      if (jws.length > 256 * 1024) {
+        log(`каталог ${url}: слишком большой`);
+        continue;
+      }
+      return { source: 'network', jws, catalog: verifyCatalog(jws, keys, lastSeq, now) };
+    } catch (error) {
+      log(`каталог ${url}: ${(error as Error).message}`);
+    }
+  }
+  return null;
 }
 
 /** Сервер первого запуска: `default`, пока нет замера пинга (ADR §8 — по наименьшему пингу среди соседей). */

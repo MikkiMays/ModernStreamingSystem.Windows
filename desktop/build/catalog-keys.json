@@ -1,0 +1,13 @@
+{
+  "_comment": "Открытые ключи Ed25519 подписи каталога серверов (ADR 0001 §8, решение архитектора 9): [текущий, следующий], JWK по RFC 8037; kid — sha-256 от SPKI DER, base64url. Клиент принимает подпись любым ключом списка. Сейчас здесь ключ стенда cord.nikg.tech (E01-B2, 20.10.2026), закрытая половина — .local/cord-catalog-key.pem на стенде, не в git. Боевой ключ владелец создаёт `node scripts/sign-catalog.mjs keygen` и ставит вторым, затем первым. Копия — desktop/build/catalog-keys.json в ModernStreamingSystem.Windows.",
+  "keys": [
+    {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "JhD9VZTx4eI9OoeAu79ha3TPOo6RIbaloCRkjQ6X0ig",
+      "kid": "uqKOdzQx89cxG6w2PhIJ8_iqJplS3hYS23GJNAiEzgw",
+      "alg": "EdDSA",
+      "use": "sig"
+    }
+  ]
+}
