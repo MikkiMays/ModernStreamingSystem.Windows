@@ -49,7 +49,8 @@ export type Validated =
   | { type: 'capture.select'; id: string; audio: 'none' | 'system' | 'app' | 'system-except-cord' };
 
 const ROOM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HOTKEY_CODE = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space)$/;
+// Кнопки мыши Mouse3 (средняя), Mouse4 и Mouse5 (боковые) — только через cord-native (Raw Input); без него — «в окне встречи».
+const HOTKEY_CODE = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Mouse[3-5])$/;
 const ACTIONS: readonly HotkeyAction[] = ['mic.toggle', 'ptt', 'deafen', 'overlay.toggle'];
 
 export function validHotkey(value: unknown): value is Hotkey {

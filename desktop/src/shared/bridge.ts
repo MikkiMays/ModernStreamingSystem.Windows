@@ -10,8 +10,10 @@ export const PROTOCOL = { major: 2, minor: 0 } as const;
 /** Что умеет эта сборка оболочки. Веб показывает понятный отказ там, где флага нет. */
 export const FEATURES = [
   'hotkeys', // глобальные сочетания через globalShortcut (только нажатие, без фазы «отпустил»)
+  'ptt', // cord-native, Raw Input: фаза «отпустил», любые клавиши без Ctrl/Alt, кнопки мыши Mouse3–Mouse5; событие hotkey {action, phase}
   'capture', // своё окно выбора источника в вебе: invoke('capture.sources'), invoke('capture.select') — до getDisplayMedia
-  'capture.system-audio', // loopback всего звука системы (Windows); звук приложения — ждёт cord-native
+  'capture.system-audio', // loopback всего звука системы (Windows), режим audio: 'system'
+  'capture.app-audio', // cord-native, process loopback: audio: 'app' (звук приложения) и 'system-except-cord'; дорожка — элемент #cord-desktop-capture-audio, событие capture.audio
   'overlay', // окно поверх игр без инъекций
   'notify',
   'thumbar',
@@ -31,11 +33,16 @@ export type Feature = (typeof FEATURES)[number];
 
 /** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки (API панели задач), автозапуск. */
 const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge', 'autostart']);
+/** Только с загруженным `cord-native` (utility-процесс жив и модуль на месте). */
+const NATIVE_ONLY: ReadonlySet<Feature> = new Set<Feature>(['ptt', 'capture.app-audio']);
 
 /** Флаги этой машины: веб не показывает переключатель того, чего здесь нет. */
-export function featuresFor(platform: NodeJS.Platform): Feature[] {
-  return FEATURES.filter((feature) => platform === 'win32' || !WINDOWS_ONLY.has(feature));
+export function featuresFor(platform: NodeJS.Platform, native = false): Feature[] {
+  return FEATURES.filter((feature) => (platform === 'win32' || !WINDOWS_ONLY.has(feature)) && (native || !NATIVE_ONLY.has(feature)));
 }
+
+/** Элемент на странице сервера, через который preload отдаёт вебу дорожку звука захвата (`srcObject`). */
+export const CAPTURE_AUDIO_ELEMENT = 'cord-desktop-capture-audio';
 
 /** Сообщения страницы оболочке (`send`). */
 export const PAGE_MESSAGES = [
@@ -83,6 +90,7 @@ export const HOST_MESSAGES = [
   'power',
   'capture.ended',
   'app.settings',
+  'capture.audio', // {state: 'ready' | 'failed' | 'ended', mode, reason?} — звук приложения / системы кроме Cord (cord-native)
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 
@@ -113,6 +121,8 @@ export const IPC = {
   host: 'cord:host',
   shellCall: 'cord:shell:call',
   shellEvent: 'cord:shell:event',
+  /** main → preload: порт PCM захвата (`postMessage` с портом); preload → main: `{type: 'stopped'}`. */
+  captureAudio: 'cord:capture-audio',
 } as const;
 
 /** Больше одного сообщения страницы не бывает (как `BridgeProtocol.Read`). */
