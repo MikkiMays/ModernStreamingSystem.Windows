@@ -139,6 +139,7 @@ async function checkCaptureAudioBridge(main: Page): Promise<void> {
     const element = document.getElementById('cord-desktop-capture-audio') as HTMLAudioElement | null;
     const audio = element?.srcObject instanceof MediaStream ? element.srcObject : null;
     const track = audio?.getAudioTracks()[0] ?? null;
+    const trackState = track?.readyState ?? null;
     let peak = 0;
     if (audio) {
       const context = new AudioContext();
@@ -164,7 +165,7 @@ async function checkCaptureAudioBridge(main: Page): Promise<void> {
     });
     track?.stop();
     for (const item of stream.getTracks()) item.stop();
-    return { appAudio: sources.appAudio, state, hasTrack: !!track, trackState: track?.readyState ?? null, peak, ended: await ended, elementLeft: !!document.getElementById('cord-desktop-capture-audio') };
+    return { appAudio: sources.appAudio, state, hasTrack: !!track, trackState, peak, ended: await ended, elementLeft: !!document.getElementById('cord-desktop-capture-audio') };
   });
   console.log('[smoke] звук захвата', JSON.stringify(result), new Date().toISOString());
   expect(result).not.toHaveProperty('error');
