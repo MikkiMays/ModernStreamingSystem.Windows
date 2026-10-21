@@ -89,6 +89,26 @@ describe('HotkeyRegistry — запасной путь globalShortcut', () => {
     expect(again['mic.toggle']).toBe(STATUS_GLOBAL);
     expect([...registered.keys()]).toEqual(['Control+M']);
   });
+
+  it('«удерживать» запасным путём не ставит: без отпускания микрофон остался бы включённым', async () => {
+    const registered = new Map<string, () => void>();
+    const registry = new HotkeyRegistry(
+      {
+        register: (combo, callback) => {
+          registered.set(combo, callback);
+          return true;
+        },
+        unregister: (combo) => void registered.delete(combo),
+      },
+      () => {},
+    );
+    const status = await registry.apply([
+      { action: 'ptt', mode: 'hold', key: key('KeyV', { ctrl: true }) },
+      { action: 'overlay.toggle', mode: 'toggle', key: key('KeyO', { ctrl: true, shift: true }) },
+    ]);
+    expect([...registered.keys()]).toEqual(['Control+Shift+O']);
+    expect(status.ptt).toBe(STATUS_WINDOW_ONLY);
+  });
 });
 
 describe('HotkeyRegistry — Raw Input из cord-native', () => {

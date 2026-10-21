@@ -156,6 +156,10 @@ export class HotkeyRegistry {
     const status: HotkeyStatus = { ...plan.notes };
     this.backend = 'shortcut';
     for (const registration of plan.registrations) {
+      // globalShortcut сообщает только нажатие: «удерживать» через него включило бы микрофон и
+      // не выключило (модуль упал посреди встречи). Такое сочетание работает только в окне Cord,
+      // где отпускание ловит сама страница.
+      if (registration.mode === 'hold') continue;
       const ok = this.shortcuts.register(registration.accelerator, () => this.fire(registration.action, registration.mode, 'down'));
       if (ok) {
         this.current.push(registration);
