@@ -4,6 +4,7 @@
 - **Изменено 20.10.2026** (решение владельца по T58): обновление — заставкой при запуске, как у Discord (§5.1); обратной совместимости со старыми клиентами нет — ни прокладки моста v1 (§3.2), ни переходного Inno-выпуска (§7.2).
 - **Изменено 20.10.2026** (E01-B2): `capture.select` — запрос с ответом (`invoke`), а не сообщение: веб ждёт ответа до `getDisplayMedia` (§4.1); переключатели §4.4 — `invoke('app.settings', патч)` и событие `app.settings`, флаги `app.settings`, `tray`, `sleep`, `autostart`, а `capture.system-audio`, `thumbar`, `badge`, `autostart` объявляются только в Windows; каталог (§8) — JWKS `contracts/catalog-keys.json`, подписанный снимок `src/shell/catalog.jws`, последний хороший — `userData/catalog.jws`; `metrics.json` (§10) — `scripts/test-installer.ps1 -Metrics`.
 - **Изменено 21.10.2026** (E01-B3, `cord-native`): модуль построен — Raw Input (§4.2), process loopback (§4.1), переднее окно (§4.3); состав §4.6 — как собрано (`dpapi` не нужен по В-2, `net` не делался); дорога звука — `MediaStreamTrackGenerator` в preload и элемент `#cord-desktop-capture-audio` на странице, а не AudioWorklet в вебе (§4.1); флаги `ptt` и `capture.app-audio` объявляются только с загруженным модулем; событие `capture.audio` (§3.3); сборка — `cargo build` без `@napi-rs/cli` (§9).
+- **Изменено 21.10.2026** (ревью 1.0.3, R57–R64): крестик прячет окно в трей, пока есть значок (`close-policy.ts`, §4.4); значок трея — `dist/shell/tray.ico` (`tray-icon.ts`); AUMID процесса = `appId` установщика (`APP_ID`, §4.4), ярлык рабочего стола с AUMID; событие `window.state` и `silent` у `notify` (§3.3); оверлей включён по умолчанию и не показывается без сведений о переднем окне (§4.3, `settingsRev: 2`); установщик — окно выбора языка, язык уходит приложению (`Bootstrap.language`), `ManifestDPIAware`, картинки 2× (§6); ключи Chromium `disable-renderer-backgrounding`, `disable-backgrounding-occluded-windows` (§2.1).
 - **Область:** новый клиент Windows вместо WinUI 3 + WebView2 (`src/Cord.Windows`, 0.7.x).
 - **Версии на дату решения:** Electron 44.9 (stable), electron-builder 26.15 (27 — alpha), electron-updater 6.8, @napi-rs/cli 3.10, livekit-client 2.23. Electron поддерживает три последних мажора с циклом ~8 недель, поэтому мажор обновляем не реже раза в 16 недель ([timelines](https://www.electronjs.org/docs/latest/tutorial/electron-timelines)).
 
@@ -96,7 +97,7 @@ desktop/
 
 - `titleBarStyle: 'hidden'` + `titleBarOverlay` (36 px, цвета по теме); шапку с маркой (T01) рисует веб в режиме приложения (Window Controls Overlay, `app-region: drag`);
 - `backgroundMaterial: 'mica'`;
-- `backgroundThrottling: false` — свёрнутое окно в звонке не замедляет таймеры;
+- `backgroundThrottling: false` — свёрнутое окно в звонке не замедляет таймеры; плюс ключи Chromium `disable-renderer-backgrounding` и `disable-backgrounding-occluded-windows` (R01–R03): окна оболочки и воркеры не усыпляются, когда Cord спрятан в трей или накрыт игрой;
 - `autoplayPolicy: 'no-user-gesture-required'` вместо нынешнего ключа WebView2.
 
 **Старт:** сначала заставка обновления (§5.1) — отдельное маленькое окно; главное окно создаётся только после неё. Затем локальная `cord-app://shell/loading` (упакованный компонент загрузки E16) → в фоне рукопожатие (`POST /api/v1/session`, пароль из DPAPI) → `loadURL(origin)`. **Смена сервера:** подтверждение выхода из встречи → загрузка → новый origin.
@@ -183,6 +184,7 @@ interface CordDesktop {
 | — | `thumbar` `{action: mic\|camera\|leave}`, `deeplink` `{room}`, `notification.action`, `power` `{suspend\|resume\|lock}`, `capture.ended` | Новые возможности |
 | — | `app.settings` | Значения переключателей §4.4, когда их сменила сама оболочка (клавиша `overlay.toggle`) |
 | — | `capture.audio` `{state: ready\|failed\|ended, mode, reason?}` | Звук приложения / системы кроме Cord (§4.1): дорожка готова в `#cord-desktop-capture-audio`, не вышло (`unavailable`, `not-a-window`, текст ошибки активации) или закончилась. Новый подписчик получает текущее состояние сразу |
+| — | `window.state` `{focused, visible}` | Окно в фокусе / видно (спрятано в трей, свёрнуто): веб шлёт `notify` только когда человек не смотрит (R59). `notify` принимает `silent: true` — без системного звука, событие озвучивает веб |
 
 ## 4. Нативные возможности
 
@@ -246,9 +248,10 @@ interface CordDesktop {
 
 - в эксклюзивном полноэкранном режиме DirectX окно поверх не видно; оконный режим и borderless работают (T23 это и просит);
 - внешние ESP-читы тоже рисуют прозрачными окнами, поэтому отдельный античит может такое окно прятать — проверка с FACEIT (CS2) обязательна в приёмке E01-B;
-- по умолчанию оверлей **выключен**: включается переключателем и клавишей, виден только в звонке.
+- по умолчанию оверлей **включён** (R61, `settingsRev: 2` включает его и тем, у кого 1.0.x записала `false`); выключается переключателем и клавишей, виден только в звонке;
+- без сведений о переднем окне (нет `cord-native`, модуль упал) оверлей не показывается вовсе — иначе он ложился поверх самого Cord.
 
-**Как собрано (E01-B3, `overlay-policy.ts`, `native/src/foreground.rs`).** Utility-процесс раз в 300 мс (таймер того же скрытого окна) снимает `GetForegroundWindow` → `GetWindowThreadProcessId`, `GetWindowRect`, `MonitorFromWindow` + `GetMonitorInfo`, `GetClassName`; «во весь экран» — окно накрывает монитор целиком (рамка borderless за краями тоже), кроме рабочего стола (`Progman`/`WorkerW`); «своё» — PID в дереве главного процесса Cord по снимку Toolhelp (`CreateToolhelp32Snapshot`, без `OpenProcess`; карта не чаще раза в 5 с и только при смене окна). Событие уходит только при изменении. Решение в main: виден в звонке, если включён, впереди не Cord и окно во весь монитор — в левом верхнем углу именно этого монитора (`screen.screenToDipPoint` → `getDisplayNearestPoint`); без модуля — как раньше, на дисплее главного окна.
+**Как собрано (E01-B3, `overlay-policy.ts`, `native/src/foreground.rs`).** Utility-процесс раз в 300 мс (таймер того же скрытого окна) снимает `GetForegroundWindow` → `GetWindowThreadProcessId`, `GetWindowRect`, `MonitorFromWindow` + `GetMonitorInfo`, `GetClassName`; «во весь экран» — окно накрывает монитор целиком (рамка borderless за краями тоже), кроме рабочего стола (`Progman`/`WorkerW`); «своё» — PID в дереве главного процесса Cord по снимку Toolhelp (`CreateToolhelp32Snapshot`, без `OpenProcess`; карта не чаще раза в 5 с и только при смене окна). Событие уходит только при изменении. Решение в main: виден в звонке, если включён, впереди не Cord и окно во весь монитор — в левом верхнем углу именно этого монитора (`screen.screenToDipPoint` → `getDisplayNearestPoint`); без модуля — не виден.
 
 ### 4.4 Мягкое взаимодействие с Windows (T53)
 
@@ -266,7 +269,8 @@ interface CordDesktop {
 | Запрет сна | `powerSaveBlocker.start('prevent-display-sleep')` | вкл. в звонке и при показе экрана |
 | Медиаклавиши и SMTC (музыка, кинозал) | Media Session API в вебе — Chromium сам связывает его с SMTC; `globalShortcut` на медиаклавиши не ставим, чтобы не отбирать их у плееров | вкл. |
 | Прогресс загрузки файла чата | `win.setProgressBar` | вкл. |
-| Трей: микрофон, выйти, закрыть | `Tray` | вкл. |
+| Трей: открыть, микрофон, выйти; **крестик прячет окно в трей**, встреча продолжается (R57, `close-policy.ts`); закрывается по-настоящему при «Выйти», `before-quit`, `session-end` или без значка. Значок — `dist/shell/tray.ico` (16–48 BMP + 256 PNG), не прочитался — трея нет (R58). Первое прятание — баллон «Cord работает в трее» один раз | `Tray`, `displayBalloon` | вкл. |
+| AppUserModelID процесса = `appId` установщика (`APP_ID = tech.cord.desktop`): уведомления и группировка окон (R59) | `app.setAppUserModelId`, `WinShell::SetLnkAUMI` | — |
 | Автозапуск | `app.setLoginItemSettings` | **выкл.** |
 | Deep links `cord://` | `setAsDefaultProtocolClient` + запись в HKCU установщиком | вкл. |
 
@@ -354,6 +358,8 @@ Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все �
 
 **Решение: NSIS** с `oneClick: false`, `perMachine: false`, `allowToChangeInstallationDirectory: true` ([nsis](https://www.electron.build/nsis)). Состав мастера:
 
+- **окно выбора языка** (R64) — `MUI_LANGDLL_DISPLAY` из `customInit` (не в тихом режиме), выбор в `HKCU\Software\Cord\InstallerLanguage`; LCID пишется в `…\Language`, оболочка читает его при первом запуске (`language.ts`) и отдаёт вебу `Bootstrap.language` — один раз на origin; деинсталлятор берёт тот же язык;
+- **`ManifestDPIAware`** и картинки мастера в двойном размере (`scripts/make-icons.mjs`), заголовки и тексты всех страниц на восьми языках без прямых кавычек;
 - **приветствие** — человеческое описание Cord как продукта: что это, что ставится, куда, как обновляется; без «сервер выбираете вы»;
 - **галочка «Создать ярлык на рабочем столе»**, включена (`createDesktopShortcut: false` + своя логика);
 - `runAfterFinish`, `uninstallDisplayName: "Cord"`, издатель «Cord», `deleteAppDataOnUninstall: false`; `VersionInfo*` в том же тоне.

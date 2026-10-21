@@ -53,6 +53,23 @@ if ((Get-ItemProperty 'HKCU:\Software\Cord').DesktopShortcut -ne 1) { throw 'В�
 if ((Get-ItemProperty 'HKCU:\Software\Classes\cord\shell\open\command').'(default)' -notlike "*Cord.exe*") { throw 'Схема cord:// не записана' }
 Write-Host 'Ярлык и схема cord:// на месте'
 
+# AUMID ярлыков = appId из electron-builder.yml (R59): иначе уведомления Windows не показываются.
+$appId = (Get-Content (Join-Path $PSScriptRoot '..\electron-builder.yml') | Where-Object { $_ -match '^appId:\s*(\S+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1)
+if (-not $appId) { throw 'appId не найден в electron-builder.yml' }
+$shellApp = New-Object -ComObject Shell.Application
+foreach ($link in @($shortcut, (Join-Path ([Environment]::GetFolderPath('Programs')) 'Cord.lnk'))) {
+  if (-not (Test-Path $link)) { throw "Нет ярлыка $link" }
+  $item = $shellApp.Namespace((Split-Path $link)).ParseName((Split-Path $link -Leaf))
+  $aumid = $item.ExtendedProperty('System.AppUserModel.ID')
+  if ($aumid -ne $appId) { throw "AUMID ярлыка $link — '$aumid', ожидался '$appId'" }
+}
+Write-Host "AUMID ярлыков: $appId"
+
+# Язык мастера записан для приложения (R64): LCID одного из восьми языков Cord.
+$languageValue = (Get-ItemProperty 'HKCU:\Software\Cord' -ErrorAction SilentlyContinue).Language
+if ("$languageValue" -notmatch '^(1049|1033|3082|1036|1040|2052|1031|1046)$') { throw "Язык установщика в HKCU: '$languageValue'" }
+Write-Host "Язык установщика в HKCU: $languageValue"
+
 # Запуск: заставка открывается, зеркало недоступно — Cord открывается сам и живёт хотя бы 10 с.
 $env:CORD_UPDATE_CHANNEL = 'https://127.0.0.1:9/downloads/windows/desktop/'
 $log = Join-Path $env:LOCALAPPDATA 'Cord\desktop\desktop.log'
@@ -101,6 +118,19 @@ for ($run = 1; $run -le $launches; $run++) {
     if (-not $nativeLine) { throw 'В журнале нет строки о cord-native: utility-процесс не ответил' }
     if ($nativeLine -notmatch 'native: загружен') { throw "cord-native не загрузился: $nativeLine" }
     Write-Host "cord-native в установленном Cord: $nativeLine"
+    # Крестик прячет Cord в трей (R57): WM_CLOSE главному окну — процесс жив, окна не видно.
+    Add-Type -Namespace CordProbe -Name Win32 -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+'@
+    $owner = Get-Process Cord -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if (-not $owner) { throw 'Главное окно Cord не найдено для проверки крестика' }
+    $hwnd = $owner.MainWindowHandle
+    [CordProbe.Win32]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Seconds 5
+    if ($app.HasExited) { throw 'Крестик завершил Cord вместо сворачивания в трей' }
+    if ([CordProbe.Win32]::IsWindowVisible($hwnd)) { throw 'После крестика главное окно осталось видимым' }
+    Write-Host 'Крестик: Cord жив, окно спрятано в трей'
   }
   Stop-Process -Id $app.Id -Force
   Get-Process Cord -ErrorAction SilentlyContinue | Stop-Process -Force
