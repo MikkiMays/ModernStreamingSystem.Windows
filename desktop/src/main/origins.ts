@@ -8,7 +8,7 @@
 export class ServerOrigin {
   private constructor(public readonly origin: string) {}
 
-  /** Нормализованный origin с завершающим `/`, например `https://cord.nikg.tech/`. */
+  /** Нормализованный origin с завершающим `/`, например `https://meet.example.com/`. */
   get url(): string {
     return this.origin + '/';
   }

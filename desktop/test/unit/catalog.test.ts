@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CatalogError, defaultServer, fetchCatalog, GRACE_MS, parseCatalogKeys, parseCatalogPayload, pickCatalog, verifyCatalog } from '../../src/main/catalog';
 import { publicKey } from '../../src/main/update/manifest';
@@ -80,12 +80,11 @@ const file = (path: string) => readFileSync(new URL(`../../${path}`, import.meta
 const jwks = (...pairs: { publicKey: import('node:crypto').KeyObject }[]) =>
   JSON.stringify({ keys: pairs.map((item) => ({ ...item.publicKey.export({ format: 'jwk' }), alg: 'EdDSA', kid: 'test' })) });
 
-describe('ключи каталога и вшитый снимок', () => {
-  it('снимок в сборке подписан ключом из build/catalog-keys.json — копии из ядра совпадают', () => {
+describe('ключи каталога', () => {
+  it('build/catalog-keys.json — разбираемые ключи Ed25519; снимок каталога в git не лежит (его берёт сборка с сервера установки)', () => {
     const keys = parseCatalogKeys(file('build/catalog-keys.json'));
     expect(keys.length).toBeGreaterThan(0);
-    const catalog = verifyCatalog(file('src/shell/catalog.jws'), keys, 0, Date.parse('2026-10-21T00:00:00Z'));
-    expect(defaultServer(catalog).url).toBe('https://cord.nikg.tech/');
+    expect(existsSync(new URL('../../src/shell/catalog.jws', import.meta.url))).toBe(false);
   });
   it('JWKS: только Ed25519; пустой или чужой список — отказ', () => {
     expect(parseCatalogKeys(jwks(pair, stranger))).toHaveLength(2);

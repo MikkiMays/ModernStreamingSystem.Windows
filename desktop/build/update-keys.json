@@ -1,7 +1,5 @@
 {
-  "_comment": "Публичные ключи Ed25519 [текущий, следующий] для подписи latest.yml (ADR 0001 §5). Закрытый ключ — только у владельца (секрет CI CORD_UPDATE_SIGN_KEY); ключ ниже — ключ стенда, созданный при E01-B. Канал — ровно каталог с latest.yml на зеркале Cord.",
-  "channel": "https://cord.nikg.tech/downloads/windows/desktop/",
-  "defaultServer": "https://cord.nikg.tech/",
+  "_comment": "Публичные ключи Ed25519 [текущий, следующий] для подписи latest.yml (ADR 0001 §5). Закрытый ключ — только у владельца (секрет CI CORD_UPDATE_SIGN_KEY). Адреса здесь нет: сервер по умолчанию и канал обновлений задаёт сборка (переменные репозитория CORD_DEFAULT_SERVER, CORD_UPDATE_CHANNEL → scripts/copy-shell.mjs → dist/update-keys.json).",
   "keys": [
     "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAuCWUDwTotcQYs61qhLVagiJbnVa3UBcqKxEbQiCGSCI=\n-----END PUBLIC KEY-----\n"
   ]

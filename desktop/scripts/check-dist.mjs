@@ -19,7 +19,6 @@ const required = [
   'shell/offline.html',
   'shell/overlay.html',
   'shell/servers.html',
-  'shell/catalog.jws',
   'catalog-keys.json',
   'update-keys.json',
 ];

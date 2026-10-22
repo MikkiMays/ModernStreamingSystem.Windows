@@ -1,5 +1,5 @@
 /**
- * Дымовой прогон Electron (Playwright `_electron`) против стенда `https://cord.nikg.tech/`:
+ * Дымовой прогон Electron (Playwright `_electron`) против сервера установки (`CORD_SMOKE_SERVER`):
  * заставка открывается первой, затем главное окно грузит сервер, страница видит
  * `window.cordDesktop` (протокол 2, флаги), `dataset.desktop = 'true'`, ПКМ без пунктов браузера
  * (меню своё — проверяется отсутствием DevTools-пунктов по коду), а переход на чужой origin
@@ -14,7 +14,8 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { join } from 'node:path';
 
 const root = join(__dirname, '..', '..');
-const server = process.env.CORD_SMOKE_SERVER ?? 'https://cord.nikg.tech/';
+const server = process.env.CORD_SMOKE_SERVER ?? process.env.CORD_DEFAULT_SERVER ?? '';
+if (!server) throw new Error('Дымовой прогон: задайте CORD_SMOKE_SERVER — адрес сервера Cord, например https://meet.example.com/');
 
 async function windowWithUrl(app: ElectronApplication, prefix: string, timeout = 60_000): Promise<Page> {
   const deadline = Date.now() + timeout;

@@ -22,6 +22,23 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Сервер установки — переменная репозитория CORD_DEFAULT_SERVER (Settings → Variables), не код:
+      # клиент знает его как сервер по умолчанию, канал обновлений — его зеркало (или CORD_UPDATE_CHANNEL).
+      - name: Server of this installation
+        shell: bash
+        env:
+          SERVER: ${{ vars.CORD_DEFAULT_SERVER }}
+          CHANNEL: ${{ vars.CORD_UPDATE_CHANNEL }}
+        run: |
+          if [ -z "$SERVER" ]; then
+            echo "::error::Не задана переменная репозитория CORD_DEFAULT_SERVER (например https://meet.example.com/)"
+            exit 1
+          fi
+          case "$SERVER" in */) ;; *) SERVER="$SERVER/" ;; esac
+          [ -n "$CHANNEL" ] || CHANNEL="${SERVER}downloads/windows/desktop/"
+          echo "CORD_DEFAULT_SERVER=$SERVER" >> "$GITHUB_ENV"
+          echo "CORD_UPDATE_CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
+          echo "Сервер: $SERVER, канал обновлений: $CHANNEL"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -58,16 +75,15 @@ jobs:
         run: npm run build
       - name: Check the native module is in dist
         run: node scripts/build-native.mjs --check
-      - name: Smoke test (Playwright _electron against the stand; loads cord-native in the utility process)
+      - name: Smoke test (Playwright _electron against the installation's server; loads cord-native in the utility process)
         env:
-          CORD_SMOKE_SERVER: https://cord.nikg.tech/
+          CORD_SMOKE_SERVER: ${{ env.CORD_DEFAULT_SERVER }}
         run: npm run test:e2e
       - name: Package NSIS installer
         env:
           # Пустые секреты = неподписанная сборка, как sign.ps1 сейчас. Сертификат — шаг владельца.
           CSC_LINK: ${{ secrets.CORD_SIGN_PFX_BASE64 }}
           CSC_KEY_PASSWORD: ${{ secrets.CORD_SIGN_PASSWORD }}
-          CORD_UPDATE_CHANNEL: ${{ vars.CORD_UPDATE_CHANNEL }}
         run: npx electron-builder --win nsis --x64 --publish never
       - name: Sign the update manifest (Ed25519, layer 1)
         env:
