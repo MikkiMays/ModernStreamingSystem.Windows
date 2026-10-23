@@ -64,6 +64,25 @@ export class ServerOrigin {
  * Куда окну можно перейти. Список — серверы человека (каталог + текущий); `about:blank` нужен
  * Chromium между документами. Внешняя `https`-ссылка — не навигация, а `shell.openExternal`.
  */
+/**
+ * Какой сервер открыть. Сохранённый — пока его знает сборка (подписанный каталог или сервер из сборки);
+ * адрес от прежней установки или убранный из каталога клиент на чужом сервере не держит. Без сохранённого
+ * открывается сервер, под который собран клиент (с него и скачан), если он есть в каталоге, иначе —
+ * сервер по умолчанию из каталога. Пустой `known` — сборка без сервера (разработка): сохранённое не трогается.
+ */
+export function pickOrigin(
+  saved: ServerOrigin | null,
+  known: readonly ServerOrigin[],
+  build: string,
+  catalogDefault: string | null,
+): ServerOrigin {
+  const isKnown = (origin: ServerOrigin) => known.length === 0 || known.some((item) => item.equals(origin));
+  if (saved && isKnown(saved)) return saved;
+  const own = ServerOrigin.tryParse(build);
+  if (own && isKnown(own)) return own;
+  return ServerOrigin.parse(catalogDefault ?? build);
+}
+
 export type Navigation = 'allow' | 'external' | 'deny';
 
 export function decideNavigation(target: string, allowed: readonly ServerOrigin[]): Navigation {

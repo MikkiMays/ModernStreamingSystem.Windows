@@ -29,7 +29,7 @@ import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
-import { ServerOrigin } from './origins';
+import { pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME, shellUrl } from './protocol';
 import { SettingsStore } from './settings';
 import { Taskbar, type CallState } from './tray';
@@ -477,25 +477,27 @@ class Shell {
 
   // ----- серверы и каталог -----
 
+  /** Серверы, которые знает эта сборка: подписанный каталог, а без него — сервер из сборки. */
+  private knownOrigins(): ServerOrigin[] {
+    const urls = this.catalog ? this.catalog.servers.map((server) => server.url) : [this.config.defaultServer];
+    return urls.map((url) => ServerOrigin.tryParse(url)).filter((origin): origin is ServerOrigin => origin !== null);
+  }
+
+  /** Сервер встреч (`pickOrigin`); записи о серверах, которых сборка не знает, при смене убираются. */
   private currentOrigin(): ServerOrigin {
+    const known = this.knownOrigins();
     const saved = ServerOrigin.tryParse(this.settings.get().serverUrl);
-    if (saved) return saved;
-    const chosen = this.catalog ? defaultServer(this.catalog).url : this.config.defaultServer;
-    const origin = ServerOrigin.parse(chosen);
-    this.settings.update({ serverUrl: origin.url });
+    const origin = pickOrigin(saved, known, this.config.defaultServer, this.catalog ? defaultServer(this.catalog).url : null);
+    if (origin === saved) return origin;
+    if (saved) log(`сервер ${saved.url} этой сборке не известен — выбран ${origin.url}`);
+    const servers = this.settings.get().servers.filter((entry) => known.some((item) => item.equals(ServerOrigin.tryParse(entry.url))));
+    this.settings.update({ serverUrl: origin.url, servers });
     return origin;
   }
 
   private allowedOrigins(): ServerOrigin[] {
     const list = [this.currentOrigin()];
-    for (const server of this.catalog?.servers ?? []) {
-      const origin = ServerOrigin.tryParse(server.url);
-      if (origin && !list.some((known) => known.equals(origin))) list.push(origin);
-    }
-    for (const entry of this.settings.get().servers) {
-      const origin = ServerOrigin.tryParse(entry.url);
-      if (origin && !list.some((known) => known.equals(origin))) list.push(origin);
-    }
+    for (const origin of this.knownOrigins()) if (!list.some((known) => known.equals(origin))) list.push(origin);
     return list;
   }
 

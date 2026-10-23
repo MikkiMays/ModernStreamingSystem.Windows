@@ -1,5 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { decideNavigation, isExternalWebLink, ServerOrigin } from '../../src/main/origins';
+import { decideNavigation, isExternalWebLink, pickOrigin, ServerOrigin } from '../../src/main/origins';
+
+describe('pickOrigin', () => {
+  const own = ServerOrigin.parse('https://meet.example.com/');
+  const other = ServerOrigin.parse('https://other.example.org/');
+  const third = ServerOrigin.parse('https://third.example.net/');
+  it('сохранённый сервер остаётся, пока его знает сборка — переключение между серверами каталога', () => {
+    expect(pickOrigin(other, [own, other], own.url, own.url)).toBe(other);
+    expect(pickOrigin(own, [own, other], other.url, other.url)).toBe(own);
+  });
+  it('сервер от прежней установки или убранный из каталога — сервер сборки', () => {
+    expect(pickOrigin(third, [own, other], own.url, other.url).url).toBe(own.url);
+  });
+  it('первый запуск — сервер, под который собран клиент, а не умолчание каталога', () => {
+    expect(pickOrigin(null, [own, other], other.url, own.url).url).toBe(other.url);
+  });
+  it('сервера сборки нет в каталоге — умолчание каталога', () => {
+    expect(pickOrigin(null, [own, other], third.url, own.url).url).toBe(own.url);
+  });
+  it('без каталога — сервер сборки', () => {
+    expect(pickOrigin(third, [own], own.url, null).url).toBe(own.url);
+  });
+  it('сборка без сервера (разработка) сохранённое не трогает', () => {
+    expect(pickOrigin(other, [], '', null)).toBe(other);
+  });
+});
 
 describe('ServerOrigin', () => {
   it('нормализует https-адрес до origin с завершающим /', () => {
