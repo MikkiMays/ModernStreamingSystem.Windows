@@ -4,13 +4,18 @@
  * - **Raw Input** (`cord-native`, utility-процесс): любая клавиша и кнопки мыши Mouse3–Mouse5, фаза
  *   «нажал/отпустил» — push-to-talk с отпусканием; клавиша не отбирается у игры. Работает всегда,
  *   пока Cord запущен. Ограничение UIPI: игра от имени администратора не отдаёт ввод Cord без тех
- *   же прав — об этом строка состояния.
+ *   же прав (так же ведёт себя Discord).
  * - **Запасной** — `globalShortcut` (RegisterHotKey): без фазы «отпустил» и без кнопок мыши; как
  *   `MicrophoneHotkey.TryNative` в WinUI, поверх других программ регистрируются только сочетания с
  *   Ctrl или Alt, без клавиши Windows и F12. Включается, когда модуля нет или его процесс упал.
  *
- * Чистая часть (план регистраций, строки состояния) отделена от Electron, чтобы проверяться
+ * Чистая часть (план регистраций, коды состояния) отделена от Electron, чтобы проверяться
  * тестами; `HotkeyRegistry` получает оба бэкенда снаружи.
+ *
+ * Состояние уходит вебу кодом (`hotkeys.status {status: {действие: код}}`, R22, X1), а не фразой:
+ * слова — в каталоге веба на языке интерфейса (`hotkeyStatusText` в `web/src/core/desktop.ts`), и
+ * говорит он только о том, что мешает (`taken`, `duplicate`, `window-only`). Прежде оболочка слала
+ * русскую строку, и на любом языке сверху стояла плашка «Работает поверх других программ всегда…».
  */
 import type { NativeBinding } from '../native/protocol';
 import type { Hotkey, HotkeyBinding } from './bridge/messages';
@@ -23,20 +28,22 @@ export interface Registration {
   key: Hotkey;
 }
 
+/**
+ * Код состояния сочетания — те же имена, что `HotkeyStatus` веба:
+ * - `global` — стоит в системе через globalShortcut (только нажатие);
+ * - `global-raw` — стоит через Raw Input (нажатие и отпускание, кнопки мыши);
+ * - `taken` — globalShortcut занят другой программой, работает только в окне Cord;
+ * - `duplicate` — то же сочетание уже у другого действия Cord;
+ * - `window-only` — в систему не ставится (нет Ctrl/Alt, клавиша Windows, F12, «удерживать» без модуля).
+ */
+export const HOTKEY_STATUS_CODES = ['global', 'global-raw', 'taken', 'duplicate', 'window-only'] as const;
+export type HotkeyStatusCode = (typeof HOTKEY_STATUS_CODES)[number];
+
 export interface HotkeyPlan {
   registrations: Registration[];
-  /** Почему сочетание не пошло в систему — словами для человека, по действию. */
-  notes: Partial<Record<HotkeyBinding['action'], string>>;
+  /** Почему сочетание не пошло в систему — кодом, по действию. */
+  notes: Partial<Record<HotkeyBinding['action'], HotkeyStatusCode>>;
 }
-
-export const STATUS_DISABLED = 'Сочетание отключено';
-export const STATUS_WINDOW_ONLY =
-  'Работает в окне встречи. Для работы поверх других программ добавьте Ctrl или Alt; клавиши Windows и F12 зарезервированы системой.';
-export const STATUS_GLOBAL = 'Работает и поверх других программ во время встречи.';
-export const STATUS_GLOBAL_RAW =
-  'Работает поверх других программ всегда, пока Cord запущен, с нажатием и отпусканием. В игре, запущенной от имени администратора, сработает, только если так же запущен Cord.';
-export const STATUS_TAKEN = 'Сочетание занято другой программой. В окне встречи оно доступно; выберите другое для работы в фоне.';
-export const STATUS_DUPLICATE = 'Это сочетание уже назначено другому действию Cord.';
 
 /** Клавиша в виде ускорителя Electron; null — сочетание нельзя регистрировать через globalShortcut. */
 export function accelerator(key: Hotkey): string | null {
@@ -63,11 +70,11 @@ export function planHotkeys(bindings: readonly HotkeyBinding[], raw = false): Ho
   for (const binding of bindings) {
     const combo = raw ? signature(binding.key) : accelerator(binding.key);
     if (!combo) {
-      notes[binding.action] = STATUS_WINDOW_ONLY;
+      notes[binding.action] = 'window-only';
       continue;
     }
     if (seen.has(combo)) {
-      notes[binding.action] = STATUS_DUPLICATE;
+      notes[binding.action] = 'duplicate';
       continue;
     }
     seen.add(combo);
@@ -87,7 +94,7 @@ export interface RawInputApi {
 }
 
 export type HotkeyPhase = 'down' | 'up';
-export type HotkeyStatus = Record<string, string>;
+export type HotkeyStatus = Record<string, HotkeyStatusCode>;
 
 /**
  * Держит текущие регистрации и меняет их целиком: веб присылает весь набор при каждом
@@ -118,7 +125,7 @@ export class HotkeyRegistry {
     return this.raw !== null;
   }
 
-  /** Применить новый набор; вернуть строку состояния по каждому действию. */
+  /** Применить новый набор; вернуть код состояния по каждому действию. */
   async apply(bindings: readonly HotkeyBinding[]): Promise<HotkeyStatus> {
     this.last = bindings.map((binding) => ({ ...binding, key: { ...binding.key } }));
     this.release();
@@ -141,13 +148,13 @@ export class HotkeyRegistry {
     this.backend = 'raw';
     for (const registration of plan.registrations) {
       if (rejected.has(registration.action)) {
-        status[registration.action] = STATUS_WINDOW_ONLY;
+        status[registration.action] = 'window-only';
         continue;
       }
       this.current.push(registration);
-      status[registration.action] = STATUS_GLOBAL_RAW;
+      status[registration.action] = 'global-raw';
     }
-    for (const binding of bindings) status[binding.action] ??= STATUS_WINDOW_ONLY;
+    for (const binding of bindings) status[binding.action] ??= 'window-only';
     return status;
   }
 
@@ -163,10 +170,10 @@ export class HotkeyRegistry {
       const ok = this.shortcuts.register(registration.accelerator, () => this.fire(registration.action, registration.mode, 'down'));
       if (ok) {
         this.current.push(registration);
-        status[registration.action] = STATUS_GLOBAL;
-      } else status[registration.action] = STATUS_TAKEN;
+        status[registration.action] = 'global';
+      } else status[registration.action] = 'taken';
     }
-    for (const binding of bindings) status[binding.action] ??= STATUS_WINDOW_ONLY;
+    for (const binding of bindings) status[binding.action] ??= 'window-only';
     return status;
   }
 
