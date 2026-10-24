@@ -154,9 +154,12 @@ export class OverlayWindow {
     this.send('overlay.card', payload ?? { game: null });
   }
 
+  /**
+   * Странице оверлея. Пока она грузится, сообщение может пропасть — его повторит `did-finish-load`
+   * (`isLoading()` там бывает ещё `true`, поэтому по нему не отсекаем).
+   */
   private send(event: string, payload: unknown): void {
-    const contents = this.contents;
-    if (contents && !contents.isLoading()) contents.send(IPC.shellEvent, event, payload);
+    this.contents?.send(IPC.shellEvent, event, payload);
   }
 
   destroy(): void {

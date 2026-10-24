@@ -131,8 +131,8 @@ export class MiniWindow {
   /** Событие странице мини-окна; последнее каждого рода помнится для перезагрузки страницы. */
   send(event: string, payload: unknown): void {
     this.state[event] = payload;
-    const contents = this.contents;
-    if (contents && !contents.isLoading()) contents.send(IPC.shellEvent, event, payload);
+    // Пока страница грузится, сообщение может пропасть — его повторит `did-finish-load`.
+    this.contents?.send(IPC.shellEvent, event, payload);
   }
 
   destroy(): void {
