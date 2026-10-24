@@ -65,7 +65,7 @@ export interface NativeModule {
   stopAudio(session: number): void;
   windowProcess(hwnd: number): number | null;
   currentProcess(): number;
-  /** Приоритет своего процесса во встрече: EcoQoS выкл., `ABOVE_NORMAL` (R01–R03); ошибка — исключением. */
+  /** Приоритет своего процесса, пока Cord запущен: EcoQoS выкл., `HIGH` (R01–R03); ошибка — исключением. */
   boostProcess(pid: number, on: boolean): void;
 }
 

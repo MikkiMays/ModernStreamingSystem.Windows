@@ -62,6 +62,9 @@ function log(message: string): void {
 // Цифры для CI (ADR §10): только если задан CORD_METRICS_FILE — у человека ничего не меряется.
 const metricsFile = process.env.CORD_METRICS_FILE ?? '';
 const metrics = metricsFile ? new StartupMetrics(process.getCreationTime() ?? Date.now()) : null;
+// Как часто пересчитывать приоритет своих процессов (R01–R03, `boost-plan.ts`): `getAppMetrics()` дёшев,
+// а поднимается только новый процесс — повторный пересчёт без перемен ничего не просит у `cord-native`.
+const BOOST_RECHECK_MS = 10_000;
 
 // Звук и таймеры в фоне (R01–R03, ADR §2.1): `backgroundThrottling: false` держит страницу главного
 // окна «видимой», а эти ключи страхуют остальное — окна оболочки и воркеры, когда Cord спрятан в
@@ -197,8 +200,10 @@ class Shell {
   /** Название текущей встречи (`state.room`) — для строки состояния трея. */
   private roomTitle = '';
   private sleepBlocker: number | null = null;
-  /** Процессы, которым `cord-native` поднял приоритет на время встречи (R01–R03, `boost-plan.ts`). */
+  /** Процессы, которым `cord-native` поднял приоритет (R01–R03, `boost-plan.ts`). */
   private boosted = new Set<number>();
+  /** Пересчёт приоритета: рендерер и аудиосервис Chromium появляются и сменяются и вне встречи. */
+  private boostTimer: ReturnType<typeof setInterval> | null = null;
   /** Переднее окно от `cord-native` (монитор, полноэкранность, своё ли); null — модуля нет. */
   private foreground: NativeForegroundEvent | null = null;
   private pendingLink: DeepLink | null = null;
@@ -445,10 +450,14 @@ class Shell {
         });
         if (event.available) {
           void this.native.request({ type: 'foreground.watch', rootPid: process.pid, intervalMs: 300 }).catch((error: Error) => log(`native: переднее окно — ${error.message}`));
-          // Модуль поднялся посреди встречи — приоритет ставится сейчас, а не при следующем событии.
+          // Приоритет — сразу, как поднялся модуль, и дальше раз в BOOST_RECHECK_MS: аудиосервис Chromium
+          // запускается лениво, при первом звуке, а рендерер сменяется при перезагрузке страницы.
           this.updateBoost();
+          this.boostTimer ??= setInterval(() => this.updateBoost(), BOOST_RECHECK_MS);
         } else {
           this.foreground = null;
+          if (this.boostTimer) clearInterval(this.boostTimer);
+          this.boostTimer = null;
           if (this.captureAudio) this.stopCaptureAudio(true, 'native');
           this.updateOverlay();
         }
@@ -796,16 +805,16 @@ class Shell {
   }
 
   /**
-   * Во встрече — EcoQoS выкл. и `ABOVE_NORMAL` своему процессу, рендереру главного окна и аудиосервису
-   * Chromium; после — вернуть (R01–R03, ADR §2.1). Зовётся при каждом состоянии звонка: рендерер или
-   * аудиосервис могли смениться. Без `cord-native` — ничего.
+   * EcoQoS выкл. и `HIGH` своему процессу, рендереру главного окна и аудиосервису Chromium — всё время,
+   * пока Cord запущен (R01–R03, ADR §2.1). Зовётся при каждом состоянии звонка и раз в
+   * `BOOST_RECHECK_MS`: рендерер или аудиосервис могли смениться. Без `cord-native` — ничего.
    */
   private updateBoost(): void {
     if (!this.native.available) return;
     const metrics = app.getAppMetrics();
     const window = this.main && !this.main.window.isDestroyed() ? this.main.window : null;
     const alive = metrics.map((metric) => metric.pid);
-    const plan = planBoost(this.call.inCall, boostTargets(metrics, process.pid, window ? window.webContents.getOSProcessId() : null), this.boosted, alive);
+    const plan = planBoost(true, boostTargets(metrics, process.pid, window ? window.webContents.getOSProcessId() : null), this.boosted, alive);
     // Умершие забываются: их номер мог достаться чужому процессу.
     for (const pid of this.boosted) if (!alive.includes(pid)) this.boosted.delete(pid);
     if (plan.on.length) this.requestBoost(plan.on, true);
