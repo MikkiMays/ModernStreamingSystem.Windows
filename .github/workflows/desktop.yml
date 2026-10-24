@@ -95,13 +95,14 @@ jobs:
           else
             node scripts/sign-manifest.mjs release
           fi
-      - name: Verify the packaged installer (silent install, uninstall key without links, shortcut with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall)
+      - name: Verify the packaged installer (silent install ≤ 20 s into Programs\Cord, uninstall key without links, shortcuts with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall, screenshots of the one-window installer)
         shell: pwsh
         # metrics.json (ADR §10): размер установщика и установленного, холодный старт (медиана 5 запусков),
         # память в покое через 60 с после главной. Пороги — предупреждения: на раннере нет GPU.
         # Нативный модуль: файл в app.asar.unpacked и строка «native: загружен» в журнале установленного Cord.
+        # Снимки обычного запуска установщика «одним окном» (R105): окно языка и окно с полосой — в артефакт.
         run: |
-          .\scripts\test-installer.ps1 -Release release -Metrics release\metrics.json -Runs 5
+          .\scripts\test-installer.ps1 -Release release -Metrics release\metrics.json -Runs 5 -Screenshots release
           if (Test-Path release\metrics.json) {
             "## Cord desktop: metrics.json" >> $env:GITHUB_STEP_SUMMARY
             '```json' >> $env:GITHUB_STEP_SUMMARY
@@ -127,6 +128,7 @@ jobs:
             desktop/release/latest.yml
             desktop/release/latest.yml.sig
             desktop/release/metrics.json
+            desktop/release/installer-*.png
           retention-days: 1
           if-no-files-found: error
   release:

@@ -363,13 +363,16 @@ Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все �
 | Размер | ≈ приложение в 7z, ~90–120 МБ | Так же + nupkg | Так же + загрузчик |
 | Поддержка | Основная цель electron-builder | В electron-builder «maintained, but deprecated» ([squirrel-windows](https://www.electron.build/squirrel-windows)) | Вся наша |
 
-**Решение: NSIS** с `oneClick: false`, `perMachine: false`, `allowToChangeInstallationDirectory: true` ([nsis](https://www.electron.build/nsis)). Состав мастера:
+**Решение: NSIS**, `perMachine: false` ([nsis](https://www.electron.build/nsis)). С 1.0.6 (R105, референс n04 — установщик Телемоста) — **«одним окном»**, `oneClick: true`: окно выбора языка, затем маленькое окно с полосой (SpiderBanner, значок `installerHeaderIcon`) — и Cord запускается сам (`runAfterFinish`). Два нажатия; страниц приветствия, папки, ярлыков и финиша нет. До 1.0.6 был мастер MUI2 (`oneClick: false`, свои страницы, галочка ярлыка) — от него остались только язык и DPI.
 
 - **окно выбора языка** (R64) — `MUI_LANGDLL_DISPLAY` из `customInit` (не в тихом режиме), выбор в `HKCU\Software\Cord\InstallerLanguage`; LCID пишется в `…\Language`, оболочка читает его при первом запуске (`language.ts`) и отдаёт вебу `Bootstrap.language` — один раз на origin; деинсталлятор берёт тот же язык;
-- **`ManifestDPIAware`** и картинки мастера в двойном размере (`scripts/make-icons.mjs`), заголовки и тексты всех страниц на восьми языках без прямых кавычек;
-- **приветствие** — человеческое описание Cord как продукта: что это, что ставится, куда, как обновляется; без «сервер выбираете вы»;
-- **галочка «Создать ярлык на рабочем столе»**, включена (`createDesktopShortcut: false` + своя логика);
-- `runAfterFinish`, `uninstallDisplayName: "Cord"`, издатель «Cord», `deleteAppDataOnUninstall: false`; `VersionInfo*` в том же тоне.
+- **`ManifestDPIAware`** — окно языка и окно с полосой не мылятся на 125–200 %;
+- **папка** — всегда `%LOCALAPPDATA%\Programs\Cord`: в режиме «одним окном» electron-builder назвал бы её по имени пакета (`cord-desktop`), поэтому `customInit` ставит свежую установку в `Programs\Cord`; обновление идёт туда, где стоит (`InstallLocation`);
+- **ярлыки** — на рабочем столе и в «Пуск» всегда (`createDesktopShortcut: true`, AUMID ставит electron-builder); при обновлении он их не трогает (`--keep-shortcuts`). Переход с ≤ 1.0.5: прежний деинсталлятор при обновлении удаляет ярлык рабочего стола, поэтому `customInstall` один раз возвращает его тем, у кого стояла старая галочка (`DesktopShortcut = 1`), и убирает это значение;
+- надпись над полосой и вопрос деинсталлятора — стандартные тексты electron-builder (`installing`, `areYouSureToUninstall`) на языке мастера; свой текст один — описание в карточке (`Comments`, восемь языков);
+- `uninstallDisplayName: "Cord"`, издатель «Cord», `deleteAppDataOnUninstall: false`; `VersionInfo*` в том же тоне.
+
+`test-installer.ps1` в CI: тихая установка ≤ 20 с (порог R105 — предупреждение, `metrics.json` → `installSeconds`), папка `Programs\Cord`, ярлыки с AUMID; с `-Screenshots` — обычный запуск со снимками окна языка и окна с полосой в артефакт.
 
 Тест CI читает ключ удаления в HKCU и падает на любом из значений `HelpLink`, `URLInfoAbout`, `URLUpdateInfo`, `Readme`. Анимированный установщик «как у Discord» возможен позже — своим загрузчиком поверх того же NSIS (тихая установка с прогрессом), без смены механизма обновлений.
 

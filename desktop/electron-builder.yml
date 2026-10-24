@@ -44,12 +44,12 @@ win:
     signingHashAlgorithms: [sha256]
   verifyUpdateCodeSignature: false
 nsis:
-  oneClick: false
+  # Установщик «одним окном», как у Телемоста (R105, n04): окно выбора языка, затем маленькое окно с
+  # полосой — и Cord запускается сам. Без страниц мастера: папка — %LOCALAPPDATA%\Programs\Cord
+  # (build/installer.nsh, customInit), ярлыки на рабочем столе и в «Пуск» — всегда, с AUMID.
+  oneClick: true
   perMachine: false
-  allowElevation: false
-  allowToChangeInstallationDirectory: true
-  # Ярлык на рабочем столе — своя галочка в мастере, включена по умолчанию (T15): build/installer.nsh.
-  createDesktopShortcut: false
+  createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Cord
   runAfterFinish: true
@@ -57,15 +57,14 @@ nsis:
   uninstallDisplayName: Cord
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
-  installerHeader: build/installerHeader.bmp
-  installerSidebar: build/installerSidebar.bmp
-  uninstallerSidebar: build/installerSidebar.bmp
+  # Значок в окне с полосой (SpiderBanner).
+  installerHeaderIcon: build/icon.ico
   include: build/installer.nsh
   # Языки мастера — языки Cord (П9, T03, R64). Окно выбора языка показывает build/installer.nsh сам
   # (customInit → MUI_LANGDLL_DISPLAY: только не в тихом режиме и не при сборке деинсталлятора;
   # displayLanguageSelector electron-builder вставил бы его в .onInit без этих оговорок). Выбор
   # запоминается в HKCU\Software\Cord\InstallerLanguage, LCID уходит приложению в …\Language.
-  # Тексты своих страниц — LangString в build/installer.nsh, по одному на язык.
+  # Надпись над полосой и вопрос деинсталлятора — тексты electron-builder на языке мастера.
   installerLanguages: [en_US, ru_RU, es_ES, fr_FR, it_IT, zh_CN, de_DE, pt_BR]
   language: 1049
   multiLanguageInstaller: true

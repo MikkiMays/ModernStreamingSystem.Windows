@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-Проверка установщика NSIS на раннере Windows (ADR 0001 §9, п. 5): тихая установка для пользователя,
-карточка «Установленных приложений» без ссылок (T54), ярлык на рабочем столе по умолчанию (T15),
-схема cord://, запуск установленного Cord с заставкой, удаление.
+Проверка установщика NSIS на раннере Windows (ADR 0001 §9, п. 5): тихая установка для пользователя
+за ≤ 20 с (R105), папка %LOCALAPPDATA%\Programs\Cord, карточка «Установленных приложений» без ссылок
+(T54), ярлыки на рабочем столе и в «Пуск» с AUMID (T15, R59), схема cord://, запуск установленного Cord
+с заставкой, удаление; с -Screenshots — ещё и обычный запуск «одним окном» со снимками экрана.
 
 .PARAMETER Release
 Каталог с Cord-Setup-*.exe (вывод electron-builder).
@@ -15,9 +16,19 @@
 
 .PARAMETER Runs
 Сколько запусков для холодного старта (первый ещё и меряет память).
+
+.PARAMETER Screenshots
+Каталог для снимков обычного (не тихого) запуска установщика (R105, n04): окно выбора языка и окно с
+полосой. Окно языка подтверждается программно (IDOK), время установки печатается. Сбой снимка —
+предупреждение, не сбой: раннер без GPU и с чужим рабочим столом.
 #>
-param([string]$Release = 'release', [string]$Metrics = '', [int]$Runs = 5)
+param([string]$Release = 'release', [string]$Metrics = '', [int]$Runs = 5, [string]$Screenshots = '')
 $ErrorActionPreference = 'Stop'
+
+Add-Type -Namespace CordProbe -Name Win32 -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+'@
 
 $installer = Get-Item (Join-Path $Release 'Cord-Setup-*.exe') | Select-Object -First 1
 if (-not $installer) { throw "Нет установщика в $Release" }
@@ -25,9 +36,17 @@ Write-Host "Установщик: $($installer.Name) ($([math]::Round($installer
 if ($installer.Length -gt 130MB) { Write-Warning "Установщик больше порога ADR (130 МБ)" }
 
 $target = Join-Path $env:LOCALAPPDATA 'Programs\Cord'
+# Установка «одним окном» (R105) — быстро: порог 20 с на раннере, превышение — предупреждение.
+$clock = [Diagnostics.Stopwatch]::StartNew()
 $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+$clock.Stop()
+$installSeconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
 if ($process.ExitCode -ne 0) { throw "Тихая установка вернула код $($process.ExitCode)" }
+Write-Host "Тихая установка: $installSeconds с"
+if ($installSeconds -gt 20) { Write-Warning "Установка дольше 20 с (R105): $installSeconds с" }
 if (-not (Test-Path (Join-Path $target 'Cord.exe'))) { throw "Cord.exe не найден в $target" }
+# В режиме «одним окном» electron-builder назвал бы папку по имени пакета — installer.nsh ставит в Programs\Cord.
+if (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\cord-desktop')) { throw 'Установлено в Programs\cord-desktop вместо Programs\Cord' }
 # cord-native (ADR §4.6): модуль распакован рядом с asar — иначе utility-процесс его не загрузит.
 $nativeModule = Join-Path $target 'resources\app.asar.unpacked\dist\native\cord-native.win32-x64-msvc.node'
 if (-not (Test-Path $nativeModule)) { throw "Нативный модуль не найден: $nativeModule" }
@@ -46,10 +65,11 @@ foreach ($key in $keys) {
 }
 Write-Host 'Карточка Windows: без ссылок, издатель Cord'
 
-# Ярлык на рабочем столе включён по умолчанию (T15) и выбор запомнен.
+# Ярлык на рабочем столе — всегда (T15, R105: страницы «Ярлыки» больше нет); прежний выбор галочки
+# (DesktopShortcut, до 1.0.6) после установки убран — ярлыками ведает electron-builder.
 $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Cord.lnk'
 if (-not (Test-Path $shortcut)) { throw 'Нет ярлыка на рабочем столе' }
-if ((Get-ItemProperty 'HKCU:\Software\Cord').DesktopShortcut -ne 1) { throw 'Выбор ярлыка не запомнен' }
+if ($null -ne (Get-ItemProperty 'HKCU:\Software\Cord' -ErrorAction SilentlyContinue).DesktopShortcut) { throw 'Старое значение DesktopShortcut не убрано' }
 if ((Get-ItemProperty 'HKCU:\Software\Classes\cord\shell\open\command').'(default)' -notlike "*Cord.exe*") { throw 'Схема cord:// не записана' }
 Write-Host 'Ярлык и схема cord:// на месте'
 
@@ -119,10 +139,6 @@ for ($run = 1; $run -le $launches; $run++) {
     if ($nativeLine -notmatch 'native: загружен') { throw "cord-native не загрузился: $nativeLine" }
     Write-Host "cord-native в установленном Cord: $nativeLine"
     # Крестик прячет Cord в трей (R57): WM_CLOSE главному окну — процесс жив, окна не видно.
-    Add-Type -Namespace CordProbe -Name Win32 -MemberDefinition @'
-[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-'@
     $owner = Get-Process Cord -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
     if (-not $owner) { throw 'Главное окно Cord не найдено для проверки крестика' }
     $hwnd = $owner.MainWindowHandle
@@ -152,9 +168,11 @@ if ($Metrics) {
   $installerMB = [Math]::Round($installer.Length / 1MB, 1)
   $installedMB = [Math]::Round($installedBytes / 1MB, 1)
   $privateMB = if ($privateBytes) { [Math]::Round($privateBytes / 1MB, 1) } else { $null }
-  # Пороги ADR §10: установщик ≤ 130 МБ, на диске ≤ 400 МБ, память в покое ≤ 250 МБ, заставка ≤ 1 с, главная ≤ 3 с.
+  # Пороги ADR §10: установщик ≤ 130 МБ, на диске ≤ 400 МБ, память в покое ≤ 250 МБ, заставка ≤ 1 с, главная ≤ 3 с;
+  # R105: тихая установка ≤ 20 с.
   $within = [ordered]@{
     installer = $installerMB -le 130
+    install = $installSeconds -le 20
     installed = $installedMB -le 400
     memoryIdle = ($null -eq $privateMB) -or ($privateMB -le 250)
     splash = ($null -eq $median.splash) -or ($median.splash -le 1000)
@@ -164,6 +182,7 @@ if ($Metrics) {
     commit = $env:GITHUB_SHA
     runner = 'windows-2022 (без GPU: цифры — нижняя граница, ADR §10)'
     installerMB = $installerMB
+    installSeconds = $installSeconds
     installedMB = $installedMB
     coldStartMs = [ordered]@{ median = $median; runs = $starts }
     memoryIdle = [ordered]@{ privateMB = $privateMB; app = $appMemory }
@@ -183,4 +202,66 @@ Start-Sleep -Seconds 3
 if (Test-Path (Join-Path $target 'Cord.exe')) { throw 'Cord.exe остался после удаления' }
 if (Test-Path $shortcut) { throw 'Ярлык остался после удаления' }
 if (-not (Test-Path (Join-Path $env:LOCALAPPDATA 'Cord\desktop'))) { Write-Warning 'Каталог настроек не создан — проверка профиля пропущена' }
+
+# Обычный запуск, как у человека (R105, n04): окно выбора языка → окно с полосой → Cord запускается сам.
+if ($Screenshots) {
+  New-Item -ItemType Directory -Force -Path $Screenshots | Out-Null
+  Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+  function Save-Screen([string]$name) {
+    try {
+      $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+      $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+      $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+      $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+      $path = Join-Path $Screenshots $name
+      $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+      $graphics.Dispose()
+      $bitmap.Dispose()
+      Write-Host "Снимок: $path"
+    } catch {
+      Write-Warning "Снимок $name не снят: $($_.Exception.Message)"
+    }
+  }
+  function Wait-Window($run, [IntPtr]$except, [int]$seconds) {
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline -and -not $run.HasExited) {
+      $run.Refresh()
+      if ($run.MainWindowHandle -ne [IntPtr]::Zero -and $run.MainWindowHandle -ne $except) { return $run.MainWindowHandle }
+      Start-Sleep -Milliseconds 100
+    }
+    return [IntPtr]::Zero
+  }
+  $run = Start-Process -FilePath $installer.FullName -PassThru
+  try {
+    $language = Wait-Window $run ([IntPtr]::Zero) 30
+    if ($language -eq [IntPtr]::Zero) {
+      Write-Warning 'Окно выбора языка не появилось за 30 с'
+    } else {
+      Start-Sleep -Milliseconds 500
+      Save-Screen 'installer-1-language.png'
+      $clock = [Diagnostics.Stopwatch]::StartNew()
+      # «OK» окна языка: WM_COMMAND с IDOK.
+      [CordProbe.Win32]::PostMessage($language, 0x0111, [IntPtr]1, [IntPtr]::Zero) | Out-Null
+      if ((Wait-Window $run $language 20) -ne [IntPtr]::Zero) {
+        Start-Sleep -Milliseconds 300
+        Save-Screen 'installer-2-progress.png'
+      } else {
+        Write-Warning 'Окно с полосой не поймано: установка закончилась раньше снимка или окно не появилось'
+      }
+      if (-not $run.WaitForExit(120000)) { Write-Warning 'Установщик не закончил за 120 с' }
+      $clock.Stop()
+      Write-Host "Обычная установка после выбора языка: $([Math]::Round($clock.Elapsed.TotalSeconds, 1)) с, код $($run.ExitCode)"
+      if (-not (Test-Path (Join-Path $target 'Cord.exe'))) { Write-Warning "После обычной установки нет Cord.exe в $target" }
+      if (-not (Test-Path $shortcut)) { Write-Warning 'После обычной установки нет ярлыка на рабочем столе' }
+    }
+  } finally {
+    if (-not $run.HasExited) { Stop-Process -Id $run.Id -Force -ErrorAction SilentlyContinue }
+    # runAfterFinish запускает Cord сам — закрыть его и удалить установку.
+    Start-Sleep -Seconds 3
+    Get-Process Cord -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 2
+    $uninstaller = Get-ChildItem $target -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($uninstaller) { Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait | Out-Null }
+  }
+}
 Write-Host 'Установка, запуск и удаление прошли'
