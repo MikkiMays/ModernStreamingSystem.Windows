@@ -75,7 +75,7 @@ jobs:
         run: npm run build
       - name: Check the native module is in dist
         run: node scripts/build-native.mjs --check
-      - name: Smoke test (Playwright _electron against the installation's server; loads cord-native in the utility process)
+      - name: Smoke test (Playwright _electron against the installation's server; loads cord-native in the utility process; overlay, Go Live card and mini call window with the native fake)
         env:
           CORD_SMOKE_SERVER: ${{ env.CORD_DEFAULT_SERVER }}
         run: npm run test:e2e
@@ -147,6 +147,7 @@ jobs:
             desktop/release/latest.yml.sig
             desktop/release/metrics.json
             desktop/release/installer-*.png
+            desktop/test-results/shots/*.png
           retention-days: 1
           if-no-files-found: error
   release:

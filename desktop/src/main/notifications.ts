@@ -18,8 +18,9 @@ export interface NotifyRequest {
   actions?: { id: string; text: string }[];
 }
 
-export function showNotification(request: NotifyRequest, onAction: (id: string, tag: string | undefined) => void): boolean {
-  if (!Notification.isSupported()) return false;
+/** Показать уведомление; вернуть его, чтобы закрыть позже (`close()`), или `null` — уведомлений нет. */
+export function showNotification(request: NotifyRequest, onAction: (id: string, tag: string | undefined) => void): Notification | null {
+  if (!Notification.isSupported()) return null;
   const notification = new Notification({
     title: request.title,
     body: request.body,
@@ -29,5 +30,5 @@ export function showNotification(request: NotifyRequest, onAction: (id: string, 
   notification.on('click', () => onAction('open', request.tag));
   notification.on('action', (_, index) => onAction(request.actions?.[index]?.id ?? 'open', request.tag));
   notification.show();
-  return true;
+  return notification;
 }

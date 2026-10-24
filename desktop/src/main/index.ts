@@ -14,20 +14,23 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
 import { featuresFor, IPC, type Bootstrap } from '../shared/bridge';
-import type { HotkeyBinding, Validated } from './bridge/messages';
+import { readGameCall, type MiniState, type Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
-import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type AppSettings } from './app-settings';
+import { appSettingsOf, keepAwake, readAppSettingsPatch, readOffset, settingsPatchOf, type AppSettings } from './app-settings';
 import { boostTargets, planBoost } from './boost-plan';
 import { buildConfig } from './config';
 import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { decideClose, startMode } from './close-policy';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
+import { CARD_MS, decideGameNotice, hotkeyLabel } from './game-notice';
+import { addGame, findGame, forgetGame, gameKey, nextActive, noteForeground, noteLeft, setGameEnabled, type ActiveGame, type GamesState } from './games';
 import { HotkeyRegistry } from './hotkeys';
-import { readInstallerLanguage, shellLanguage } from './language';
+import { readInstallerLanguage, shellLanguage, type Language } from './language';
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
+import { decideMini, MINI_DELAY_MS } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
@@ -38,7 +41,8 @@ import { Taskbar, type CallState } from './tray';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
 import { CordUpdater } from './update/updater';
 import { appUserModelId, configureSession, cordSession, MainWindow, type WindowState } from './windows/main';
-import { OverlayWindow } from './windows/overlay';
+import { MiniWindow } from './windows/mini';
+import { displayFor, OverlayWindow, type OverlayConfig } from './windows/overlay';
 import { SplashWindow } from './windows/splash';
 import { ServersWindow } from './windows/servers';
 
@@ -108,6 +112,15 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 // ---------- приложение ----------
+
+/** Открытое предложение «Показать игру» (R104): окно игры, уведомление Windows, таймер карточки в оверлее. */
+interface GoLiveOffer {
+  hwnd: number;
+  title: string;
+  name: string;
+  toast: Electron.Notification | null;
+  timer: ReturnType<typeof setTimeout> | null;
+}
 
 class Shell {
   private readonly preloadDir = join(app.getAppPath(), 'dist', 'preload');
@@ -186,11 +199,18 @@ class Shell {
       // Оверлей — окно оболочки: клавиша переключает его здесь же, веб узнаёт событием app.settings.
       if (action === 'overlay.toggle') {
         if (phase === 'down') this.applyAppSettings({ overlay: !this.settings.get().overlayEnabled }, true);
+      } else if (action === 'overlay.lock') {
+        // Замок виджета в игре (R63): разблокированный берёт мышь — перетащить, нажать «Показать игру».
+        if (phase === 'down' && this.overlay.visible) this.overlay.setLocked(!this.overlay.isLocked);
       } else this.router.post('hotkey', { action, phase });
     },
   );
   private readonly capture = new CaptureSelection();
-  private readonly overlay = new OverlayWindow(this.preloadDir);
+  private readonly overlay = new OverlayWindow(this.preloadDir, (contents) => this.pairLevels('overlay', contents));
+  private readonly mini = new MiniWindow(this.preloadDir, {
+    moved: (x, y) => void this.settings.update({ mini: { ...this.settings.get().mini, x, y } }),
+    loaded: (contents) => this.pairLevels('mini', contents),
+  });
   private main: MainWindow | null = null;
   private splash: SplashWindow | null = null;
   private servers: ServersWindow | null = null;
@@ -204,8 +224,30 @@ class Shell {
   private boosted = new Set<number>();
   /** Пересчёт приоритета: рендерер и аудиосервис Chromium появляются и сменяются и вне встречи. */
   private boostTimer: ReturnType<typeof setInterval> | null = null;
-  /** Переднее окно от `cord-native` (монитор, полноэкранность, своё ли); null — модуля нет. */
+  /** Переднее окно от `cord-native` (монитор, полноэкранность, своё ли, exe, «без рамки»); null — модуля нет. */
   private foreground: NativeForegroundEvent | null = null;
+  /** Реестр игр (R62, `games.ts`) — копия `settings.games`/`ignoredGames`. */
+  private games: GamesState = { games: [], ignored: [] };
+  /** exe окна, которое было впереди в прошлый раз: регистрация и «последний запуск» — только при смене. */
+  private frontExe = '';
+  /** Игра «сейчас запущена» (`game.active`) и PID её процесса — для проверки, жива ли она, пока впереди Cord. */
+  private active: { game: ActiveGame; pid: number } | null = null;
+  private aliveTimer: ReturnType<typeof setInterval> | null = null;
+  /** Каким играм в этом сеансе уже предлагали «Показать игру» и каким — режим без рамки (R104). */
+  private readonly announced = new Set<string>();
+  private readonly warned = new Set<string>();
+  /** Открытое предложение «Показать игру»: окно игры, уведомление Windows, таймер карточки в оверлее. */
+  private goLive: GoLiveOffer | null = null;
+  /**
+   * Страница этого документа шлёт состав (`overlay.roster`) и состояние мини-окна (`mini.state`) — веб
+   * знает виджет и мини-окно (R63, R93). Прежний веб их не шлёт: тогда мини-окна и «Показать игру» нет —
+   * пустое окно и кнопка, на которую страница не ответит, хуже, чем ничего.
+   */
+  private rosterSeen = false;
+  private miniState: MiniState | null = null;
+  /** «—» в мини-окне: спрятать до следующего возврата в Cord. */
+  private miniDismissed = false;
+  private miniTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingLink: DeepLink | null = null;
   /** Запуск вместе с Windows (`--hidden`): первое главное окно — в трей или свёрнутым (`startMode`). */
   private hiddenFlag = process.argv.includes('--hidden');
@@ -222,6 +264,8 @@ class Shell {
       this.quitting = true;
     });
     this.adoptInstallerLanguage();
+    this.games = { games: this.settings.get().games, ignored: this.settings.get().ignoredGames };
+    this.installSmokeHooks();
     this.installMetrics();
     installShellProtocol();
     installShellProtocol(cordSession());
@@ -280,7 +324,18 @@ class Shell {
     this.main = main;
     main.window.webContents.on('did-start-navigation', (details) => {
       // Новый документ — прежняя дорожка звука захвата ему не принадлежит.
-      if (details.isMainFrame) this.stopCaptureAudio(false);
+      if (!details.isMainFrame) return;
+      this.stopCaptureAudio(false);
+      if (details.isSameDocument) return;
+      // Состав и мини-окно новый документ пришлёт сам — если умеет (R63, R93).
+      this.rosterSeen = false;
+      this.miniState = null;
+      this.updateMini();
+    });
+    // Порты уровней голоса живут в preload документа: новый документ — новые порты оверлею и мини-окну.
+    main.window.webContents.on('did-finish-load', () => {
+      this.pairLevels('overlay', this.overlay.contents);
+      this.pairLevels('mini', this.mini.contents);
     });
     await main.showLoading();
     const origin = this.currentOrigin();
@@ -303,7 +358,8 @@ class Shell {
       this.main = null;
       this.hotkeys.clear();
       this.stopCaptureAudio(false);
-      this.overlay.setVisible(false);
+      this.overlay.show(null);
+      this.updateMini();
       if (!this.quitting) this.quit();
     },
     closeAction: () => decideClose({ tray: this.taskbar.hasTray, quitting: this.quitting, sessionEnding: this.sessionEnding }),
@@ -311,7 +367,10 @@ class Shell {
     onSessionEnd: () => {
       this.sessionEnding = true;
     },
-    onWindowState: (state: WindowState) => this.router.post('window.state', { ...state }),
+    onWindowState: (state: WindowState) => {
+      this.router.post('window.state', { ...state });
+      this.updateMini();
+    },
     requestClose: () => this.requestClose(),
     log,
   };
@@ -366,7 +425,7 @@ class Shell {
    * пришло не от веба (клавиша оверлея), и открытые настройки должны его увидеть.
    */
   private applyAppSettings(patch: Partial<AppSettings>, announce = false): AppSettings {
-    const next = Object.keys(patch).length ? this.settings.update(settingsPatchOf(patch)) : this.settings.get();
+    const next = Object.keys(patch).length ? this.settings.update(settingsPatchOf(patch, this.settings.get())) : this.settings.get();
     const window = this.main?.window ?? null;
     if (patch.tray !== undefined) {
       if (!next.tray) {
@@ -377,6 +436,8 @@ class Shell {
     }
     if (patch.autostart !== undefined) this.applyAutostart();
     if (patch.overlay !== undefined) this.updateOverlay();
+    if (['overlayCorner', 'overlaySize', 'overlayNames', 'overlayOpacity'].some((key) => key in patch)) this.overlay.configure(this.overlayConfig());
+    if (patch.mini !== undefined) this.updateMini();
     if (patch.thumbar !== undefined || patch.badge !== undefined || patch.notifications !== undefined) this.taskbar.refresh(window);
     if (patch.sleepBlocker !== undefined) this.applySleepBlocker();
     const values = appSettingsOf(next);
@@ -395,8 +456,12 @@ class Shell {
 
   /** Тексты оболочки на языке Cord: язык страницы, выбор в установщике, язык Windows (`shellLanguage`). */
   private text(): ShellText {
+    return shellText(this.language());
+  }
+
+  private language(): Language {
     const saved = this.settings.get();
-    return shellText(shellLanguage(saved.uiLanguage, saved.language, app.getPreferredSystemLanguages()));
+    return shellLanguage(saved.uiLanguage, saved.language, app.getPreferredSystemLanguages());
   }
 
   /** Вопрос оболочки во встрече: «да» — `true`. Окно спрятано в трей — диалог без родителя, иначе его не видно. */
@@ -432,6 +497,9 @@ class Shell {
     this.native.stop();
     this.taskbar.destroy();
     this.overlay.destroy();
+    this.mini.destroy();
+    this.closeGoLive();
+    if (this.aliveTimer) clearInterval(this.aliveTimer);
     app.quit();
   }
 
@@ -459,7 +527,9 @@ class Shell {
           if (this.boostTimer) clearInterval(this.boostTimer);
           this.boostTimer = null;
           if (this.captureAudio) this.stopCaptureAudio(true, 'native');
+          this.noteGames();
           this.updateOverlay();
+          this.updateMini();
         }
         return;
       }
@@ -468,7 +538,9 @@ class Shell {
         return;
       case 'foreground':
         this.foreground = event.foreground;
+        this.noteGames();
         this.updateOverlay();
+        this.updateMini();
         return;
       case 'audio':
         if (this.captureAudio) this.stopCaptureAudio(true, event.state === 'error' ? (event.reason ?? 'error') : undefined);
@@ -476,11 +548,335 @@ class Shell {
     }
   }
 
-  /** Видимость и монитор оверлея — по звонку, переключателю и переднему окну (`overlay-policy.ts`). */
+  /** Видимость и монитор оверлея — по звонку, переключателю, переднему окну и реестру игр (`overlay-policy.ts`). */
   private updateOverlay(): void {
-    const decision = decideOverlay(this.call.inCall, this.settings.get().overlayEnabled, this.foreground);
-    this.overlay.setVisible(decision.visible);
-    if (decision.visible) this.overlay.placeAt(decision.anchor, this.main && !this.main.window.isDestroyed() ? this.main.window.getBounds() : null);
+    const foreground = this.foreground;
+    const game = foreground ? findGame(this.games, foreground.exe) : null;
+    const decision = decideOverlay(this.call.inCall, this.settings.get().overlayEnabled, foreground, game);
+    this.overlay.show(decision.monitor);
+    if (!decision.visible) this.clearCard();
+    this.noticeGame();
+  }
+
+  /** Тексты, угол, размер, имена, прозрачность и подпись замка — для страницы оверлея. */
+  private overlayConfig(): OverlayConfig {
+    const saved = this.settings.get();
+    const text = this.text();
+    return {
+      corner: saved.overlay.corner,
+      size: saved.overlay.size,
+      names: saved.overlay.names,
+      opacity: saved.overlay.opacity,
+      offset: { ...saved.overlay.offset },
+      locked: true,
+      lockHotkey: this.lockHotkey(),
+      language: this.language(),
+      text: { label: text.overlayLabel, unlocked: text.overlayUnlocked, muted: text.muted, cardTitle: text.cardTitle, cardHint: text.cardHint, goLive: text.goLive, close: text.close },
+    };
+  }
+
+  /** Сочетание разблокировки оверлея подписью («Shift+`»); веб до R63 его не присылает — `null`. */
+  private lockHotkey(): string | null {
+    return hotkeyLabel(this.settings.get().hotkeys.find((binding) => binding.action === 'overlay.lock')?.key);
+  }
+
+  // ----- игры (R62): реестр, игра «сейчас», «Показать игру» (R104) -----
+
+  /** Переднее окно сменилось: запомнить новую игру, отметить запуск, обновить игру «сейчас». */
+  private noteGames(): void {
+    const foreground = this.foreground;
+    const now = Date.now();
+    const exe = foreground ? gameKey(foreground.exe ?? '') : '';
+    let changed = false;
+    let game = foreground ? findGame(this.games, exe) : null;
+    if (exe !== this.frontExe) {
+      if (this.frontExe && findGame(this.games, this.frontExe)) {
+        this.games = noteLeft(this.games, this.frontExe, now);
+        changed = true;
+      }
+      this.frontExe = exe;
+      if (foreground) {
+        const noted = noteForeground(this.games, foreground, now);
+        if (noted.changed) {
+          this.games = noted.state;
+          changed = true;
+          if (!game && noted.game) log(`игры: ${noted.game.exe} — «${noted.game.name}»`);
+        }
+        game = noted.game;
+      }
+    }
+    if (changed) this.saveGames();
+    this.setActive(nextActive(this.active, foreground ? { ...foreground } : null, game));
+  }
+
+  private saveGames(): void {
+    this.settings.update({ games: this.games.games, ignoredGames: this.games.ignored });
+    this.router.post('games.changed', this.gamesView());
+  }
+
+  /** Реестр для веба: игры по последнему запуску и игра «сейчас». */
+  private gamesView(): { games: GamesState['games']; active: ActiveGame | null } {
+    return { games: this.games.games.map((game) => ({ ...game })), active: this.active ? { ...this.active.game } : null };
+  }
+
+  /**
+   * Игра «сейчас» сменилась — сказать вебу (`game.active`). Пока впереди Cord, раз в 5 с проверять,
+   * жив ли её процесс (снимок Toolhelp в `cord-native`, процесс игры не открывается): игру закрыли,
+   * а Cord вышел вперёд — «Запущена сейчас» больше не правда.
+   */
+  private setActive(next: { game: ActiveGame; pid: number } | null): void {
+    const before = this.active;
+    this.active = next;
+    const same = before?.pid === next?.pid && JSON.stringify(before?.game ?? null) === JSON.stringify(next?.game ?? null);
+    if (!same) this.router.post('game.active', { game: next ? { ...next.game } : null });
+    const watch = !!next && !!this.foreground?.cord && this.native.available;
+    if (watch && !this.aliveTimer) {
+      this.aliveTimer = setInterval(() => {
+        const current = this.active;
+        if (!current || !this.foreground?.cord) {
+          if (this.aliveTimer) clearInterval(this.aliveTimer);
+          this.aliveTimer = null;
+          return;
+        }
+        void this.native
+          .request<boolean>({ type: 'process.alive', pid: current.pid, exe: current.game.exe })
+          .then((alive) => {
+            if (!alive && this.active === current) this.setActive(null);
+          })
+          .catch(() => {});
+      }, 5000);
+    } else if (!watch && this.aliveTimer) {
+      clearInterval(this.aliveTimer);
+      this.aliveTimer = null;
+    }
+  }
+
+  /** Во встрече впереди игра — раз на игру предложить «Показать игру» или предупредить об эксклюзивном режиме. */
+  private noticeGame(): void {
+    const foreground = this.foreground;
+    const game = this.active?.game ?? null;
+    const front = !!foreground && !!game && !foreground.cord && gameKey(foreground.exe ?? '') === game.exe;
+    const saved = this.settings.get();
+    // Прежний веб «Показать игру» не исполнит — предложение только странице, которая шлёт состав (R63).
+    const notice = decideGameNotice({ inCall: this.call.inCall, overlayEnabled: saved.overlayEnabled, toastEnabled: saved.overlay.toast && this.rosterSeen, game, front, announced: this.announced, warned: this.warned });
+    if (!notice || !game || !foreground) return;
+    const text = this.text();
+    if (notice === 'exclusive') {
+      this.warned.add(game.exe);
+      if (saved.notifications) showNotification({ title: text.exclusiveTitle.replace('{game}', game.name), body: text.exclusiveBody }, () => {});
+      log(`игры: ${game.exe} в эксклюзивном полноэкранном режиме — оверлей не виден`);
+      return;
+    }
+    this.announced.add(game.exe);
+    this.closeGoLive();
+    const hotkey = this.lockHotkey();
+    const offer: GoLiveOffer = { hwnd: foreground.hwnd, title: foreground.title ?? '', name: game.name, toast: null, timer: null };
+    this.goLive = offer;
+    if (saved.notifications)
+      offer.toast = showNotification(
+        { title: text.goLiveTitle.replace('{game}', game.name), body: hotkey ? text.goLiveBody.replace('{hotkey}', hotkey) : text.goLiveBodyNoKey, actions: [{ id: 'go-live', text: text.goLive }] },
+        (id) => {
+          if (id === 'go-live') void this.startGoLive(offer);
+        },
+      );
+    if (this.overlay.visible) {
+      this.overlay.card({ game: game.name, keys: hotkey ? hotkey.split('+') : null });
+      this.armCard(offer);
+    }
+    log(`игры: «Показать игру» — ${game.exe}`);
+  }
+
+  /** Карточка в оверлее уходит сама через 8 с — но не пока оверлей разблокирован: человек тянется к кнопке. */
+  private armCard(offer: GoLiveOffer): void {
+    if (offer.timer) clearTimeout(offer.timer);
+    offer.timer = setTimeout(() => {
+      offer.timer = null;
+      if (this.goLive !== offer) return;
+      if (!this.overlay.isLocked) this.armCard(offer);
+      else this.clearCard();
+    }, CARD_MS);
+  }
+
+  private clearCard(): void {
+    const offer = this.goLive;
+    if (offer?.timer) clearTimeout(offer.timer);
+    if (offer) offer.timer = null;
+    this.overlay.card(null);
+  }
+
+  private closeGoLive(): void {
+    const offer = this.goLive;
+    this.goLive = null;
+    if (!offer) return;
+    if (offer.timer) clearTimeout(offer.timer);
+    try {
+      offer.toast?.close();
+    } catch {
+      /* уведомление уже закрыто */
+    }
+    this.overlay.card(null);
+  }
+
+  /**
+   * «Показать игру» (R104): найти окно игры среди источников показа (по HWND переднего окна, иначе по
+   * заголовку) и попросить веб начать показ (`golive {id, name}`). Окно Cord вперёд не выходит —
+   * человек остаётся в игре; жест для `getDisplayMedia` странице даёт `executeJavaScript(…, true)`.
+   */
+  private async startGoLive(offer: GoLiveOffer): Promise<void> {
+    this.closeGoLive();
+    this.overlay.setLocked(true);
+    const main = this.main;
+    if (!main || main.window.isDestroyed() || !this.call.inCall) return;
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
+      const source = sources.find((item) => item.id.startsWith(`window:${offer.hwnd}:`)) ?? sources.find((item) => !!offer.title && item.name === offer.title);
+      if (!source) {
+        log(`«Показать игру»: окна ${offer.name} нет среди источников показа`);
+        return;
+      }
+      // Пустой скрипт с жестом пользователя: Chromium разрешает getDisplayMedia только после жеста.
+      await main.window.webContents.executeJavaScript('0', true);
+      this.router.post('golive', { id: source.id, name: offer.name });
+      log(`«Показать игру»: ${source.id}`);
+    } catch (error) {
+      log(`«Показать игру»: ${(error as Error).message}`);
+    }
+  }
+
+  /** Переключатель игры или «Забыть» — игра «сейчас» берёт новое значение из реестра. */
+  private refreshActive(): void {
+    const current = this.active;
+    if (!current) return;
+    const game = findGame(this.games, current.game.exe);
+    this.setActive(game ? { pid: current.pid, game: { ...current.game, name: game.name, enabled: game.enabled } } : null);
+  }
+
+  /** «Добавить игру»: выбор exe в окне Windows; ответ — реестр после добавления. */
+  private async pickGame(): Promise<{ games: GamesState['games']; active: ActiveGame | null }> {
+    const parent = this.main && !this.main.window.isDestroyed() ? this.main.window : null;
+    const options = { properties: ['openFile' as const], filters: [{ name: 'Windows', extensions: ['exe'] }] };
+    const picked = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options);
+    const path = picked.canceled ? '' : (picked.filePaths[0] ?? '');
+    const added = path ? addGame(this.games, path, Date.now()) : null;
+    if (added) {
+      this.games = added.state;
+      this.refreshActive();
+      this.saveGames();
+      this.updateOverlay();
+      log(`игры: добавлена вручную ${added.game.exe}`);
+    }
+    return this.gamesView();
+  }
+
+  // ----- мини-окно звонка (R93) -----
+
+  /** Видно ли мини-окно (`mini-policy.ts`); появление — через 400 мс, уход — сразу. */
+  private updateMini(): void {
+    const main = this.main && !this.main.window.isDestroyed() ? this.main : null;
+    const state = main ? main.state() : null;
+    if (state?.focused) this.miniDismissed = false;
+    const foreground = this.foreground;
+    let sameDisplay: boolean | null = null;
+    if (main && state?.visible && foreground) sameDisplay = screen.getDisplayMatching(main.window.getBounds()).id === displayFor(foreground.monitor).id;
+    const saved = this.settings.get();
+    const show = decideMini({
+      inCall: this.call.inCall && !!this.miniState,
+      enabled: saved.mini.enabled,
+      dismissed: this.miniDismissed,
+      main: main && state ? { exists: true, ...state } : null,
+      foreground: foreground ? { cord: foreground.cord, fullscreen: foreground.fullscreen } : null,
+      overlayVisible: this.overlay.visible,
+      sameDisplay,
+    });
+    if (!show) {
+      if (this.miniTimer) clearTimeout(this.miniTimer);
+      this.miniTimer = null;
+      this.mini.setVisible(false, saved.mini, saved.mini.expanded);
+      return;
+    }
+    if (this.mini.visible || this.miniTimer) return;
+    this.miniTimer = setTimeout(() => {
+      this.miniTimer = null;
+      // Через 400 мс всё могло вернуться (Alt+Tab туда и обратно) — решить заново.
+      const still = this.settings.get();
+      const now = this.main && !this.main.window.isDestroyed() ? this.main.state() : null;
+      if (!now || now.focused || !this.call.inCall || !this.miniState || this.miniDismissed || !still.mini.enabled || this.overlay.visible) return;
+      this.mini.setVisible(true, still.mini, still.mini.expanded);
+    }, MINI_DELAY_MS);
+  }
+
+  /** Тексты и вид мини-окна. */
+  private miniConfig(): Record<string, unknown> {
+    const text = this.text();
+    return {
+      expanded: this.settings.get().mini.expanded,
+      language: this.language(),
+      text: {
+        label: text.miniLabel, collapse: text.miniCollapse, open: text.miniOpen, more: text.miniMore, compact: text.miniCompact, on: text.stateOn, off: text.stateOff,
+        microphone: text.microphone, micMute: text.micMute, micUnmute: text.micUnmute, camera: text.camera, screenShare: text.screenShare, screenStop: text.screenStop,
+        youShare: text.youShare, stopShare: text.stopShare, people: text.people, chat: text.chat, soundSettings: text.soundSettings, leave: text.leave, you: text.you,
+      },
+    };
+  }
+
+  /**
+   * Нажатие в мини-окне. Микрофон, камера и выход исполняет веб, не поднимая Cord; участники, чат,
+   * настройки и начало показа (окно выбора) — в окне Cord, оно выходит вперёд.
+   */
+  private onMiniAction(id: string): void {
+    switch (id) {
+      case 'open':
+        this.focus();
+        return;
+      case 'collapse':
+        this.miniDismissed = true;
+        this.updateMini();
+        return;
+      case 'expand':
+      case 'compact':
+        this.settings.update({ mini: { ...this.settings.get().mini, expanded: id === 'expand' } });
+        this.mini.send('mini.config', this.miniConfig());
+        return;
+      case 'mic':
+      case 'camera':
+      case 'leave':
+        this.router.post('mini.action', { id });
+        return;
+      case 'screen':
+        if (!this.call.screen) this.focus();
+        this.router.post('mini.action', { id });
+        return;
+      case 'people':
+      case 'chat':
+      case 'settings':
+        this.focus();
+        this.router.post('mini.action', { id });
+        return;
+    }
+  }
+
+  /**
+   * Порт уровней голоса между preload страницы встречи и окном оболочки (`target`): страница кладёт
+   * уровни прямо в него, main посередине не стоит (R63).
+   */
+  private pairLevels(target: 'overlay' | 'mini', contents: WebContents | null): void {
+    const page = this.main && !this.main.window.isDestroyed() ? this.main.window.webContents : null;
+    if (!page || !contents || contents.isDestroyed()) return;
+    const { port1, port2 } = new MessageChannelMain();
+    page.postMessage(IPC.levelsPort, { target }, [port1]);
+    contents.postMessage(IPC.levelsPort, { target }, [port2]);
+  }
+
+  /**
+   * Дымовой прогон с подменой модуля (`CORD_SMOKE=1`, `CORD_NATIVE_FAKE=1`): переднее окно задаёт
+   * сам тест — `globalThis.cordSmoke.foreground({...})` через `app.evaluate`. В выпуске не включается.
+   */
+  private installSmokeHooks(): void {
+    if (!smoke || process.env.CORD_NATIVE_FAKE !== '1') return;
+    (globalThis as { cordSmoke?: unknown }).cordSmoke = {
+      foreground: (foreground: NativeForegroundEvent) => this.onNativeEvent({ event: 'foreground', foreground }),
+      lock: () => this.overlay.visible && this.overlay.setLocked(!this.overlay.isLocked),
+    };
   }
 
   // ----- звук захвата через cord-native (ADR §4.1) -----
@@ -684,6 +1080,8 @@ class Shell {
         if (message.language && message.language !== this.settings.get().uiLanguage) {
           this.settings.update({ uiLanguage: message.language });
           this.taskbar.refresh(window);
+          this.overlay.configure(this.overlayConfig());
+          this.mini.send('mini.config', this.miniConfig());
         }
         if (message.page === 'home' && metrics && !metrics.marks.home) {
           metrics.mark('home');
@@ -702,6 +1100,9 @@ class Shell {
       case 'hotkeys.configure': {
         this.settings.update({ hotkeys: message.bindings });
         void this.hotkeys.apply(message.bindings).then((status) => this.router.post('hotkeys.status', { status }));
+        // Подпись замка в оверлее и во всплывашке — по новому сочетанию; без сочетания замок закрыт.
+        if (!message.bindings.some((binding) => binding.action === 'overlay.lock')) this.overlay.setLocked(true);
+        this.overlay.configure(this.overlayConfig());
         return;
       }
       case 'favorites.changed':
@@ -729,8 +1130,22 @@ class Shell {
         void this.restartIntoSplash();
         return;
       case 'overlay.state':
-        this.overlay.update(message.participants);
+        // Веб до R63: имена и ступени без id и аватаров — виджет рисует их так же, без мини-окна.
+        if (!this.rosterSeen) this.overlay.roster({ legacy: true, participants: message.participants });
         return;
+      case 'overlay.roster':
+        this.rosterSeen = true;
+        this.overlay.roster({ participants: message.participants });
+        this.mini.send('overlay.roster', { participants: message.participants });
+        return;
+      case 'mini.state': {
+        const first = !this.miniState;
+        this.miniState = message.state;
+        if (first) this.mini.send('mini.config', this.miniConfig());
+        this.mini.send('mini.state', { ...message.state });
+        if (first) this.updateMini();
+        return;
+      }
       case 'notify':
         // «Уведомления» выключены в меню трея (R103) — Windows их не показывает.
         if (!this.settings.get().notifications) return;
@@ -777,6 +1192,28 @@ class Shell {
         this.capture.select(selection.id, selection.audio);
         return { ok: true };
       }
+      case 'games.list':
+        return this.gamesView();
+      case 'games.set': {
+        const call = readGameCall('games.set', payload);
+        if (!call) throw new Error('Недоступно.');
+        this.games = setGameEnabled(this.games, call.exe, call.enabled);
+        this.refreshActive();
+        this.saveGames();
+        this.updateOverlay();
+        return this.gamesView();
+      }
+      case 'games.forget': {
+        const call = readGameCall('games.forget', payload);
+        if (!call) throw new Error('Недоступно.');
+        this.games = forgetGame(this.games, call.exe);
+        this.refreshActive();
+        this.saveGames();
+        this.updateOverlay();
+        return this.gamesView();
+      }
+      case 'games.pick':
+        return this.pickGame();
       default:
         void payload;
         throw new Error('Недоступно.');
@@ -800,7 +1237,25 @@ class Shell {
     this.applySleepBlocker();
     this.updateBoost();
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) void this.hotkeys.apply(this.settings.get().hotkeys);
+    if (next.inCall && !was.inCall) {
+      // Окна оверлея и мини-окна — заранее и скрытыми: первая игра и первый Alt+Tab без задержки.
+      if (this.settings.get().overlayEnabled && this.native.available) {
+        this.overlay.prepare();
+        this.overlay.configure(this.overlayConfig());
+      }
+      if (this.settings.get().mini.enabled) {
+        const mini = this.settings.get().mini;
+        this.mini.prepare(mini, mini.expanded);
+        this.mini.send('mini.config', this.miniConfig());
+      }
+    }
+    if (!next.inCall && was.inCall) {
+      this.miniDismissed = false;
+      this.closeGoLive();
+    }
     this.updateOverlay();
+    this.updateMini();
+    if (next.screen !== was.screen && this.miniState) this.mini.send('mini.state', { ...this.miniState, screen: next.screen });
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();
   }
 
@@ -1015,6 +1470,30 @@ class Shell {
         }
         case 'shell.features':
           return { features: this.features(), version: app.getVersion() };
+        // Окно оверлея: смещение перетащенного виджета, «Показать игру» и крестик карточки (R63, R104).
+        case 'overlay.offset': {
+          if (event.sender.id !== this.overlay.contents?.id) return null;
+          const offset = readOffset(data);
+          if (offset) this.settings.update({ overlay: { ...this.settings.get().overlay, offset } });
+          return true;
+        }
+        case 'overlay.golive':
+          if (event.sender.id !== this.overlay.contents?.id || !this.goLive) return null;
+          void this.startGoLive(this.goLive);
+          return true;
+        case 'overlay.card.close':
+          if (event.sender.id !== this.overlay.contents?.id) return null;
+          this.closeGoLive();
+          return true;
+        // Мини-окно звонка: нажатия и размер по содержимому (R93).
+        case 'mini.action':
+          if (event.sender.id !== this.mini.contents?.id || typeof data.id !== 'string') return null;
+          this.onMiniAction(data.id);
+          return true;
+        case 'mini.size':
+          if (event.sender.id !== this.mini.contents?.id) return null;
+          if (typeof data.width === 'number' && typeof data.height === 'number' && Number.isFinite(data.width) && Number.isFinite(data.height)) this.mini.resize(data.width, data.height);
+          return true;
         default:
           return null;
       }

@@ -10,7 +10,9 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { HotkeyBinding } from './bridge/messages';
+import { readGames, type GameEntry } from './games';
 import { INSTALLER_LANGUAGES, type Language } from './language';
+import { OVERLAY_WIDGET_DEFAULTS, readOverlayWidget, type OverlayWidget } from './app-settings';
 import { ServerOrigin } from './origins';
 
 export interface ServerEntry {
@@ -50,6 +52,14 @@ export interface Settings {
   notifications: boolean;
   /** Подсказка «Cord работает в трее» уже показывалась (R57). */
   trayHintShown: boolean;
+  /** Реестр игр (R62, `games.ts`): что Cord узнал сам или что добавил человек. */
+  games: GameEntry[];
+  /** Забытые игры: сами больше не регистрируются. */
+  ignoredGames: string[];
+  /** Виджет говорящих в игре (R63): угол, смещение, размер, имена, прозрачность, всплывашка при старте игры. */
+  overlay: OverlayWidget;
+  /** Мини-окно звонка (R93): включено ли, где стоит (DIP), развёрнуто ли. */
+  mini: MiniSettings;
   sidebarWidth: number;
   window: { width: number; height: number; x?: number; y?: number; maximized: boolean } | null;
   /** Версия, которую ждём после `quitAndInstall`; стоит старее — установщик отказал. */
@@ -80,10 +90,22 @@ const DEFAULTS: Settings = {
   autostart: false,
   notifications: true,
   trayHintShown: false,
+  games: [],
+  ignoredGames: [],
+  overlay: { ...OVERLAY_WIDGET_DEFAULTS, offset: { ...OVERLAY_WIDGET_DEFAULTS.offset } },
+  mini: { enabled: true, expanded: false },
   sidebarWidth: 280,
   window: null,
   expectedVersion: null,
 };
+
+export interface MiniSettings {
+  enabled: boolean;
+  /** Левый верхний угол окна в DIP; нет — снизу справа рабочей области основного дисплея. */
+  x?: number;
+  y?: number;
+  expanded: boolean;
+}
 
 export interface SecretStore {
   isEncryptionAvailable(): boolean;
@@ -193,6 +215,19 @@ function sanitize(raw: unknown): Partial<Settings> {
       result.servers.push({ url: url.url, name: typeof entry.name === 'string' ? entry.name.trim().slice(0, 60) : '', autoConnect: entry.autoConnect !== false });
     }
   }
+  if (Array.isArray(data.games) || Array.isArray(data.ignoredGames)) {
+    const games = readGames(data.games, data.ignoredGames);
+    result.games = games.games;
+    result.ignoredGames = games.ignored;
+  }
+  if (data.overlay && typeof data.overlay === 'object') result.overlay = readOverlayWidget(data.overlay);
+  if (data.mini && typeof data.mini === 'object') {
+    const mini = data.mini as Record<string, unknown>;
+    const coordinate = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < 100_000 ? Math.round(value) : undefined);
+    const x = coordinate(mini.x);
+    const y = coordinate(mini.y);
+    result.mini = { enabled: mini.enabled !== false, expanded: mini.expanded === true, ...(x !== undefined && y !== undefined ? { x, y } : {}) };
+  }
   if (Array.isArray(data.hotkeys)) result.hotkeys = data.hotkeys.filter(validBinding).slice(0, 8) as HotkeyBinding[];
   if (data.window && typeof data.window === 'object') {
     const window = data.window as Record<string, unknown>;
@@ -213,7 +248,7 @@ function validBinding(value: unknown): boolean {
   const binding = value as Record<string, unknown>;
   const key = binding.key as Record<string, unknown> | undefined;
   return (
-    ['mic.toggle', 'ptt', 'deafen', 'overlay.toggle'].includes(binding.action as string) &&
+    ['mic.toggle', 'ptt', 'deafen', 'overlay.toggle', 'overlay.lock'].includes(binding.action as string) &&
     (binding.mode === 'toggle' || binding.mode === 'hold') &&
     !!key &&
     typeof key.code === 'string' &&

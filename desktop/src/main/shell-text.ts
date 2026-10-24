@@ -1,6 +1,8 @@
 /**
  * Свои тексты оболочки на восьми языках Cord (X1): меню трея и его диалоги (R103), подсказка «Cord
- * работает в трее» (R57), кнопки на миниатюре и подписи значка поверх иконки (T53). Как и тексты
+ * работает в трее» (R57), кнопки на миниатюре и подписи значка поверх иконки (T53), виджет говорящих
+ * в игре и карточка «Показать игру» (R63, R104), уведомления о старте игры и об эксклюзивном
+ * полноэкранном режиме, мини-окно звонка (R93). Как и тексты
  * установщика (`build/installer.nsh`, `LangString` на язык), — свой маленький каталог: эти строки
  * нужны, когда страницы ещё нет или окно спрятано. Общие слова — те же, что в каталоге веба
  * (`web/src/i18n/locales`, `GLOSSARY.md`): «Новая встреча», «Настройки», «Чат», «Микрофон».
@@ -42,6 +44,36 @@ export interface ShellText {
   /** Подписи значка поверх иконки; `{count}` — число. */
   muted: string;
   unread: string;
+  /** Виджет говорящих в игре (R63): имя виджета для диктора и подпись разблокированного; `{hotkey}` — сочетание. */
+  overlayLabel: string;
+  overlayUnlocked: string;
+  /** Карточка в оверлее при старте игры (R104); `{keys}` — сочетание пилюлями. */
+  cardTitle: string;
+  cardHint: string;
+  goLive: string;
+  close: string;
+  /** Уведомление Windows при старте игры (R104) и об эксклюзивном полноэкранном режиме; `{game}`, `{hotkey}`. */
+  goLiveTitle: string;
+  goLiveBody: string;
+  goLiveBodyNoKey: string;
+  exclusiveTitle: string;
+  exclusiveBody: string;
+  /** Мини-окно звонка (R93). */
+  miniLabel: string;
+  miniCollapse: string;
+  miniOpen: string;
+  miniMore: string;
+  miniCompact: string;
+  stateOn: string;
+  stateOff: string;
+  camera: string;
+  screenShare: string;
+  screenStop: string;
+  youShare: string;
+  stopShare: string;
+  people: string;
+  soundSettings: string;
+  you: string;
 }
 
 const NBSP = ' ';
@@ -74,6 +106,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Выйти из встречи',
     muted: 'Микрофон выключен',
     unread: 'Непрочитанные: {count}',
+    overlayLabel: 'Кто в звонке',
+    overlayUnlocked: 'Оверлей разблокирован · {hotkey} — закрепить',
+    cardTitle: 'Cord поверх игры',
+    cardHint: 'Нажмите {keys}, чтобы открыть',
+    goLive: 'Показать игру',
+    close: 'Закрыть',
+    goLiveTitle: 'Cord работает поверх {game}',
+    goLiveBody: 'Оверлей — {hotkey}. Показать игру участникам — кнопкой ниже.',
+    goLiveBodyNoKey: 'Кто в звонке и кто говорит — поверх игры. Показать игру участникам — кнопкой ниже.',
+    exclusiveTitle: '{game} в полноэкранном режиме',
+    exclusiveBody: 'Оверлей не виден. Включите в игре режим «без рамки».',
+    miniLabel: 'Звонок',
+    miniCollapse: 'Свернуть',
+    miniOpen: 'Открыть Cord',
+    miniMore: 'Ещё',
+    miniCompact: 'Компактно',
+    stateOn: 'вкл.',
+    stateOff: 'выкл.',
+    camera: 'Камера',
+    screenShare: 'Показ экрана',
+    screenStop: 'Остановить',
+    youShare: 'Вы показываете',
+    stopShare: 'Завершить показ',
+    people: 'Участники',
+    soundSettings: 'Настройки звука',
+    you: 'Вы',
   },
   en: {
     statusInCall: 'In a meeting',
@@ -102,6 +160,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Leave meeting',
     muted: 'Microphone off',
     unread: 'Unread: {count}',
+    overlayLabel: 'Who is in the call',
+    overlayUnlocked: 'Overlay unlocked · {hotkey} to lock',
+    cardTitle: 'Cord is over your game',
+    cardHint: 'Press {keys} to open',
+    goLive: 'Go Live',
+    close: 'Close',
+    goLiveTitle: 'Cord is running over {game}',
+    goLiveBody: 'Overlay: {hotkey}. Stream your game to the call with the button below.',
+    goLiveBodyNoKey: "See who's in the call and who's talking over your game. Stream it with the button below.",
+    exclusiveTitle: '{game} is in fullscreen mode',
+    exclusiveBody: "The overlay can't be shown. Switch the game to borderless mode.",
+    miniLabel: 'Call',
+    miniCollapse: 'Minimize',
+    miniOpen: 'Open Cord',
+    miniMore: 'More',
+    miniCompact: 'Compact',
+    stateOn: 'on',
+    stateOff: 'off',
+    camera: 'Camera',
+    screenShare: 'Screen share',
+    screenStop: 'Stop',
+    youShare: "You're sharing",
+    stopShare: 'Stop sharing',
+    people: 'People',
+    soundSettings: 'Sound settings',
+    you: 'You',
   },
   de: {
     statusInCall: 'Im Meeting',
@@ -130,6 +214,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Meeting verlassen',
     muted: 'Mikrofon aus',
     unread: 'Ungelesen: {count}',
+    overlayLabel: 'Wer im Anruf ist',
+    overlayUnlocked: 'Overlay entsperrt · {hotkey} zum Sperren',
+    cardTitle: 'Cord über dem Spiel',
+    cardHint: 'Drücke {keys} zum Öffnen',
+    goLive: 'Spiel zeigen',
+    close: 'Schließen',
+    goLiveTitle: 'Cord läuft über {game}',
+    goLiveBody: 'Overlay: {hotkey}. Mit der Schaltfläche unten zeigst du das Spiel im Meeting.',
+    goLiveBodyNoKey: 'Wer im Anruf ist und wer spricht – über dem Spiel. Mit der Schaltfläche unten zeigst du es im Meeting.',
+    exclusiveTitle: '{game} läuft im Vollbildmodus',
+    exclusiveBody: 'Das Overlay ist nicht sichtbar. Stelle das Spiel auf „Randloses Fenster“ um.',
+    miniLabel: 'Anruf',
+    miniCollapse: 'Minimieren',
+    miniOpen: 'Cord öffnen',
+    miniMore: 'Mehr',
+    miniCompact: 'Kompakt',
+    stateOn: 'an',
+    stateOff: 'aus',
+    camera: 'Kamera',
+    screenShare: 'Bildschirmfreigabe',
+    screenStop: 'Beenden',
+    youShare: 'Du teilst',
+    stopShare: 'Freigabe beenden',
+    people: 'Teilnehmende',
+    soundSettings: 'Toneinstellungen',
+    you: 'Du',
   },
   es: {
     statusInCall: 'En una reunión',
@@ -158,6 +268,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Salir de la reunión',
     muted: 'Micrófono desactivado',
     unread: 'Sin leer: {count}',
+    overlayLabel: 'Quién está en la llamada',
+    overlayUnlocked: 'Superposición desbloqueada · {hotkey} para fijarla',
+    cardTitle: 'Cord sobre el juego',
+    cardHint: 'Pulsa {keys} para abrir',
+    goLive: 'Mostrar juego',
+    close: 'Cerrar',
+    goLiveTitle: 'Cord funciona sobre {game}',
+    goLiveBody: 'Superposición: {hotkey}. Muestra el juego en la reunión con el botón de abajo.',
+    goLiveBodyNoKey: 'Quién está en la llamada y quién habla, sobre el juego. Muéstralo en la reunión con el botón de abajo.',
+    exclusiveTitle: '{game} está en pantalla completa',
+    exclusiveBody: 'La superposición no se ve. Activa en el juego el modo «sin bordes».',
+    miniLabel: 'Llamada',
+    miniCollapse: 'Minimizar',
+    miniOpen: 'Abrir Cord',
+    miniMore: 'Más',
+    miniCompact: 'Compacto',
+    stateOn: 'activado',
+    stateOff: 'desactivado',
+    camera: 'Cámara',
+    screenShare: 'Compartir pantalla',
+    screenStop: 'Detener',
+    youShare: 'Estás compartiendo',
+    stopShare: 'Dejar de compartir',
+    people: 'Participantes',
+    soundSettings: 'Ajustes de sonido',
+    you: 'Tú',
   },
   fr: {
     statusInCall: 'En réunion',
@@ -186,6 +322,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Quitter la réunion',
     muted: 'Micro coupé',
     unread: `Non lus${NBSP}: {count}`,
+    overlayLabel: 'Qui est dans l’appel',
+    overlayUnlocked: 'Overlay déverrouillé · {hotkey} pour le verrouiller',
+    cardTitle: 'Cord par-dessus le jeu',
+    cardHint: 'Appuyez sur {keys} pour ouvrir',
+    goLive: 'Montrer le jeu',
+    close: 'Fermer',
+    goLiveTitle: 'Cord fonctionne par-dessus {game}',
+    goLiveBody: `Overlay${NBSP}: {hotkey}. Montrez le jeu à la réunion avec le bouton ci-dessous.`,
+    goLiveBodyNoKey: 'Qui est dans l’appel et qui parle, par-dessus le jeu. Montrez-le à la réunion avec le bouton ci-dessous.',
+    exclusiveTitle: '{game} est en plein écran',
+    exclusiveBody: `L’overlay n’est pas visible. Passez le jeu en mode «${NBSP}fenêtré sans bordure${NBSP}».`,
+    miniLabel: 'Appel',
+    miniCollapse: 'Réduire',
+    miniOpen: 'Ouvrir Cord',
+    miniMore: 'Plus',
+    miniCompact: 'Compact',
+    stateOn: 'activé',
+    stateOff: 'désactivé',
+    camera: 'Caméra',
+    screenShare: 'Partage d’écran',
+    screenStop: 'Arrêter',
+    youShare: 'Vous partagez',
+    stopShare: 'Arrêter le partage',
+    people: 'Participants',
+    soundSettings: 'Réglages du son',
+    you: 'Vous',
   },
   it: {
     statusInCall: 'In riunione',
@@ -214,6 +376,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Esci dalla riunione',
     muted: 'Microfono disattivato',
     unread: 'Non letti: {count}',
+    overlayLabel: 'Chi è nella chiamata',
+    overlayUnlocked: 'Overlay sbloccato · {hotkey} per bloccarlo',
+    cardTitle: 'Cord sopra il gioco',
+    cardHint: 'Premi {keys} per aprire',
+    goLive: 'Mostra il gioco',
+    close: 'Chiudi',
+    goLiveTitle: 'Cord è attivo sopra {game}',
+    goLiveBody: 'Overlay: {hotkey}. Mostra il gioco alla riunione con il pulsante qui sotto.',
+    goLiveBodyNoKey: 'Chi è nella chiamata e chi parla, sopra il gioco. Mostralo alla riunione con il pulsante qui sotto.',
+    exclusiveTitle: '{game} è a schermo intero',
+    exclusiveBody: 'L’overlay non è visibile. Imposta il gioco in modalità «finestra senza bordi».',
+    miniLabel: 'Chiamata',
+    miniCollapse: 'Riduci',
+    miniOpen: 'Apri Cord',
+    miniMore: 'Altro',
+    miniCompact: 'Compatto',
+    stateOn: 'attivo',
+    stateOff: 'disattivato',
+    camera: 'Fotocamera',
+    screenShare: 'Condivisione schermo',
+    screenStop: 'Interrompi',
+    youShare: 'Stai condividendo',
+    stopShare: 'Interrompi condivisione',
+    people: 'Partecipanti',
+    soundSettings: 'Impostazioni audio',
+    you: 'Tu',
   },
   'pt-BR': {
     statusInCall: 'Em uma reunião',
@@ -242,6 +430,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: 'Sair da reunião',
     muted: 'Microfone desligado',
     unread: 'Não lidas: {count}',
+    overlayLabel: 'Quem está na chamada',
+    overlayUnlocked: 'Sobreposição desbloqueada · {hotkey} para fixar',
+    cardTitle: 'Cord sobre o jogo',
+    cardHint: 'Pressione {keys} para abrir',
+    goLive: 'Mostrar jogo',
+    close: 'Fechar',
+    goLiveTitle: 'Cord está rodando sobre {game}',
+    goLiveBody: 'Sobreposição: {hotkey}. Mostre o jogo na reunião com o botão abaixo.',
+    goLiveBodyNoKey: 'Quem está na chamada e quem fala, sobre o jogo. Mostre-o na reunião com o botão abaixo.',
+    exclusiveTitle: '{game} está em tela cheia',
+    exclusiveBody: 'A sobreposição não aparece. Ative no jogo o modo “sem bordas”.',
+    miniLabel: 'Chamada',
+    miniCollapse: 'Minimizar',
+    miniOpen: 'Abrir o Cord',
+    miniMore: 'Mais',
+    miniCompact: 'Compacto',
+    stateOn: 'ligado',
+    stateOff: 'desligado',
+    camera: 'Câmera',
+    screenShare: 'Compartilhar tela',
+    screenStop: 'Parar',
+    youShare: 'Você está compartilhando',
+    stopShare: 'Parar de compartilhar',
+    people: 'Participantes',
+    soundSettings: 'Configurações de som',
+    you: 'Você',
   },
   'zh-Hans': {
     statusInCall: '会议中',
@@ -270,6 +484,32 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     leave: '离开会议',
     muted: '麦克风已关闭',
     unread: '未读：{count}',
+    overlayLabel: '通话中的人',
+    overlayUnlocked: '覆盖层已解锁 · 按 {hotkey} 锁定',
+    cardTitle: 'Cord 已在游戏上方',
+    cardHint: '按 {keys} 打开',
+    goLive: '展示游戏',
+    close: '关闭',
+    goLiveTitle: 'Cord 正在 {game} 上方运行',
+    goLiveBody: '覆盖层：{hotkey}。点击下方按钮向会议展示游戏。',
+    goLiveBodyNoKey: '在游戏上方查看通话中的人和正在说话的人。点击下方按钮向会议展示游戏。',
+    exclusiveTitle: '{game} 处于全屏模式',
+    exclusiveBody: '覆盖层无法显示。请在游戏中切换到“无边框”模式。',
+    miniLabel: '通话',
+    miniCollapse: '最小化',
+    miniOpen: '打开 Cord',
+    miniMore: '更多',
+    miniCompact: '紧凑',
+    stateOn: '开',
+    stateOff: '关',
+    camera: '摄像头',
+    screenShare: '屏幕共享',
+    screenStop: '停止',
+    youShare: '你正在共享',
+    stopShare: '停止共享',
+    people: '参与者',
+    soundSettings: '声音设置',
+    you: '你',
   },
 };
 

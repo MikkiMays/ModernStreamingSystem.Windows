@@ -6,7 +6,7 @@
  * Здесь нет Electron: модуль чистый и проверяется тестами. Origin отправителя сверяет
  * маршрутизатор (`router.ts`) до того, как сюда попадёт JSON.
  */
-import { AVATAR_LIMIT, MESSAGE_LIMIT, PAGE_CALLS, PAGE_MESSAGES, type PageCall, type PageMessage } from '../../shared/bridge';
+import { AVATAR_LIMIT, MESSAGE_LIMIT, PAGE_CALLS, PAGE_MESSAGES, ROSTER_LIMIT, type PageCall, type PageMessage } from '../../shared/bridge';
 import { readCaptureSelect } from '../capture';
 import { isLanguage, type Language } from '../language';
 
@@ -18,11 +18,34 @@ export interface Hotkey {
   meta: boolean;
 }
 
-export type HotkeyAction = 'mic.toggle' | 'ptt' | 'deafen' | 'overlay.toggle';
+/** `overlay.lock` (R63) — разблокировать виджет в игре (по умолчанию `Shift+\``); его, как и `overlay.toggle`, исполняет сама оболочка. */
+export type HotkeyAction = 'mic.toggle' | 'ptt' | 'deafen' | 'overlay.toggle' | 'overlay.lock';
 export interface HotkeyBinding {
   action: HotkeyAction;
   mode: 'toggle' | 'hold';
   key: Hotkey;
+}
+
+/** Участник для виджета в игре и мини-окна (R63, R93): аватар — `data:image/` ≤ 4 КиБ или пусто. */
+export interface RosterEntry {
+  id: string;
+  name: string;
+  avatar: string;
+  muted: boolean;
+}
+
+/** Что показывает мини-окно звонка (R93); кто говорит — по порту уровней, состав — `overlay.roster`. */
+export interface MiniState {
+  room: string;
+  /** id своей записи в составе: своя плитка в развёрнутом виде. */
+  self: string;
+  mic: boolean;
+  camera: boolean;
+  screen: boolean;
+  /** Непрочитанные в чате (R87). */
+  unread: number;
+  /** Сколько людей во встрече. */
+  count: number;
 }
 
 export interface RoomRef {
@@ -47,12 +70,19 @@ export type Validated =
   | { type: 'attention' }
   | { type: 'progress'; value: number }
   | { type: 'badge'; count: number }
-  | { type: 'capture.select'; id: string; audio: 'none' | 'system' | 'app' | 'system-except-cord' };
+  | { type: 'capture.select'; id: string; audio: 'none' | 'system' | 'app' | 'system-except-cord' }
+  | { type: 'overlay.roster'; participants: RosterEntry[] }
+  | { type: 'mini.state'; state: MiniState };
 
 const ROOM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Кнопки мыши Mouse3 (средняя), Mouse4 и Mouse5 (боковые) — только через cord-native (Raw Input); без него — «в окне встречи».
-const HOTKEY_CODE = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Mouse[3-5])$/;
-const ACTIONS: readonly HotkeyAction[] = ['mic.toggle', 'ptt', 'deafen', 'overlay.toggle'];
+// `Backquote` — клавиша «`» слева от единицы: `Shift+\`` разблокирует оверлей, как у Discord (R63).
+const HOTKEY_CODE = /^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Backquote|Mouse[3-5])$/;
+const ACTIONS: readonly HotkeyAction[] = ['mic.toggle', 'ptt', 'deafen', 'overlay.toggle', 'overlay.lock'];
+/** id участника встречи (идентичность LiveKit). */
+const PARTICIPANT_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** Больше людей виджет не рисует — дальше «+N». */
+export const ROSTER_SIZE = 25;
 
 export function validHotkey(value: unknown): value is Hotkey {
   if (!value || typeof value !== 'object') return false;
@@ -92,7 +122,7 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
   if (typeof type !== 'string' || !(PAGE_MESSAGES as readonly string[]).includes(type)) return null;
   const data: Record<string, unknown> = payload && typeof payload === 'object' && !Array.isArray(payload) ? (payload as Record<string, unknown>) : {};
   if (payload !== undefined && payload !== null && data !== payload) return null;
-  if (JSON.stringify(data).length > MESSAGE_LIMIT) return null;
+  if (JSON.stringify(data).length > (type === 'overlay.roster' ? ROSTER_LIMIT : MESSAGE_LIMIT)) return null;
   const kind = type as PageMessage;
   switch (kind) {
     case 'state': {
@@ -187,8 +217,44 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       const selection = readCaptureSelect(data);
       return selection ? { type: kind, ...selection } : null;
     }
+    case 'overlay.roster': {
+      if (!Array.isArray(data.participants) || data.participants.length > ROSTER_SIZE) return null;
+      const participants: RosterEntry[] = [];
+      const seen = new Set<string>();
+      for (const item of data.participants) {
+        if (!item || typeof item !== 'object') return null;
+        const entry = item as Record<string, unknown>;
+        const name = text(entry.name, 40);
+        const avatar = text(entry.avatar, AVATAR_LIMIT);
+        if (typeof entry.id !== 'string' || !PARTICIPANT_ID.test(entry.id) || seen.has(entry.id) || name === undefined || avatar === undefined) return null;
+        // Только картинка `data:`: аватар пришёл от другого участника, адреса окно оболочки не грузит.
+        if (avatar && !/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(avatar)) return null;
+        seen.add(entry.id);
+        participants.push({ id: entry.id, name, avatar, muted: entry.muted === true });
+      }
+      return { type: kind, participants };
+    }
+    case 'mini.state': {
+      const room = text(data.room, 80);
+      const self = data.self === undefined || data.self === null ? '' : data.self;
+      if (room === undefined || typeof self !== 'string' || (self && !PARTICIPANT_ID.test(self))) return null;
+      const count = (value: unknown) => (typeof value === 'number' && Number.isInteger(value) && value >= 0 ? Math.min(value, 999) : 0);
+      return {
+        type: kind,
+        state: { room, self, mic: data.mic === true, camera: data.camera === true, screen: data.screen === true, unread: count(data.unread), count: count(data.count) },
+      };
+    }
   }
   return null;
+}
+
+/** `games.set {exe, enabled}` и `games.forget {exe}` — имя exe и (для set) переключатель. */
+export function readGameCall(method: 'games.set' | 'games.forget', payload: unknown): { exe: string; enabled: boolean } | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const data = payload as Record<string, unknown>;
+  if (typeof data.exe !== 'string' || !/^[^\\/:*?"<>|]{1,120}\.exe$/i.test(data.exe)) return null;
+  if (method === 'games.set' && typeof data.enabled !== 'boolean') return null;
+  return { exe: data.exe.toLowerCase(), enabled: data.enabled === true };
 }
 
 export function isPageCall(value: unknown): value is PageCall {

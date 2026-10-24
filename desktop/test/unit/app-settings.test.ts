@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appSettingsOf, keepAwake, overlayIconFor, readAppSettingsPatch, settingsPatchOf, showThumbar } from '../../src/main/app-settings';
+import { appSettingsOf, keepAwake, OVERLAY_WIDGET_DEFAULTS, overlayIconFor, readAppSettingsPatch, readOverlayWidget, settingsPatchOf, showThumbar } from '../../src/main/app-settings';
 import { isPageCall } from '../../src/main/bridge/messages';
 import { FEATURES, HOST_MESSAGES } from '../../src/shared/bridge';
 
@@ -25,10 +25,37 @@ describe('app.settings — переключатели раздела «Windows»
     expect(readAppSettingsPatch([])).toBeNull();
   });
 
-  it('настройки ↔ значения для веба: overlay — это overlayEnabled', () => {
-    const values = appSettingsOf({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlayEnabled: true, autostart: false, notifications: false });
-    expect(values).toEqual({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlay: true, autostart: false, notifications: false });
-    expect(settingsPatchOf({ overlay: false, badge: false })).toEqual({ overlayEnabled: false, badge: false });
+  const widget = { ...OVERLAY_WIDGET_DEFAULTS, offset: { x: 40, y: 12 } };
+  const mini = { enabled: true, expanded: false, x: 100, y: 200 };
+
+  it('настройки ↔ значения для веба: overlay — это overlayEnabled, виджет и мини-окно — свои имена', () => {
+    const values = appSettingsOf({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlayEnabled: true, autostart: false, notifications: false, overlay: widget, mini });
+    expect(values).toEqual({
+      tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlay: true, autostart: false, notifications: false,
+      mini: true, overlayCorner: 'tl', overlaySize: 'm', overlayNames: 'always', overlayOpacity: 100, overlayToast: true,
+    });
+    expect(settingsPatchOf({ overlay: false, badge: false }, { overlay: widget, mini })).toEqual({ overlayEnabled: false, badge: false });
+  });
+
+  it('виджет говорящих (R63): значения не булевы, но только из своих списков; прозрачность — целое 30–100', () => {
+    expect(readAppSettingsPatch({ overlayCorner: 'br', overlaySize: 'l', overlayNames: 'speaking', overlayOpacity: 30, overlayToast: false, mini: false })).toEqual({
+      overlayCorner: 'br', overlaySize: 'l', overlayNames: 'speaking', overlayOpacity: 30, overlayToast: false, mini: false,
+    });
+    for (const bad of [{ overlayCorner: 'center' }, { overlaySize: 'xl' }, { overlayNames: true }, { overlayOpacity: 29 }, { overlayOpacity: 101 }, { overlayOpacity: 55.5 }, { overlayOpacity: '80' }, { mini: 'yes' }])
+      expect(readAppSettingsPatch(bad), JSON.stringify(bad)).toBeNull();
+  });
+
+  it('смена угла сбрасывает смещение перетаскивания; тот же угол — нет; мини-окно помнит место', () => {
+    expect(settingsPatchOf({ overlayCorner: 'br' }, { overlay: widget, mini }).overlay).toEqual({ ...widget, corner: 'br', offset: { x: 0, y: 0 } });
+    expect(settingsPatchOf({ overlayCorner: 'tl', overlayOpacity: 60 }, { overlay: widget, mini }).overlay).toEqual({ ...widget, opacity: 60 });
+    expect(settingsPatchOf({ mini: false }, { overlay: widget, mini })).toEqual({ mini: { ...mini, enabled: false } });
+  });
+
+  it('settings.overlay из файла — без доверия', () => {
+    expect(readOverlayWidget({ corner: 'x', size: 's', names: 'never', opacity: 5, toast: false, offset: { x: 1e9, y: -3.4 } })).toEqual({
+      corner: 'tl', size: 's', names: 'never', opacity: 30, toast: false, offset: { x: 8000, y: -3 },
+    });
+    expect(readOverlayWidget(null)).toEqual(OVERLAY_WIDGET_DEFAULTS);
   });
 });
 

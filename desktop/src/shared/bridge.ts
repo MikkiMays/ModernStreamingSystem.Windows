@@ -28,13 +28,17 @@ export const FEATURES = [
   'tray', // значок в трее
   'sleep', // запрет сна во время встречи (powerSaveBlocker)
   'autostart', // запуск вместе с Windows
+  'games', // cord-native: реестр игр (R62) — invoke('games.list' | 'games.set' | 'games.forget' | 'games.pick'), события games.changed, game.active
+  'overlay.widget', // виджет говорящих в игре (R63): send('overlay.roster'), send('overlay.levels') — по порту мимо main, app.settings overlayCorner/Size/Names/Opacity/Toast, действие overlay.lock (Backquote)
+  'mini', // мини-окно звонка (R93): send('mini.state'), событие mini.action {id}, app.settings mini
+  'golive', // cord-native: «Показать игру» (R104) — событие golive {id, name}: начать показ окна игры
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
 /** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки (API панели задач), автозапуск. */
 const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge', 'autostart']);
 /** Только с загруженным `cord-native` (utility-процесс жив и модуль на месте). */
-const NATIVE_ONLY: ReadonlySet<Feature> = new Set<Feature>(['ptt', 'capture.app-audio']);
+const NATIVE_ONLY: ReadonlySet<Feature> = new Set<Feature>(['ptt', 'capture.app-audio', 'games', 'golive']);
 
 /** Флаги этой машины: веб не показывает переключатель того, чего здесь нет. */
 export function featuresFor(platform: NodeJS.Platform, native = false): Feature[] {
@@ -62,11 +66,21 @@ export const PAGE_MESSAGES = [
   'progress',
   'badge',
   'capture.select',
+  'overlay.roster', // {participants: [{id, name, avatar, muted}]} — кто в звонке для виджета в игре и мини-окна (R63, R93), ≤ 128 КиБ
+  'mini.state', // {room, mic, camera, screen, unread, count, self} — что показывать в мини-окне звонка (R93)
 ] as const;
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
 
 /** Запросы страницы с ответом (`invoke`). */
-export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select', 'app.settings'] as const;
+export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select', 'app.settings', 'games.list', 'games.set', 'games.forget', 'games.pick'] as const;
+
+/**
+ * Уровни голоса для виджета в игре и мини-окна (R63): страница шлёт их `send('overlay.levels', …)`, а
+ * preload кладёт прямо в порты окон оболочки (`MessageChannelMain`), мимо main и без его проверки
+ * размера: ≤ 30 раз в секунду, ≤ 25 записей `[id, ступень 0–4, уровень 0–1]`.
+ */
+export const LEVELS_MESSAGE = 'overlay.levels';
+export const LEVELS_LIMIT = 25;
 export type PageCall = (typeof PAGE_CALLS)[number];
 
 /** Сообщения оболочки странице (`on`). */
@@ -93,6 +107,10 @@ export const HOST_MESSAGES = [
   'capture.audio', // {state: 'ready' | 'failed' | 'ended', mode, reason?} — звук приложения / системы кроме Cord (cord-native)
   'window.state', // {focused, visible} — окно в фокусе / видно (спрятано в трей, свёрнуто): уведомления только когда человек не смотрит (R59)
   'chat.open', // «Чат · N» в меню трея (R103): открыть чат встречи; веб без поддержки пропускает
+  'games.changed', // {games, active} — реестр игр сменился (R62)
+  'game.active', // {game: {exe, name, enabled, exclusive} | null} — игра, которая сейчас запущена (R62)
+  'mini.action', // {id} — нажатие в мини-окне звонка (R93): mic, camera, screen, people, chat, settings, leave
+  'golive', // {id, name} — «Показать игру» (R104): начать показ этого окна; оболочка уже дала странице жест
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 
@@ -127,8 +145,12 @@ export const IPC = {
   shellEvent: 'cord:shell:event',
   /** main → preload: порт PCM захвата (`postMessage` с портом); preload → main: `{type: 'stopped'}`. */
   captureAudio: 'cord:capture-audio',
+  /** main → preload страницы и окна оболочки: порт уровней голоса (`{target}` и порт), R63. */
+  levelsPort: 'cord:levels-port',
 } as const;
 
 /** Больше одного сообщения страницы не бывает (как `BridgeProtocol.Read`). */
 export const MESSAGE_LIMIT = 16384;
+/** `overlay.roster` несёт аватары (≤ 4 КиБ × 25) — у него свой предел. */
+export const ROSTER_LIMIT = 131072;
 export const AVATAR_LIMIT = 4096;

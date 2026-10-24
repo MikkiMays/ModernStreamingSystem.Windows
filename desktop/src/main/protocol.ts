@@ -1,6 +1,6 @@
 /**
  * `cord-app://shell/…` — упакованные страницы оболочки: заставка обновления, загрузка, офлайн,
- * серверы, оверлей. Схема зарегистрирована как `standard, secure`; ответ несёт строгий CSP
+ * серверы; `cord-app://overlay/…` — оверлей в играх, `cord-app://mini/…` — мини-окно звонка (R93). Схема зарегистрирована как `standard, secure`; ответ несёт строгий CSP
  * (`default-src 'self'; script-src 'self'; connect-src 'none'`), а файлы отдаются только из
  * `dist/shell` — путь нормализуется, `..` не проходит.
  */
@@ -12,6 +12,8 @@ import { pathToFileURL } from 'node:url';
 export const SHELL_SCHEME = 'cord-app';
 export const SHELL_ORIGIN = `${SHELL_SCHEME}://shell`;
 export const OVERLAY_ORIGIN = `${SHELL_SCHEME}://overlay`;
+export const MINI_ORIGIN = `${SHELL_SCHEME}://mini`;
+const HOSTS = new Set(['shell', 'overlay', 'mini']);
 
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
@@ -25,7 +27,7 @@ export function shellRoot(): string {
   return join(app.getAppPath(), 'dist', 'shell');
 }
 
-export function shellUrl(page: string, host: 'shell' | 'overlay' = 'shell'): string {
+export function shellUrl(page: string, host: 'shell' | 'overlay' | 'mini' = 'shell'): string {
   return `${SHELL_SCHEME}://${host}/${page}.html`;
 }
 
@@ -34,7 +36,7 @@ export function installShellProtocol(session?: Session): void {
   const root = resolve(shellRoot());
   (session?.protocol ?? protocol).handle(SHELL_SCHEME, async (request) => {
     const url = new URL(request.url);
-    if (url.host !== 'shell' && url.host !== 'overlay') return new Response('', { status: 404 });
+    if (!HOSTS.has(url.host)) return new Response('', { status: 404 });
     const relative = normalize(decodeURIComponent(url.pathname)).replace(/^[/\\]+/, '');
     const file = resolve(root, relative);
     if (!file.startsWith(root + sep) || !existsSync(file) || !statSync(file).isFile()) return new Response('', { status: 404 });

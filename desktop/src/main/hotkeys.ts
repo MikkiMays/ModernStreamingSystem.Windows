@@ -52,6 +52,7 @@ export function accelerator(key: Hotkey): string | null {
   if (key.code.startsWith('Key')) name = key.code.slice(3);
   else if (key.code.startsWith('Digit')) name = key.code.slice(5);
   else if (key.code === 'Space') name = 'Space';
+  else if (key.code === 'Backquote') name = '`';
   else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(key.code)) name = key.code;
   else return null;
   return [key.ctrl && 'Control', key.alt && 'Alt', key.shift && 'Shift', name].filter(Boolean).join('+');

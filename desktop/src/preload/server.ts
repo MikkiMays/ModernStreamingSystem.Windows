@@ -14,9 +14,13 @@
  * ScreenShareAudio. О состоянии — событие `capture.audio`; новый слушатель получает текущее сразу.
  * Порции идут в генератор не по приходу, а по часам из запаса в две порции (`PcmQueue`, R01–R03):
  * пачка от потока захвата не уходит в сеть пачкой.
+ *
+ * Уровни голоса (R63): `send('overlay.levels', {levels})` не идёт в main — preload кладёт их прямо в
+ * порты окон оболочки (оверлей в игре, мини-окно звонка), которые main присылает `cord:levels-port`.
+ * До 30 раз в секунду без лишнего прыжка через main: кольцо говорящего загорается сразу.
  */
 import { contextBridge, ipcRenderer } from 'electron';
-import { CAPTURE_AUDIO_ELEMENT, FEATURES, HOST_MESSAGES, IPC, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
+import { CAPTURE_AUDIO_ELEMENT, FEATURES, HOST_MESSAGES, IPC, LEVELS_LIMIT, LEVELS_MESSAGE, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
 import { PCM_CHUNK_MS, PcmQueue } from './pcm-queue';
 
 const handed = ipcRenderer.sendSync(IPC.bootstrap) as { bootstrap: Bootstrap; version: string; features?: unknown } | null;
@@ -183,12 +187,43 @@ ipcRenderer.on(IPC.captureAudio, (event, info: unknown) => {
   setCaptureAudio({ state: 'ready', mode });
 });
 
+// ---------- уровни голоса: страница → порты окон оболочки ----------
+
+const levelPorts = new Map<string, MessagePort>();
+ipcRenderer.on(IPC.levelsPort, (event, info: unknown) => {
+  const port = event.ports[0];
+  const target = info && typeof info === 'object' ? String((info as Record<string, unknown>).target ?? '') : '';
+  if (!port || !target) return;
+  levelPorts.get(target)?.close();
+  levelPorts.set(target, port);
+  port.start();
+});
+
+/** `[id, ступень 0–4, уровень 0–1]` × ≤ 25 — остальное отбрасывается: порт ведёт в окно оболочки. */
+function postLevels(payload: unknown): void {
+  if (!levelPorts.size) return;
+  const list = payload && typeof payload === 'object' ? (payload as Record<string, unknown>).levels : null;
+  if (!Array.isArray(list) || list.length > LEVELS_LIMIT) return;
+  const levels: [string, number, number][] = [];
+  for (const item of list) {
+    if (!Array.isArray(item)) return;
+    const [id, tier, level] = item as unknown[];
+    if (typeof id !== 'string' || id.length > 64 || typeof tier !== 'number' || typeof level !== 'number') return;
+    levels.push([id, Math.min(4, Math.max(0, Math.round(tier))), Math.min(1, Math.max(0, level))]);
+  }
+  for (const port of levelPorts.values()) port.postMessage({ levels });
+}
+
 const api: CordDesktopApi = {
   protocol: PROTOCOL,
   features,
   app: { version: handed?.version ?? '', arch: process.arch as 'x64' },
   bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true },
   send(type, payload) {
+    if ((type as string) === LEVELS_MESSAGE) {
+      postLevels(payload);
+      return;
+    }
     if (!(PAGE_MESSAGES as readonly string[]).includes(type)) return;
     ipcRenderer.send(IPC.send, type, payload ?? {});
   },
