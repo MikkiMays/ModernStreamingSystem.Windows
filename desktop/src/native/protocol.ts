@@ -41,6 +41,17 @@ export interface NativeForegroundEvent {
   cord: boolean;
   /** Физические пиксели монитора переднего окна. */
   monitor: NativeMonitor;
+  /**
+   * Имя exe процесса окна из снимка Toolhelp (`cs2.exe`); пусто — процесса нет в снимке. Модуль 1.0.2
+   * (до R62) полей `exe`…`exclusive` не присылает — тогда это просто «не игра».
+   */
+  exe?: string;
+  /** Заголовок окна, ≤ 80 символов. */
+  title?: string;
+  /** Без заголовка и рамки ровно по монитору — «без рамки» (borderless). */
+  borderless?: boolean;
+  /** Эксклюзивный полноэкранный Direct3D: окно поверх игры Windows не покажет. */
+  exclusive?: boolean;
 }
 
 export type NativeAudioMode = 'include' | 'exclude';
@@ -64,6 +75,8 @@ export interface NativeModule {
   startAudio(options: { pid: number; mode: NativeAudioMode }, callback: (event: NativeAudioEvent) => void): number;
   stopAudio(session: number): void;
   windowProcess(hwnd: number): number | null;
+  /** Жив ли процесс: тот же PID с тем же exe в снимке процессов (R62, «Сейчас запущена»). */
+  processAlive?(pid: number, exe: string): boolean;
   currentProcess(): number;
   /** Приоритет своего процесса, пока Cord запущен: EcoQoS выкл., `HIGH` (R01–R03); ошибка — исключением. */
   boostProcess(pid: number, on: boolean): void;
@@ -80,6 +93,8 @@ export type HostRequest =
   | { type: 'audio.start'; pid: number; mode: NativeAudioMode }
   | { type: 'audio.stop' }
   | { type: 'window.pid'; hwnd: number }
+  /** Жива ли игра (`processAlive`); ответ — `boolean`. */
+  | { type: 'process.alive'; pid: number; exe: string }
   /** Поднять (`on`) или вернуть приоритет своих процессов (`boost-plan.ts`); ответ — `BoostResult[]`. */
   | { type: 'process.boost'; pids: number[]; on: boolean };
 

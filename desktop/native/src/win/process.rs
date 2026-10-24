@@ -1,4 +1,5 @@
-//! Процессы: PID по окну и карта «кто чей родитель» из снимка Toolhelp — без `OpenProcess`;
+//! Процессы: PID по окну и карта «кто чей родитель и как называется его exe» из снимка Toolhelp —
+//! без `OpenProcess` (различение игр, R62: имя exe — `szExeFile` снимка, процесс игры не открывается);
 //! приоритет своих процессов во встрече (`set_boost`, R01–R03) — `OpenProcess` только на свои
 //! дочерние процессы Cord того же пользователя (`PROCESS_SET_INFORMATION`), чужие не открываются.
 use std::collections::HashMap;
@@ -12,6 +13,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 
 use crate::boost::{priority_after, throttling_attempts};
+use crate::foreground::{exe_name, Process};
 
 pub fn window_process(hwnd: isize) -> Option<u32> {
     let handle = HWND(hwnd as *mut c_void);
@@ -21,8 +23,9 @@ pub fn window_process(hwnd: isize) -> Option<u32> {
     (thread != 0 && pid != 0).then_some(pid)
 }
 
-/// `pid → родитель` для всех процессов. Пустая карта — снимок не удался (Cord тогда «не свой»).
-pub fn parent_map() -> HashMap<u32, u32> {
+/// `pid → (родитель, exe)` для всех процессов. Пустая карта — снимок не удался (Cord тогда «не свой»,
+/// а у окна нет имени exe — игрой оно не считается).
+pub fn process_map() -> HashMap<u32, Process> {
     let mut map = HashMap::new();
     // SAFETY: обычная последовательность Toolhelp; дескриптор закрывается ниже.
     unsafe {
@@ -32,7 +35,7 @@ pub fn parent_map() -> HashMap<u32, u32> {
         let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         if Process32FirstW(snapshot, &mut entry).is_ok() {
             loop {
-                map.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+                map.insert(entry.th32ProcessID, Process { parent: entry.th32ParentProcessID, exe: exe_name(&entry.szExeFile) });
                 if Process32NextW(snapshot, &mut entry).is_err() {
                     break;
                 }
@@ -41,6 +44,11 @@ pub fn parent_map() -> HashMap<u32, u32> {
         let _ = CloseHandle(snapshot);
     }
     map
+}
+
+/// Жив ли процесс: тот же PID с тем же exe в свежем снимке (`foreground::is_alive`).
+pub fn process_alive(pid: u32, exe: &str) -> bool {
+    crate::foreground::is_alive(&process_map(), pid, exe)
 }
 
 /// Поднять (`on`) — EcoQoS и загрубление таймера выключены, класс `HIGH`; вернуть —

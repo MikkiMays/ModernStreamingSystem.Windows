@@ -40,6 +40,10 @@ pub fn window_process(_hwnd: isize) -> Option<u32> {
     None
 }
 
+pub fn process_alive(_pid: u32, _exe: &str) -> bool {
+    false
+}
+
 pub fn set_boost(_pid: u32, _on: bool) -> std::result::Result<(), String> {
     Err("cord-native: только Windows".into())
 }

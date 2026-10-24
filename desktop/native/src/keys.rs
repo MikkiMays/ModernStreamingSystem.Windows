@@ -1,4 +1,5 @@
-//! Клавиши сочетаний: имена DOM (`KeyM`, `Digit1`, `F5`, `Space`) и кнопки мыши (`Mouse3`…`Mouse5`)
+//! Клавиши сочетаний: имена DOM (`KeyM`, `Digit1`, `F5`, `Space`, `Backquote` — клавиша «`» слева от
+//! единицы, `Shift+\`` открывает оверлей, как у Discord) и кнопки мыши (`Mouse3`…`Mouse5`)
 //! ↔ виртуальные коды Windows. Чистый модуль без Windows — проверяется тестами на любой платформе.
 
 /// Что нажимают: клавиша (виртуальный код Windows) или кнопка мыши (3 — средняя, 4 и 5 — боковые).
@@ -76,6 +77,10 @@ pub fn parse_code(code: &str) -> Option<Trigger> {
     if code == "Space" {
         return Some(Trigger::Key(0x20));
     }
+    // `VK_OEM_3` — «`» и «ё» в английской и русской раскладках.
+    if code == "Backquote" {
+        return Some(Trigger::Key(0xC0));
+    }
     if let Some(number) = code.strip_prefix('F') {
         return match number.parse::<u16>() {
             Ok(n) if (1..=24).contains(&n) => Some(Trigger::Key(0x70 + n - 1)),
@@ -105,6 +110,7 @@ mod tests {
         assert_eq!(parse_code("F1"), Some(Trigger::Key(0x70)));
         assert_eq!(parse_code("F24"), Some(Trigger::Key(0x87)));
         assert_eq!(parse_code("Mouse4"), Some(Trigger::Mouse(4)));
+        assert_eq!(parse_code("Backquote"), Some(Trigger::Key(0xC0)), "клавиша оверлея Shift+`");
     }
 
     #[test]

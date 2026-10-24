@@ -5,8 +5,10 @@
 //!   «нажал/отпустил», без хуков и без отбора клавиши у игры (§4.2);
 //! - `startAudio`/`stopAudio` — process loopback: звук одного приложения или всей системы, кроме
 //!   дерева процессов Cord (§4.1);
-//! - `watchForeground`/`stopForeground` — переднее окно, его монитор и полноэкранность для оверлея,
-//!   без открытия процесса игры (§4.3);
+//! - `watchForeground`/`stopForeground` — переднее окно, его монитор, полноэкранность, «без рамки»,
+//!   эксклюзивный режим, имя exe и заголовок для оверлея и различения игр, без открытия процесса игры
+//!   (§4.3, R62);
+//! - `processAlive` — жив ли процесс игры (тот же PID с тем же exe в снимке Toolhelp, без `OpenProcess`);
 //! - `windowProcess`, `currentProcess` — PID по HWND источника `window:<hwnd>:0` и свой PID;
 //! - `boostProcess` — приоритет своих процессов, пока Cord запущен: EcoQoS выкл., `HIGH` (R01–R03).
 //!
@@ -64,7 +66,8 @@ pub struct MonitorRect {
     pub height: i32,
 }
 
-/// Переднее окно сменилось: PID, полноэкранность, принадлежность Cord, монитор (физические пиксели).
+/// Переднее окно сменилось: PID, полноэкранность, принадлежность Cord, монитор (физические пиксели),
+/// имя exe и заголовок (≤ 80 символов), «без рамки» и эксклюзивный полноэкранный режим (R62).
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct ForegroundEvent {
@@ -73,6 +76,10 @@ pub struct ForegroundEvent {
     pub fullscreen: bool,
     pub cord: bool,
     pub monitor: MonitorRect,
+    pub exe: String,
+    pub title: String,
+    pub borderless: bool,
+    pub exclusive: bool,
 }
 
 /// `mode: 'include'` — звук дерева процессов `pid`; `'exclude'` — всё, кроме него.
@@ -108,6 +115,10 @@ impl From<foreground::Change> for ForegroundEvent {
                 width: change.monitor.width(),
                 height: change.monitor.height(),
             },
+            exe: change.exe,
+            title: change.title,
+            borderless: change.borderless,
+            exclusive: change.exclusive,
         }
     }
 }
@@ -195,6 +206,12 @@ pub fn window_process(hwnd: f64) -> Option<u32> {
     platform::window_process(hwnd as isize)
 }
 
+/// Жив ли процесс игры: тот же PID и тот же exe в снимке процессов (номер мог достаться другому).
+#[napi]
+pub fn process_alive(pid: u32, exe: String) -> bool {
+    platform::process_alive(pid, &exe)
+}
+
 #[napi]
 pub fn current_process() -> u32 {
     std::process::id()
@@ -232,9 +249,14 @@ mod tests {
             fullscreen: true,
             cord: false,
             monitor: foreground::Rect { left: 2560, top: 0, right: 4480, bottom: 1080 },
+            exe: "cs2.exe".into(),
+            title: "Counter-Strike 2".into(),
+            borderless: true,
+            exclusive: false,
         }
         .into();
         assert_eq!(event.hwnd, 42.0);
         assert_eq!((event.monitor.x, event.monitor.width, event.monitor.height), (2560, 1920, 1080));
+        assert_eq!((event.exe.as_str(), event.title.as_str(), event.borderless, event.exclusive), ("cs2.exe", "Counter-Strike 2", true, false));
     }
 }

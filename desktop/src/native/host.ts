@@ -6,7 +6,8 @@
  *
  * `CORD_NATIVE_MODULE` — путь к `.node`; нет файла или не Windows — `ready {available: false}`.
  * `CORD_NATIVE_FAKE=1` — подмена для разработки и дымового прогона без Windows: тон 440 Гц вместо
- * звука приложения, переднее окно «не Cord, не во весь экран». В выпуске не включается.
+ * звука приложения, переднее окно «не Cord, не во весь экран» (дымовой прогон потом подставляет своё —
+ * `cordSmoke.foreground` в main). В выпуске не включается.
  */
 import { existsSync } from 'node:fs';
 import type { MessagePortMain } from 'electron';
@@ -35,7 +36,7 @@ function fakeModule(): NativeModule {
     setBindings: (bindings) => bindings.filter((binding) => !/^(Key[A-Z]|Digit[0-9]|F([1-9]|1[0-9]|2[0-4])|Space|Mouse[3-5])$/.test(binding.code)).map((binding) => binding.id),
     stopInput: () => {},
     watchForeground: (_root, _interval, callback) => {
-      setTimeout(() => callback({ hwnd: 1, pid: 4242, fullscreen: false, cord: false, monitor: { x: 0, y: 0, width: 1920, height: 1080 } }), 0);
+      setTimeout(() => callback({ hwnd: 1, pid: 4242, fullscreen: false, cord: false, monitor: { x: 0, y: 0, width: 1920, height: 1080 }, exe: 'explorer.exe', title: '', borderless: false, exclusive: false }), 0);
     },
     stopForeground: () => {},
     startAudio: (_options, callback) => {
@@ -58,6 +59,7 @@ function fakeModule(): NativeModule {
       audioTimer = null;
     },
     windowProcess: () => 4242,
+    processAlive: () => true,
     currentProcess: () => process.pid,
     boostProcess: () => {},
   };
@@ -154,6 +156,9 @@ function handle(call: HostCall, ports: MessagePortMain[]): unknown {
       return true;
     case 'window.pid':
       return native.windowProcess(request.hwnd);
+    case 'process.alive':
+      // Модуль до R62 этого не умеет — тогда игра считается живой, пока впереди не окажется другая.
+      return typeof native.processAlive === 'function' ? native.processAlive(request.pid, String(request.exe ?? '')) : true;
     case 'process.boost':
       return request.pids
         .filter((pid) => Number.isInteger(pid) && pid > 0)

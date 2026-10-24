@@ -19,12 +19,13 @@ use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORI
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::Input::{GetRawInputData, RegisterRawInputDevices, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RIDEV_INPUTSINK, RID_INPUT, RIM_TYPEKEYBOARD, RIM_TYPEMOUSE};
+use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_RUNNING_D3D_FULL_SCREEN};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetMessageW, GetWindowRect, GetWindowThreadProcessId, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, MSG, WINDOW_EX_STYLE,
-    WM_CLOSE, WM_DESTROY, WM_INPUT, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClassNameW, GetForegroundWindow, GetMessageW, GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW, SetTimer, TranslateMessage, GWL_STYLE,
+    MSG, WINDOW_EX_STYLE, WM_CLOSE, WM_DESTROY, WM_INPUT, WM_TIMER, WNDCLASSW, WS_OVERLAPPED,
 };
 
-use crate::foreground::{self, is_descendant, Sample, Tracker};
+use crate::foreground::{self, is_descendant, Process, Sample, Tracker};
 use crate::keys::Trigger;
 use crate::matcher::{Matcher, Phase};
 use crate::{ForegroundCallback, ForegroundEvent, HotkeyCallback, HotkeyEvent};
@@ -33,6 +34,8 @@ const TIMER_FOREGROUND: usize = 1;
 const TIMER_HOLD: usize = 2;
 const HOLD_POLL_MS: u32 = 50;
 const PARENTS_TTL: Duration = Duration::from_secs(5);
+/// Процесса переднего окна нет в снимке (игру только что запустили) — снимок заново, но не чаще раза в секунду.
+const PARENTS_MISS_TTL: Duration = Duration::from_secs(1);
 
 /// Флаги `RAWKEYBOARD.Flags` и `RAWMOUSE.usButtonFlags` (winuser.h).
 const RI_KEY_BREAK: u16 = 0x01;
@@ -49,7 +52,7 @@ struct ForegroundWatch {
     root_pid: u32,
     interval_ms: u32,
     tracker: Tracker,
-    parents: HashMap<u32, u32>,
+    processes: HashMap<u32, Process>,
     parents_at: Option<Instant>,
 }
 
@@ -98,7 +101,7 @@ pub fn stop_input() -> Result<()> {
 
 pub fn watch_foreground(root_pid: u32, interval_ms: u32, callback: ForegroundCallback) -> Result<()> {
     let mut state = shared();
-    state.foreground = Some(ForegroundWatch { callback, root_pid, interval_ms, tracker: Tracker::new(), parents: HashMap::new(), parents_at: None });
+    state.foreground = Some(ForegroundWatch { callback, root_pid, interval_ms, tracker: Tracker::new(), processes: HashMap::new(), parents_at: None });
     ensure_thread(&mut state)?;
     let hwnd = HWND(state.hwnd as *mut c_void);
     // SAFETY: окно живо, пока поток работает; таймер с тем же id просто перезапускается.
@@ -349,12 +352,18 @@ fn sample_foreground() -> Option<Sample> {
         }
         let mut class = [0u16; 64];
         let length = GetClassNameW(hwnd, &mut class) as usize;
+        // Для окна чужого процесса GetWindowText не шлёт WM_GETTEXT, а отдаёт сохранённый текст: зависшая игра не держит поток.
+        let mut title = [0u16; 256];
+        let title_length = GetWindowTextW(hwnd, &mut title).max(0) as usize;
         Some(Sample {
             hwnd: hwnd.0 as isize,
             pid,
             window: rect(window),
             monitor: rect(info.rcMonitor),
             class: String::from_utf16_lossy(&class[..length.min(class.len())]),
+            style: GetWindowLongW(hwnd, GWL_STYLE) as u32,
+            title: String::from_utf16_lossy(&title[..title_length.min(title.len())]),
+            d3d_fullscreen: false,
         })
     }
 }
@@ -363,8 +372,14 @@ fn rect(value: RECT) -> foreground::Rect {
     foreground::Rect { left: value.left, top: value.top, right: value.right, bottom: value.bottom }
 }
 
+/// Эксклюзивный полноэкранный Direct3D впереди (`QUNS_RUNNING_D3D_FULL_SCREEN`) — оверлей Windows не покажет.
+fn d3d_fullscreen() -> bool {
+    // SAFETY: запрос состояния оболочки без параметров.
+    unsafe { SHQueryUserNotificationState() }.map(|state| state == QUNS_RUNNING_D3D_FULL_SCREEN).unwrap_or(false)
+}
+
 fn on_foreground_tick() {
-    let Some(sample) = sample_foreground() else {
+    let Some(mut sample) = sample_foreground() else {
         return;
     };
     let mut state = shared();
@@ -372,15 +387,23 @@ fn on_foreground_tick() {
         return;
     };
     let _ = watch.interval_ms;
-    // Карта процессов — не чаще раза в 5 с, и только когда окно сменилось.
+    // Снимок процессов — не чаще раза в 5 с и только когда окно сменилось; процесса окна в снимке
+    // нет (игру только что запустили) — не чаще раза в секунду.
     let changed_window = watch.tracker_hwnd() != Some(sample.hwnd);
-    let stale = watch.parents_at.map(|at| at.elapsed() > PARENTS_TTL).unwrap_or(true);
-    if changed_window && stale {
-        watch.parents = super::process::parent_map();
+    let age = watch.parents_at.map(|at| at.elapsed());
+    let stale = age.is_none_or(|age| age > PARENTS_TTL);
+    let missing = sample.pid != 0 && !watch.processes.contains_key(&sample.pid) && age.is_none_or(|age| age > PARENTS_MISS_TTL);
+    if (changed_window && stale) || missing {
+        watch.processes = super::process::process_map();
         watch.parents_at = Some(Instant::now());
     }
-    let cord = sample.pid != 0 && is_descendant(&watch.parents, sample.pid, watch.root_pid);
-    if let Some(change) = watch.tracker.update(&sample, cord) {
+    let cord = sample.pid != 0 && is_descendant(&watch.processes, sample.pid, watch.root_pid);
+    let exe = watch.processes.get(&sample.pid).map(|process| process.exe.clone()).unwrap_or_default();
+    // Состояние оболочки спрашивается только у полноэкранного чужого окна: только там оно что-то значит.
+    if !cord && foreground::is_fullscreen(&sample) {
+        sample.d3d_fullscreen = d3d_fullscreen();
+    }
+    if let Some(change) = watch.tracker.update(&sample, cord, &exe) {
         watch.callback.call(ForegroundEvent::from(change), ThreadsafeFunctionCallMode::NonBlocking);
     }
 }
