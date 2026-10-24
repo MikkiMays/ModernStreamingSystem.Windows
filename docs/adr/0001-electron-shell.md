@@ -97,7 +97,7 @@ desktop/
 
 - `titleBarStyle: 'hidden'` + `titleBarOverlay` (36 px, цвета по теме); шапку с маркой (T01) рисует веб в режиме приложения (Window Controls Overlay, `app-region: drag`);
 - `backgroundMaterial: 'mica'`;
-- `backgroundThrottling: false` — свёрнутое окно в звонке не замедляет таймеры; плюс ключи Chromium `disable-renderer-backgrounding` и `disable-backgrounding-occluded-windows` (R01–R03): окна оболочки и воркеры не усыпляются, когда Cord спрятан в трей или накрыт игрой;
+- `backgroundThrottling: false` — свёрнутое окно в звонке не замедляет таймеры; плюс ключи Chromium `disable-renderer-backgrounding` и `disable-backgrounding-occluded-windows` (R01–R03): окна оболочки и воркеры не усыпляются, когда Cord спрятан в трей или накрыт игрой; полевой опыт `force-fieldtrials=WebRTC-Audio-Red-For-Opus/Enabled-2/` (R107) — RED для Opus с двумя копиями: на пачках потерь заглушка NetEq меньше примерно на 45 % при ~1,5× полосе речи (замер голоса в ядре, `MEDIA-DIAGNOSIS.md` §10); браузер такого не умеет. Все полевые опыты — одним ключом через «/», второй `force-fieldtrials` перебил бы первый;
 - `autoplayPolicy: 'no-user-gesture-required'` вместо нынешнего ключа WebView2.
 
 **Старт:** сначала заставка обновления (§5.1) — отдельное маленькое окно; главное окно создаётся только после неё. Затем локальная `cord-app://shell/loading` (упакованный компонент загрузки E16) → в фоне рукопожатие (`POST /api/v1/session`, пароль из DPAPI) → `loadURL(origin)`. **Смена сервера:** подтверждение выхода из встречи → загрузка → новый origin.

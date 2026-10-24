@@ -66,6 +66,11 @@ const metrics = metricsFile ? new StartupMetrics(process.getCreationTime() ?? Da
 // трей (R57) или целиком накрыт игрой (Chromium считает такое окно occluded и иначе усыпил бы его).
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// RED для Opus с двумя копиями, а не одной (R107): одна копия не чинит пачки потерь. Замер голоса в
+// ядре (`backlog/review-1.0.3/MEDIA-DIAGNOSIS.md` §10): на пачках потерь заглушка NetEq меньше примерно
+// на 45 % ценой ~1,5× полосы речи. Браузер выбрать число копий не даёт — только клиент Windows.
+// Полевые опыты — одной строкой через «/»: второй `force-fieldtrials` перебил бы первый.
+app.commandLine.appendSwitch('force-fieldtrials', 'WebRTC-Audio-Red-For-Opus/Enabled-2/');
 
 registerShellScheme();
 appUserModelId();
