@@ -1,8 +1,8 @@
 /**
- * Трей и панель задач (T53, ADR 0001 §4.4): значок в трее с пунктами «Микрофон», «Открыть»,
- * «Выйти»; кнопки на миниатюре (микрофон, камера, завершить); значок поверх иконки («во
- * встрече», «микрофон выключен»); список переходов; прогресс файла; мигание при упоминании.
- * Номера версии нигде нет (T58).
+ * Трей и панель задач (T53, ADR 0001 §4.4): значок в трее с меню как у Телемоста (R103,
+ * `tray-menu.ts`) и подсказкой-состоянием; кнопки на миниатюре (микрофон, камера, выйти); значок
+ * поверх иконки («во встрече», «микрофон выключен»); список переходов; прогресс файла; мигание при
+ * упоминании. Тексты — на языке Cord (`shell-text.ts`, X1). Номера версии нигде нет (T58).
  *
  * Картинка значка — `dist/shell/tray.ico` (R58, `tray-icon.ts`); не прочиталась — трей не создаётся,
  * и крестик закрывает Cord по-настоящему (`close-policy.ts`), а не прячет его «в никуда».
@@ -10,11 +10,19 @@
 import { app, BrowserWindow, Menu, nativeImage, Tray, type NativeImage } from 'electron';
 import { existsSync } from 'node:fs';
 import { overlayIconFor, showThumbar, type AppSettings } from './app-settings';
+import type { ShellText } from './shell-text';
 import { pickTrayImage, trayIconCandidates } from './tray-icon';
+import { trayMenu, trayTooltip, type TrayItemId } from './tray-menu';
 
+/** Что делают пункты меню трея (R103). */
 export interface TrayHost {
+  /** Показать окно (щелчок, двойной щелчок, «Вернуться во встречу»). */
   open(): void;
+  newMeeting(): void;
+  openChat(): void;
+  openSettings(): void;
   toggleMicrophone(): void;
+  toggleNotifications(): void;
   quit(): void;
 }
 
@@ -39,11 +47,13 @@ function dot(color: string): NativeImage {
   return nativeImage.createFromDataURL('data:image/svg+xml;base64,' + Buffer.from(svg).toString('base64'));
 }
 
-export type TaskbarOptions = Pick<AppSettings, 'thumbar' | 'badge' | 'flash' | 'sleepBlocker'>;
+export type TaskbarOptions = Pick<AppSettings, 'thumbar' | 'badge' | 'flash' | 'sleepBlocker' | 'notifications'>;
 
 export class Taskbar {
   private tray: Tray | null = null;
   private state: CallState = { inCall: false, mic: false, camera: false, screen: false };
+  /** Название встречи — в строке состояния меню и в подсказке. */
+  private title = '';
   private unread = 0;
   private actions: { mic(): void; camera(): void; leave(): void } = { mic() {}, camera() {}, leave() {} };
 
@@ -52,6 +62,8 @@ export class Taskbar {
     private readonly host: TrayHost,
     /** Переключатели раздела «Windows» (E03) — читаются при каждом обновлении, а не запоминаются. */
     private readonly options: () => TaskbarOptions,
+    /** Тексты на языке Cord — тоже при каждом обновлении: язык мог смениться. */
+    private readonly text: () => ShellText,
   ) {}
 
   /** Значок в трее на месте — есть куда спрятать окно по крестику (R57). */
@@ -65,7 +77,6 @@ export class Taskbar {
     const image = trayImage(this.appPath);
     if (!image) throw new Error('картинка значка не найдена (dist/shell/tray.ico, icon-256.png)');
     this.tray = new Tray(image);
-    this.tray.setToolTip('Cord');
     this.tray.on('click', () => this.host.open());
     this.tray.on('double-click', () => this.host.open());
     this.refreshTray();
@@ -81,16 +92,35 @@ export class Taskbar {
     }
   }
 
-  private refreshTray(): void {
-    if (!this.tray) return;
-    this.tray.setToolTip(this.state.inCall ? (this.state.mic ? 'Cord — во встрече' : 'Cord — во встрече, микрофон выключен') : 'Cord');
+  /** Меню и подсказка по состоянию: встреча, микрофон, непрочитанные, «Уведомления», язык. */
+  refreshTray(): void {
+    if (!this.tray || this.tray.isDestroyed()) return;
+    const text = this.text();
+    const state = { inCall: this.state.inCall, mic: this.state.mic, title: this.title, unread: this.unread, notifications: this.options().notifications };
+    const actions: Record<TrayItemId, () => void> = {
+      status: () => {},
+      return: () => this.host.open(),
+      new: () => this.host.newMeeting(),
+      chat: () => this.host.openChat(),
+      mic: () => this.host.toggleMicrophone(),
+      notifications: () => this.host.toggleNotifications(),
+      settings: () => this.host.openSettings(),
+      quit: () => this.host.quit(),
+    };
+    this.tray.setToolTip(trayTooltip(state, text));
     this.tray.setContextMenu(
-      Menu.buildFromTemplate([
-        { label: 'Открыть Cord', click: () => this.host.open() },
-        { label: this.state.mic ? 'Выключить микрофон' : 'Включить микрофон', enabled: this.state.inCall, click: () => this.host.toggleMicrophone() },
-        { type: 'separator' },
-        { label: 'Выйти', click: () => this.host.quit() },
-      ]),
+      Menu.buildFromTemplate(
+        trayMenu(state, text).map((item) =>
+          item.type === 'separator'
+            ? { type: 'separator' as const }
+            : {
+                label: item.label,
+                ...(item.enabled === false ? { enabled: false } : {}),
+                ...(item.checked !== undefined ? { type: 'checkbox' as const, checked: item.checked } : {}),
+                click: actions[item.id],
+              },
+        ),
+      ),
     );
   }
 
@@ -100,9 +130,10 @@ export class Taskbar {
     this.tray = null;
   }
 
-  /** Кнопки на миниатюре и значок поверх иконки — по состоянию звонка. */
-  applyCall(window: BrowserWindow | null, state: CallState, actions: { mic(): void; camera(): void; leave(): void }): void {
+  /** Кнопки на миниатюре, значок поверх иконки и меню трея — по состоянию звонка. */
+  applyCall(window: BrowserWindow | null, state: CallState, actions: { mic(): void; camera(): void; leave(): void }, title = ''): void {
     this.state = state;
+    this.title = state.inCall ? title : '';
     this.actions = actions;
     this.refreshTray();
     this.render(window);
@@ -110,36 +141,39 @@ export class Taskbar {
 
   setBadge(window: BrowserWindow | null, count: number): void {
     this.unread = count;
+    this.refreshTray();
     this.render(window);
   }
 
-  /** Перерисовать после смены переключателей. */
+  /** Перерисовать после смены переключателей или языка. */
   refresh(window: BrowserWindow | null): void {
+    this.refreshTray();
     this.render(window);
   }
 
   private render(window: BrowserWindow | null): void {
     if (!window || window.isDestroyed() || process.platform !== 'win32') return;
     const options = this.options();
+    const text = this.text();
     const state = this.state;
     window.setThumbarButtons(
       showThumbar(state, options)
         ? [
-            { tooltip: state.mic ? 'Выключить микрофон' : 'Включить микрофон', icon: dot(state.mic ? '#3ddc84' : '#8a93a6'), click: () => this.actions.mic() },
-            { tooltip: state.camera ? 'Выключить камеру' : 'Включить камеру', icon: dot(state.camera ? '#3564f3' : '#8a93a6'), click: () => this.actions.camera() },
-            { tooltip: 'Завершить', icon: dot('#e5484d'), click: () => this.actions.leave() },
+            { tooltip: state.mic ? text.micMute : text.micUnmute, icon: dot(state.mic ? '#3ddc84' : '#8a93a6'), click: () => this.actions.mic() },
+            { tooltip: state.camera ? text.cameraOff : text.cameraOn, icon: dot(state.camera ? '#3564f3' : '#8a93a6'), click: () => this.actions.camera() },
+            { tooltip: text.leave, icon: dot('#e5484d'), click: () => this.actions.leave() },
           ]
         : [],
     );
     switch (overlayIconFor(state, this.unread, options)) {
       case 'in-call':
-        window.setOverlayIcon(dot('#3ddc84'), 'Во встрече');
+        window.setOverlayIcon(dot('#3ddc84'), text.statusInCall);
         return;
       case 'muted':
-        window.setOverlayIcon(dot('#e5484d'), 'Микрофон выключен');
+        window.setOverlayIcon(dot('#e5484d'), text.muted);
         return;
       case 'unread':
-        window.setOverlayIcon(dot('#3564f3'), `${this.unread} непрочитанных`);
+        window.setOverlayIcon(dot('#3564f3'), text.unread.replace('{count}', String(this.unread)));
         return;
       case null:
         window.setOverlayIcon(null, '');

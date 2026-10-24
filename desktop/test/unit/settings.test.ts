@@ -32,6 +32,8 @@ describe('SettingsStore', () => {
     expect(store.get().overlayEnabled).toBe(true);
     expect(store.get().tray).toBe(true);
     expect(store.get().language).toBeNull();
+    expect(store.get().uiLanguage).toBeNull();
+    expect(store.get().notifications).toBe(true);
     expect(store.get().trayHintShown).toBe(false);
     expect(store.get().settingsRev).toBe(SETTINGS_REV);
   });
@@ -61,5 +63,13 @@ describe('SettingsStore', () => {
     expect(new SettingsStore(root, secrets).get().language).toBe('de');
     writeFileSync(join(root, 'settings.json'), JSON.stringify({ settingsRev: SETTINGS_REV, language: 'xx' }));
     expect(new SettingsStore(root, secrets).get().language).toBeNull();
+  });
+
+  it('язык страницы для трея и «Уведомления» (R103) читаются из файла; чужое — отбрасывается', () => {
+    const root = dir();
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ settingsRev: SETTINGS_REV, uiLanguage: 'zh-Hans', notifications: false }));
+    expect(new SettingsStore(root, secrets).get()).toMatchObject({ uiLanguage: 'zh-Hans', notifications: false });
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ settingsRev: SETTINGS_REV, uiLanguage: 'klingon', notifications: 'no' }));
+    expect(new SettingsStore(root, secrets).get()).toMatchObject({ uiLanguage: null, notifications: true });
   });
 });

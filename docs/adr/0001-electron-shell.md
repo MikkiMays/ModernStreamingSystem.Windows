@@ -163,7 +163,7 @@ interface CordDesktop {
 
 | WinUI, v1 (страница → оболочка) | v2 | Назначение |
 |---|---|---|
-| `state` | `state` | Страница, имя, аватар, комната → трей, список переходов, заголовок |
+| `state` | `state` (+ необязательный `language` — один из восьми языков Cord) | Страница, имя, аватар, комната → трей, список переходов, заголовок; `language` — язык трея и диалогов оболочки (R103), незнакомый пропускается, сообщение принимается |
 | `call-state` | `call.state` (+ `mic`, `camera`, `screen`, `room`) | Кнопки на миниатюре, значок поверх иконки, `powerSaveBlocker`, оверлей |
 | `hotkey.configure` | `hotkeys.configure` | Действия `mic.toggle`, `ptt`, `deafen`, `overlay.toggle`; режим `toggle`/`hold`; клавиши и кнопки мыши (модель — E03) |
 | `favorites.changed` | `favorites.changed` | Закреплённые комнаты в списке переходов |
@@ -173,17 +173,18 @@ interface CordDesktop {
 | `close-ready` | `close.ready` | Закрытие в звонке (ждём ≤ 2,5 с, как сейчас) |
 | `update.version`, `update.check`, `update.apply` | `invoke('update.status')`, `update.check`, `update.apply` | «О программе» |
 | — | `invoke('capture.sources')`, `invoke('capture.select')` | Своё окно выбора источника и режим звука (§4.1) |
-| — | `invoke('app.settings', патч)` | Переключатели §4.4 в настройках веба (раздел «Windows», E03): трей, кнопки миниатюры, значок, мигание, запрет сна, оверлей, автозапуск |
+| — | `invoke('app.settings', патч)` | Переключатели §4.4 в настройках веба (раздел «Windows», E03): трей, кнопки миниатюры, значок, мигание, запрет сна, оверлей, автозапуск, уведомления (`notifications`, R103) |
 | — | `overlay.state` | Участники и кто говорит (≤ 10 Гц), без аватаров |
 | — | `notify`, `attention`, `progress`, `badge` | Уведомление с действиями, мигание кнопки, прогресс файла, значок непрочитанного |
 
 | WinUI, v1 (оболочка → страница) | v2 | Назначение |
 |---|---|---|
 | `microphone.toggle` | `hotkey` `{action, phase: 'down'\|'up'}` | Push-to-talk требует фазы |
-| `hotkey.status` | `hotkeys.status` | Что удалось зарегистрировать |
+| `hotkey.status` | `hotkeys.status` `{status: {<действие>: <код>}}` | Что удалось зарегистрировать — кодом (`global`, `global-raw`, `taken`, `duplicate`, `window-only`, R22, §4.2) |
 | `navigate`, `theme.changed`, `preferences.changed`, `settings.open`, `favorite.settings`, `favorites.changed`, `profile.changed`, `network.changed`, `close-request`, `update.status`, `session.token` | те же имена через `on()` | Смысл прежний |
 | — | `thumbar` `{action: mic\|camera\|leave}`, `deeplink` `{room}`, `notification.action`, `power` `{suspend\|resume\|lock}`, `capture.ended` | Новые возможности |
-| — | `app.settings` | Значения переключателей §4.4, когда их сменила сама оболочка (клавиша `overlay.toggle`) |
+| — | `app.settings` | Значения переключателей §4.4, когда их сменила сама оболочка (клавиша `overlay.toggle`, «Уведомления» в меню трея) |
+| — | `chat.open` | «Чат · N» в меню трея (R103): открыть чат встречи. Веб без поддержки пропускает (окно встречи всё равно выходит вперёд) |
 | — | `capture.audio` `{state: ready\|failed\|ended, mode, reason?}` | Звук приложения / системы кроме Cord (§4.1): дорожка готова в `#cord-desktop-capture-audio`, не вышло (`unavailable`, `not-a-window`, текст ошибки активации) или закончилась. Новый подписчик получает текущее состояние сразу |
 | — | `window.state` `{focused, visible}` | Окно в фокусе / видно (спрятано в трей, свёрнуто): веб шлёт `notify` только когда человек не смотрит (R59). `notify` принимает `silent: true` — без системного звука, событие озвучивает веб |
 
@@ -274,7 +275,7 @@ interface CordDesktop {
 | Запрет сна | `powerSaveBlocker.start('prevent-display-sleep')` | вкл. в звонке и при показе экрана |
 | Медиаклавиши и SMTC (музыка, кинозал) | Media Session API в вебе — Chromium сам связывает его с SMTC; `globalShortcut` на медиаклавиши не ставим, чтобы не отбирать их у плееров | вкл. |
 | Прогресс загрузки файла чата | `win.setProgressBar` | вкл. |
-| Трей: открыть, микрофон, выйти; **крестик прячет окно в трей**, встреча продолжается (R57, `close-policy.ts`); закрывается по-настоящему при «Выйти», `before-quit`, `session-end` или без значка. Значок — `dist/shell/tray.ico` (16–48 BMP + 256 PNG), не прочитался — трея нет (R58). Первое прятание — баллон «Cord работает в трее» один раз | `Tray`, `displayBalloon` | вкл. |
+| Трей — меню как у Телемоста (R103, `tray-menu.ts`): состояние («● Во встрече · <название>» / «○ Не во встрече»), во встрече — «Вернуться во встречу», «Новая встреча» (во встрече — с вопросом: веб выйдет из текущей), во встрече — «Чат · N» (`badge`, `chat.open`) и «Микрофон» галочкой, «Уведомления» галочкой (`settings.notifications`: выключены — `notify` не показывается), «Настройки» (`settings.open`), «Выйти из Cord» (во встрече — с вопросом, затем `close-request`). Подсказка значка — то же состояние, с микрофоном; щелчок и двойной щелчок открывают окно. Тексты — свой каталог на восьми языках (`shell-text.ts`, X1), язык — `state.language` страницы, затем выбор в установщике, затем язык Windows. **Крестик прячет окно в трей**, встреча продолжается (R57, `close-policy.ts`); закрывается по-настоящему при «Выйти», `before-quit`, `session-end` или без значка. Значок — `dist/shell/tray.ico` (16–48 BMP + 256 PNG), не прочитался — трея нет (R58). Первое прятание — баллон «Cord работает в трее» один раз | `Tray`, `Menu` (`checkbox`), `displayBalloon`, `dialog.showMessageBox` | вкл. |
 | AppUserModelID процесса = `appId` установщика (`APP_ID = tech.cord.desktop`): уведомления и группировка окон (R59) | `app.setAppUserModelId`, `WinShell::SetLnkAUMI` | — |
 | Автозапуск | `app.setLoginItemSettings` | **выкл.** |
 | Deep links `cord://` | `setAsDefaultProtocolClient` + запись в HKCU установщиком | вкл. |

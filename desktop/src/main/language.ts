@@ -48,3 +48,35 @@ export function readInstallerLanguage(platform: NodeJS.Platform, query: RegQuery
     return null;
   }
 }
+
+const LANGUAGES: readonly Language[] = Object.values(INSTALLER_LANGUAGES);
+
+export function isLanguage(value: unknown): value is Language {
+  return typeof value === 'string' && (LANGUAGES as readonly string[]).includes(value);
+}
+
+/** Код языка системы → язык Cord: точное совпадение, затем по основе (`zh-CN` → `zh-Hans`), как `matchLanguage` веба. */
+export function matchLanguage(tag: string | null | undefined): Language | null {
+  if (!tag) return null;
+  const exact = LANGUAGES.find((language) => language.toLowerCase() === tag.toLowerCase());
+  if (exact) return exact;
+  const base = tag.toLowerCase().split('-')[0];
+  if (base === 'zh') return 'zh-Hans';
+  if (base === 'pt') return 'pt-BR';
+  return LANGUAGES.find((language) => language === base) ?? null;
+}
+
+/**
+ * Язык своих текстов оболочки (трей, его диалоги, панель задач): язык интерфейса, который назвала
+ * страница (`state.language`), до неё — выбор в установщике, затем язык Windows
+ * (`app.getPreferredSystemLanguages()`), без всего — русский, как `detectLanguage` веба.
+ */
+export function shellLanguage(page: Language | null, installer: Language | null, system: readonly string[]): Language {
+  if (page) return page;
+  if (installer) return installer;
+  for (const tag of system) {
+    const match = matchLanguage(tag);
+    if (match) return match;
+  }
+  return 'ru';
+}

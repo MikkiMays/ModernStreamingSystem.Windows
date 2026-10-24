@@ -8,6 +8,7 @@
  */
 import { AVATAR_LIMIT, MESSAGE_LIMIT, PAGE_CALLS, PAGE_MESSAGES, type PageCall, type PageMessage } from '../../shared/bridge';
 import { readCaptureSelect } from '../capture';
+import { isLanguage, type Language } from '../language';
 
 export interface Hotkey {
   code: string;
@@ -31,7 +32,7 @@ export interface RoomRef {
 }
 
 export type Validated =
-  | { type: 'state'; page: 'home' | 'prejoin' | 'room'; inCall: boolean; name: string; avatar: string; theme: string; room: RoomRef | null }
+  | { type: 'state'; page: 'home' | 'prejoin' | 'room'; inCall: boolean; name: string; avatar: string; theme: string; room: RoomRef | null; language?: Language }
   | { type: 'call.state'; inCall: boolean; mic: boolean; camera: boolean; screen: boolean; room: RoomRef | null }
   | { type: 'hotkeys.configure'; bindings: HotkeyBinding[] }
   | { type: 'favorites.changed' }
@@ -103,7 +104,9 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       const ref = room(data.room);
       if (ref === undefined) return null;
       const theme = data.theme === 'light' || data.theme === 'dark' ? data.theme : 'system';
-      return { type: kind, page: data.page, inCall: data.inCall === true, name, avatar, theme, room: ref };
+      // Язык интерфейса (необязательный, R103): на нём трей; незнакомый — как если бы его не было.
+      const language = isLanguage(data.language) ? data.language : undefined;
+      return { type: kind, page: data.page, inCall: data.inCall === true, name, avatar, theme, room: ref, ...(language ? { language } : {}) };
     }
     case 'call.state': {
       const ref = room(data.room);

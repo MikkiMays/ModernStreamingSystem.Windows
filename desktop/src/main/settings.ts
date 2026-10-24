@@ -26,6 +26,12 @@ export interface Settings {
   theme: 'light' | 'dark' | 'system';
   /** Язык из установщика (R64); веб получает его один раз через `Bootstrap.language`. */
   language: Language | null;
+  /**
+   * Язык интерфейса, как его последний раз назвала страница (`state.language`): на нём трей и
+   * диалоги оболочки, пока страницы ещё нет. В `Bootstrap` не уходит — выбор «как в системе» в вебе
+   * остаётся выбором.
+   */
+  uiLanguage: Language | null;
   showPing: boolean;
   notificationSounds: boolean;
   autoConnect: boolean;
@@ -40,6 +46,8 @@ export interface Settings {
   sleepBlocker: boolean;
   overlayEnabled: boolean;
   autostart: boolean;
+  /** Уведомления Windows (`notify`): переключатель в меню трея (R103). */
+  notifications: boolean;
   /** Подсказка «Cord работает в трее» уже показывалась (R57). */
   trayHintShown: boolean;
   sidebarWidth: number;
@@ -56,6 +64,7 @@ const DEFAULTS: Settings = {
   serverUrl: '',
   theme: 'system',
   language: null,
+  uiLanguage: null,
   showPing: false,
   notificationSounds: true,
   autoConnect: true,
@@ -69,6 +78,7 @@ const DEFAULTS: Settings = {
   sleepBlocker: true,
   overlayEnabled: true,
   autostart: false,
+  notifications: true,
   trayHintShown: false,
   sidebarWidth: 280,
   window: null,
@@ -166,7 +176,8 @@ function sanitize(raw: unknown): Partial<Settings> {
   if (origin) result.serverUrl = origin.url;
   if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') result.theme = data.theme;
   if (typeof data.language === 'string' && LANGUAGES.has(data.language)) result.language = data.language as Language;
-  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart', 'trayHintShown'] as const)
+  if (typeof data.uiLanguage === 'string' && LANGUAGES.has(data.uiLanguage)) result.uiLanguage = data.uiLanguage as Language;
+  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart', 'notifications', 'trayHintShown'] as const)
     if (typeof data[flag] === 'boolean') result[flag] = data[flag] as boolean;
   if (typeof data.catalogSeq === 'number' && Number.isInteger(data.catalogSeq) && data.catalogSeq >= 0) result.catalogSeq = data.catalogSeq;
   if (typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 600) result.sidebarWidth = Math.round(data.sidebarWidth);

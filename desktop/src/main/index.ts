@@ -24,7 +24,7 @@ import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, 
 import { decideClose, startMode } from './close-policy';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { HotkeyRegistry } from './hotkeys';
-import { readInstallerLanguage } from './language';
+import { readInstallerLanguage, shellLanguage } from './language';
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
@@ -33,6 +33,7 @@ import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
 import { SettingsStore } from './settings';
+import { shellText, type ShellText } from './shell-text';
 import { Taskbar, type CallState } from './tray';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
 import { CordUpdater } from './update/updater';
@@ -148,14 +149,24 @@ class Shell {
     rememberExpected: (version) => void this.settings.update({ expectedVersion: version }),
     log,
   });
+  /** Трей (R103, `tray-menu.ts`): что делают пункты его меню. */
   private readonly taskbar = new Taskbar(
     app.getAppPath(),
     {
       open: () => this.focus(),
+      newMeeting: () => void this.trayNewMeeting(),
+      // Веб 1.0.6+ открывает чат по `chat.open`; прежний молча пропускает — окно встречи всё равно впереди.
+      openChat: () => {
+        this.focus();
+        this.router.post('chat.open');
+      },
+      openSettings: () => this.handleDeepLink({ kind: 'settings' }),
       toggleMicrophone: () => this.router.post('thumbar', { action: 'mic' }),
-      quit: () => this.quit(),
+      toggleNotifications: () => this.applyAppSettings({ notifications: !this.settings.get().notifications }, true),
+      quit: () => void this.trayQuit(),
     },
     () => this.settings.get(),
+    () => this.text(),
   );
   private readonly hotkeys = new HotkeyRegistry(
     {
@@ -183,6 +194,8 @@ class Shell {
   private catalog: Catalog | null = null;
   private page: string | null = null;
   private call: CallState = { inCall: false, mic: false, camera: false, screen: false };
+  /** Название текущей встречи (`state.room`) — для строки состояния трея. */
+  private roomTitle = '';
   private sleepBlocker: number | null = null;
   /** Процессы, которым `cord-native` поднял приоритет на время встречи (R01–R03, `boost-plan.ts`). */
   private boosted = new Set<number>();
@@ -303,7 +316,8 @@ class Shell {
     log('окно спрятано в трей');
     if (this.settings.get().trayHintShown) return;
     this.settings.update({ trayHintShown: true });
-    this.taskbar.hint('Cord работает в трее', 'Встреча продолжается. Открыть — щелчком по значку, выйти — в его меню.');
+    const text = this.text();
+    this.taskbar.hint(text.hintTitle, text.hintBody);
   }
 
   /** Закрытие в звонке: страница отвечает `close.ready`, ждём ≤ 2,5 с (как сейчас). */
@@ -358,7 +372,7 @@ class Shell {
     }
     if (patch.autostart !== undefined) this.applyAutostart();
     if (patch.overlay !== undefined) this.updateOverlay();
-    if (patch.thumbar !== undefined || patch.badge !== undefined) this.taskbar.refresh(window);
+    if (patch.thumbar !== undefined || patch.badge !== undefined || patch.notifications !== undefined) this.taskbar.refresh(window);
     if (patch.sleepBlocker !== undefined) this.applySleepBlocker();
     const values = appSettingsOf(next);
     if (announce) this.router.post('app.settings', { ...values });
@@ -372,6 +386,38 @@ class Shell {
       powerSaveBlocker.stop(this.sleepBlocker);
       this.sleepBlocker = null;
     }
+  }
+
+  /** Тексты оболочки на языке Cord: язык страницы, выбор в установщике, язык Windows (`shellLanguage`). */
+  private text(): ShellText {
+    const saved = this.settings.get();
+    return shellText(shellLanguage(saved.uiLanguage, saved.language, app.getPreferredSystemLanguages()));
+  }
+
+  /** Вопрос оболочки во встрече: «да» — `true`. Окно спрятано в трей — диалог без родителя, иначе его не видно. */
+  private async confirm(title: string, detail: string, yes: string): Promise<boolean> {
+    const text = this.text();
+    const options = { type: 'question' as const, buttons: [yes, text.stay], defaultId: 1, cancelId: 1, message: title, detail, noLink: true };
+    const parent = this.main && !this.main.window.isDestroyed() && this.main.window.isVisible() ? this.main.window : null;
+    const { response } = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
+    return response === 0;
+  }
+
+  /** «Новая встреча» из трея: во встрече веб выйдет из текущей — сначала спросить (R103). */
+  private async trayNewMeeting(): Promise<void> {
+    const text = this.text();
+    if (this.call.inCall && !(await this.confirm(text.newTitle, text.newDetail, text.newConfirm))) return;
+    this.handleDeepLink({ kind: 'create' });
+  }
+
+  /** «Выйти из Cord» из трея: во встрече — спросить, затем дать странице выйти из встречи (≤ 2,5 с). */
+  private async trayQuit(): Promise<void> {
+    if (this.call.inCall) {
+      const text = this.text();
+      if (!(await this.confirm(text.quitTitle, text.quitDetail, text.quitConfirm))) return;
+      await this.requestClose();
+    }
+    this.quit();
   }
 
   private quit(): void {
@@ -624,6 +670,12 @@ class Shell {
     switch (message.type) {
       case 'state':
         this.page = message.page;
+        this.roomTitle = message.room?.title ?? '';
+        // Язык интерфейса страницы (если назвала) — для трея и диалогов оболочки; пишется только при смене.
+        if (message.language && message.language !== this.settings.get().uiLanguage) {
+          this.settings.update({ uiLanguage: message.language });
+          this.taskbar.refresh(window);
+        }
         if (message.page === 'home' && metrics && !metrics.marks.home) {
           metrics.mark('home');
           this.scheduleMetrics(Number(process.env.CORD_METRICS_IDLE_MS ?? 60_000));
@@ -635,6 +687,7 @@ class Shell {
         }
         return;
       case 'call.state':
+        if (message.room) this.roomTitle = message.room.title;
         this.updateCall({ inCall: message.inCall, mic: message.mic, camera: message.camera, screen: message.screen });
         return;
       case 'hotkeys.configure': {
@@ -670,6 +723,8 @@ class Shell {
         this.overlay.update(message.participants);
         return;
       case 'notify':
+        // «Уведомления» выключены в меню трея (R103) — Windows их не показывает.
+        if (!this.settings.get().notifications) return;
         showNotification(message, (id, tag) => {
           this.focus();
           this.router.post('notification.action', { id, ...(tag ? { tag } : {}) });
@@ -723,11 +778,16 @@ class Shell {
     const was = this.call;
     this.call = next;
     const window = this.main?.window ?? null;
-    this.taskbar.applyCall(window, next, {
-      mic: () => this.router.post('thumbar', { action: 'mic' }),
-      camera: () => this.router.post('thumbar', { action: 'camera' }),
-      leave: () => this.router.post('thumbar', { action: 'leave' }),
-    });
+    this.taskbar.applyCall(
+      window,
+      next,
+      {
+        mic: () => this.router.post('thumbar', { action: 'mic' }),
+        camera: () => this.router.post('thumbar', { action: 'camera' }),
+        leave: () => this.router.post('thumbar', { action: 'leave' }),
+      },
+      this.roomTitle,
+    );
     this.applySleepBlocker();
     this.updateBoost();
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) void this.hotkeys.apply(this.settings.get().hotkeys);

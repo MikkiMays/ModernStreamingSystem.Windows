@@ -3,8 +3,9 @@
  * настройках веба (E03). Веб читает и меняет их запросом `invoke('app.settings', патч)`; оболочка
  * сама меняет `overlay` клавишей `overlay.toggle` и рассказывает об этом событием `app.settings`.
  *
- * По умолчанию (ADR §4.4): трей, кнопки на миниатюре, значок поверх иконки, мигание и запрет сна —
- * включены; оверлей и автозапуск — выключены. Здесь нет Electron: решения проверяются тестами,
+ * По умолчанию (ADR §4.4): трей, кнопки на миниатюре, значок поверх иконки, мигание, запрет сна,
+ * оверлей (R61) и уведомления — включены; автозапуск — выключен. Уведомления переключаются и из меню
+ * трея (R103) — тогда оболочка рассказывает вебу событием `app.settings`, как с клавишей оверлея. Здесь нет Electron: решения проверяются тестами,
  * `tray.ts` и `index.ts` только исполняют их.
  */
 import type { Settings } from './settings';
@@ -24,11 +25,13 @@ export interface AppSettings {
   overlay: boolean;
   /** Запуск вместе с Windows (свёрнутым). */
   autostart: boolean;
+  /** Уведомления Windows о том, что во встрече (R59); выключены — `notify` не показывается. */
+  notifications: boolean;
 }
 
-export const APP_SETTING_KEYS = ['tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlay', 'autostart'] as const satisfies readonly (keyof AppSettings)[];
+export const APP_SETTING_KEYS = ['tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlay', 'autostart', 'notifications'] as const satisfies readonly (keyof AppSettings)[];
 
-type Stored = Pick<Settings, 'tray' | 'thumbar' | 'badge' | 'flash' | 'sleepBlocker' | 'overlayEnabled' | 'autostart'>;
+type Stored = Pick<Settings, 'tray' | 'thumbar' | 'badge' | 'flash' | 'sleepBlocker' | 'overlayEnabled' | 'autostart' | 'notifications'>;
 
 /** Значения для веба из настроек оболочки. */
 export function appSettingsOf(settings: Stored): AppSettings {
@@ -40,6 +43,7 @@ export function appSettingsOf(settings: Stored): AppSettings {
     sleepBlocker: settings.sleepBlocker,
     overlay: settings.overlayEnabled,
     autostart: settings.autostart,
+    notifications: settings.notifications,
   };
 }
 

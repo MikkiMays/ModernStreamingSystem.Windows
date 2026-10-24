@@ -92,6 +92,7 @@ export const HOST_MESSAGES = [
   'app.settings',
   'capture.audio', // {state: 'ready' | 'failed' | 'ended', mode, reason?} — звук приложения / системы кроме Cord (cord-native)
   'window.state', // {focused, visible} — окно в фокусе / видно (спрятано в трей, свёрнуто): уведомления только когда человек не смотрит (R59)
+  'chat.open', // «Чат · N» в меню трея (R103): открыть чат встречи; веб без поддержки пропускает
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 

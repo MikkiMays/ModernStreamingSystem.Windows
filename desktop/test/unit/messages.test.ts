@@ -9,6 +9,12 @@ describe('readPageMessage — границы, как BridgeProtocol.Read', () =>
       type: 'state', page: 'room', inCall: true, name: 'Ник', avatar: 'data:image/png;base64,AAAA', theme: 'dark', room,
     });
   });
+  it('state с языком интерфейса (R103): один из восьми — передаётся, чужой — пропускается, но сообщение принято', () => {
+    expect(readPageMessage('state', { page: 'home', language: 'pt-BR' })).toMatchObject({ type: 'state', language: 'pt-BR' });
+    const unknown = readPageMessage('state', { page: 'home', language: 'xx' });
+    expect(unknown).toMatchObject({ type: 'state', page: 'home' });
+    expect(unknown).not.toHaveProperty('language');
+  });
   it('state без комнаты и без аватара', () => {
     expect(readPageMessage('state', { page: 'home', room: null })).toMatchObject({ type: 'state', page: 'home', inCall: false, name: '', avatar: '', room: null });
   });

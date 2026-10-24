@@ -18,14 +18,16 @@ describe('app.settings — переключатели раздела «Windows»
     expect(readAppSettingsPatch({})).toEqual({});
     expect(readAppSettingsPatch(undefined)).toEqual({});
     expect(readAppSettingsPatch({ tray: false, overlay: true, autostart: true })).toEqual({ tray: false, overlay: true, autostart: true });
+    // «Уведомления» из меню трея (R103) — тот же переключатель и для веба.
+    expect(readAppSettingsPatch({ notifications: false })).toEqual({ notifications: false });
     expect(readAppSettingsPatch({ tray: 'no' })).toBeNull();
     expect(readAppSettingsPatch({ updateChannel: 'https://evil.example/' })).toBeNull();
     expect(readAppSettingsPatch([])).toBeNull();
   });
 
   it('настройки ↔ значения для веба: overlay — это overlayEnabled', () => {
-    const values = appSettingsOf({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlayEnabled: true, autostart: false });
-    expect(values).toEqual({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlay: true, autostart: false });
+    const values = appSettingsOf({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlayEnabled: true, autostart: false, notifications: false });
+    expect(values).toEqual({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlay: true, autostart: false, notifications: false });
     expect(settingsPatchOf({ overlay: false, badge: false })).toEqual({ overlayEnabled: false, badge: false });
   });
 });
