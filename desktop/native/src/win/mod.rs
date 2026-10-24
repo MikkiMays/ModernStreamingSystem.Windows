@@ -6,4 +6,4 @@ mod process;
 
 pub use audio::{start_audio, stop_audio};
 pub use input::{set_bindings, start_input, stop_foreground, stop_input, watch_foreground};
-pub use process::window_process;
+pub use process::{set_boost, window_process};

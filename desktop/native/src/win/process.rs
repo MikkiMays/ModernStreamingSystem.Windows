@@ -1,10 +1,17 @@
-//! Процессы без `OpenProcess`: PID по окну и карта «кто чей родитель» из снимка Toolhelp.
+//! Процессы: PID по окну и карта «кто чей родитель» из снимка Toolhelp — без `OpenProcess`;
+//! приоритет своих процессов во встрече (`set_boost`, R01–R03) — `OpenProcess` только на свои
+//! дочерние процессы Cord того же пользователя (`PROCESS_SET_INFORMATION`), чужие не открываются.
 use std::collections::HashMap;
 use std::ffi::c_void;
 
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+use windows::Win32::System::Threading::{
+    GetPriorityClass, OpenProcess, ProcessPowerThrottling, SetPriorityClass, SetProcessInformation, PROCESS_CREATION_FLAGS, PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_STATE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_INFORMATION,
+};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+use crate::boost::{priority_after, throttling_attempts};
 
 pub fn window_process(hwnd: isize) -> Option<u32> {
     let handle = HWND(hwnd as *mut c_void);
@@ -34,4 +41,41 @@ pub fn parent_map() -> HashMap<u32, u32> {
         let _ = CloseHandle(snapshot);
     }
     map
+}
+
+/// Во встрече (`on`) — EcoQoS и загрубление таймера выключены, класс `ABOVE_NORMAL`; после —
+/// троттлингом снова распоряжается система, класс возвращается к обычному, если его поднимали мы.
+/// EcoQoS не удалось (старая Windows) — не повод отказываться от приоритета; ошибка — только если
+/// процесс не открылся или не вышло ни то, ни другое.
+pub fn set_boost(pid: u32, on: bool) -> Result<(), String> {
+    // SAFETY: дескриптор процесса закрывается ниже; структура живёт до конца вызова.
+    unsafe {
+        let process = OpenProcess(PROCESS_SET_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION, false, pid).map_err(|error| format!("OpenProcess {pid}: {error}"))?;
+        let result = apply_boost(process, on);
+        let _ = CloseHandle(process);
+        result
+    }
+}
+
+fn apply_boost(process: HANDLE, on: bool) -> Result<(), String> {
+    let mut throttling = Err(String::from("нет попыток"));
+    for &(control, state) in throttling_attempts(on) {
+        let info = PROCESS_POWER_THROTTLING_STATE { Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION, ControlMask: control, StateMask: state };
+        // SAFETY: указатель на структуру и её размер — как требует ProcessPowerThrottling.
+        throttling = unsafe { SetProcessInformation(process, ProcessPowerThrottling, &info as *const _ as *const c_void, std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32) }.map_err(|error| format!("EcoQoS: {error}"));
+        if throttling.is_ok() {
+            break;
+        }
+    }
+    // SAFETY: дескриптор открыт с PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION.
+    let current = unsafe { GetPriorityClass(process) };
+    let priority = match priority_after(current, on) {
+        // SAFETY: тот же дескриптор, класс — одна из констант PRIORITY_CLASS.
+        Some(class) => unsafe { SetPriorityClass(process, PROCESS_CREATION_FLAGS(class)) }.map_err(|error| format!("приоритет: {error}")),
+        None => Ok(()),
+    };
+    match (throttling, priority) {
+        (Err(eco), Err(class)) => Err(format!("{eco}; {class}")),
+        _ => Ok(()),
+    }
 }

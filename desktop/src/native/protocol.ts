@@ -65,6 +65,8 @@ export interface NativeModule {
   stopAudio(session: number): void;
   windowProcess(hwnd: number): number | null;
   currentProcess(): number;
+  /** Приоритет своего процесса во встрече: EcoQoS выкл., `ABOVE_NORMAL` (R01–R03); ошибка — исключением. */
+  boostProcess(pid: number, on: boolean): void;
 }
 
 // ---------- main → хост ----------
@@ -77,7 +79,15 @@ export type HostRequest =
   /** Порт для PCM передаётся вместе с сообщением (`transfer`). */
   | { type: 'audio.start'; pid: number; mode: NativeAudioMode }
   | { type: 'audio.stop' }
-  | { type: 'window.pid'; hwnd: number };
+  | { type: 'window.pid'; hwnd: number }
+  /** Поднять (`on`) или вернуть приоритет своих процессов (`boost-plan.ts`); ответ — `BoostResult[]`. */
+  | { type: 'process.boost'; pids: number[]; on: boolean };
+
+export interface BoostResult {
+  pid: number;
+  ok: boolean;
+  error?: string;
+}
 
 export interface HostCall {
   id: number;

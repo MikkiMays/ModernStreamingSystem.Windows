@@ -10,7 +10,7 @@
  */
 import { existsSync } from 'node:fs';
 import type { MessagePortMain } from 'electron';
-import { PCM_CHANNELS, PCM_CHUNK_FRAMES, PCM_SAMPLE_RATE, type HostCall, type HostEvent, type HostReply, type NativeAudioEvent, type NativeForegroundEvent, type NativeHotkeyEvent, type NativeModule } from './protocol';
+import { PCM_CHANNELS, PCM_CHUNK_FRAMES, PCM_SAMPLE_RATE, type BoostResult, type HostCall, type HostEvent, type HostReply, type NativeAudioEvent, type NativeForegroundEvent, type NativeHotkeyEvent, type NativeModule } from './protocol';
 
 interface ParentPort {
   on(event: 'message', listener: (event: { data: unknown; ports: MessagePortMain[] }) => void): unknown;
@@ -59,6 +59,7 @@ function fakeModule(): NativeModule {
     },
     windowProcess: () => 4242,
     currentProcess: () => process.pid,
+    boostProcess: () => {},
   };
 }
 
@@ -153,6 +154,17 @@ function handle(call: HostCall, ports: MessagePortMain[]): unknown {
       return true;
     case 'window.pid':
       return native.windowProcess(request.hwnd);
+    case 'process.boost':
+      return request.pids
+        .filter((pid) => Number.isInteger(pid) && pid > 0)
+        .map((pid): BoostResult => {
+          try {
+            native.boostProcess(pid, request.on === true);
+            return { pid, ok: true };
+          } catch (error) {
+            return { pid, ok: false, error: (error as Error).message };
+          }
+        });
     default:
       throw new Error(`неизвестный запрос ${(request as { type: string }).type}`);
   }

@@ -7,9 +7,10 @@
 //!   дерева процессов Cord (§4.1);
 //! - `watchForeground`/`stopForeground` — переднее окно, его монитор и полноэкранность для оверлея,
 //!   без открытия процесса игры (§4.3);
-//! - `windowProcess`, `currentProcess` — PID по HWND источника `window:<hwnd>:0` и свой PID.
+//! - `windowProcess`, `currentProcess` — PID по HWND источника `window:<hwnd>:0` и свой PID;
+//! - `boostProcess` — приоритет своих процессов во встрече: EcoQoS выкл., `ABOVE_NORMAL` (R01–R03).
 //!
-//! Чистая логика (`keys`, `matcher`, `pcm`, `foreground`) собирается и проверяется на любой
+//! Чистая логика (`keys`, `matcher`, `pcm`, `foreground`, `boost`) собирается и проверяется на любой
 //! платформе; Windows-часть — `win/*`. На остальных платформах функции отвечают отказом, а
 //! `platformSupported()` — `false`.
 #![deny(clippy::all)]
@@ -19,6 +20,7 @@ use napi::threadsafe_function::ThreadsafeFunction;
 use napi::Status;
 use napi_derive::napi;
 
+pub mod boost;
 pub mod foreground;
 pub mod keys;
 pub mod matcher;
@@ -196,6 +198,13 @@ pub fn window_process(hwnd: f64) -> Option<u32> {
 #[napi]
 pub fn current_process() -> u32 {
     std::process::id()
+}
+
+/// Поднять (`on`) или вернуть приоритет своего процесса на время встречи (R01–R03): EcoQoS и
+/// загрубление таймера выключены, класс `ABOVE_NORMAL`. Ошибка — с причиной (процесса нет и т. п.).
+#[napi]
+pub fn boost_process(pid: u32, on: bool) -> Result<()> {
+    platform::set_boost(pid, on).map_err(|reason| Error::new(Status::GenericFailure, reason))
 }
 
 #[cfg(test)]

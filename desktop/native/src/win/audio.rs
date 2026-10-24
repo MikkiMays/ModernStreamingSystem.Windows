@@ -5,6 +5,9 @@
 //!
 //! Документированный минимум — build 20348, на деле работает с Windows 10 2004 (так делает OBS);
 //! не удалось активировать — `error` с причиной, и показ идёт без звука.
+//!
+//! Поток захвата — в MMCSS «Pro Audio» (R01–R03): под нагрузкой игры планировщик будит его вовремя,
+//! и порции идут ровно, а не пачками с тишиной от `Pacer` между ними.
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -15,7 +18,7 @@ use std::time::Instant;
 use napi::bindgen_prelude::Float32Array;
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi::{Error, Result, Status};
-use windows::core::{implement, Interface, Ref};
+use windows::core::{implement, w, Interface, Ref};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::{
     ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
@@ -24,7 +27,7 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::StructuredStorage::{PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, IAgileObject, IAgileObject_Impl, BLOB, COINIT_MULTITHREADED};
-use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject};
+use windows::Win32::System::Threading::{AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, SetEvent, WaitForSingleObject};
 use windows::Win32::System::Variant::VT_BLOB;
 
 use crate::pcm::{Chunker, Pacer, CHANNELS, CHUNK_SAMPLES, SAMPLE_RATE};
@@ -102,6 +105,24 @@ impl Drop for ComGuard {
     }
 }
 
+/// Поток в MMCSS «Pro Audio» на время захвата; служба MMCSS выключена — работаем без неё.
+struct Mmcss(HANDLE);
+
+impl Mmcss {
+    fn join() -> Option<Self> {
+        let mut task = 0u32;
+        // SAFETY: имя задачи — статическая строка, индекс — локальная переменная.
+        unsafe { AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut task) }.ok().map(Self)
+    }
+}
+
+impl Drop for Mmcss {
+    fn drop(&mut self) {
+        // SAFETY: парный вызов к AvSetMmThreadCharacteristicsW в этом же потоке.
+        let _ = unsafe { AvRevertMmThreadCharacteristics(self.0) };
+    }
+}
+
 fn describe(what: &str, error: windows::core::Error) -> String {
     format!("{what}: {error}")
 }
@@ -162,6 +183,7 @@ fn capture_thread(pid: u32, include: bool, callback: &AudioCallback, stop: &Atom
         CoInitializeEx(None, COINIT_MULTITHREADED).ok().map_err(|error| describe("CoInitializeEx", error))?;
         ComGuard
     };
+    let _mmcss = Mmcss::join();
     let client = activate(pid, include)?;
     let format = WAVEFORMATEX {
         wFormatTag: WAVE_FORMAT_IEEE_FLOAT,

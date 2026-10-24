@@ -17,6 +17,7 @@ import { featuresFor, IPC, type Bootstrap } from '../shared/bridge';
 import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
 import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type AppSettings } from './app-settings';
+import { boostTargets, planBoost } from './boost-plan';
 import { buildConfig } from './config';
 import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
@@ -26,7 +27,7 @@ import { HotkeyRegistry } from './hotkeys';
 import { readInstallerLanguage } from './language';
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
-import { NATIVE_MODULE_FILE, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
+import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
@@ -183,6 +184,8 @@ class Shell {
   private page: string | null = null;
   private call: CallState = { inCall: false, mic: false, camera: false, screen: false };
   private sleepBlocker: number | null = null;
+  /** Процессы, которым `cord-native` поднял приоритет на время встречи (R01–R03, `boost-plan.ts`). */
+  private boosted = new Set<number>();
   /** Переднее окно от `cord-native` (монитор, полноэкранность, своё ли); null — модуля нет. */
   private foreground: NativeForegroundEvent | null = null;
   private pendingLink: DeepLink | null = null;
@@ -396,6 +399,8 @@ class Shell {
         });
         if (event.available) {
           void this.native.request({ type: 'foreground.watch', rootPid: process.pid, intervalMs: 300 }).catch((error: Error) => log(`native: переднее окно — ${error.message}`));
+          // Модуль поднялся посреди встречи — приоритет ставится сейчас, а не при следующем событии.
+          this.updateBoost();
         } else {
           this.foreground = null;
           if (this.captureAudio) this.stopCaptureAudio(true, 'native');
@@ -724,9 +729,41 @@ class Shell {
       leave: () => this.router.post('thumbar', { action: 'leave' }),
     });
     this.applySleepBlocker();
+    this.updateBoost();
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) void this.hotkeys.apply(this.settings.get().hotkeys);
     this.updateOverlay();
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();
+  }
+
+  /**
+   * Во встрече — EcoQoS выкл. и `ABOVE_NORMAL` своему процессу, рендереру главного окна и аудиосервису
+   * Chromium; после — вернуть (R01–R03, ADR §2.1). Зовётся при каждом состоянии звонка: рендерер или
+   * аудиосервис могли смениться. Без `cord-native` — ничего.
+   */
+  private updateBoost(): void {
+    if (!this.native.available) return;
+    const metrics = app.getAppMetrics();
+    const window = this.main && !this.main.window.isDestroyed() ? this.main.window : null;
+    const alive = metrics.map((metric) => metric.pid);
+    const plan = planBoost(this.call.inCall, boostTargets(metrics, process.pid, window ? window.webContents.getOSProcessId() : null), this.boosted, alive);
+    // Умершие забываются: их номер мог достаться чужому процессу.
+    for (const pid of this.boosted) if (!alive.includes(pid)) this.boosted.delete(pid);
+    if (plan.on.length) this.requestBoost(plan.on, true);
+    if (plan.off.length) this.requestBoost(plan.off, false);
+  }
+
+  private requestBoost(pids: number[], on: boolean): void {
+    for (const pid of pids) {
+      if (on) this.boosted.add(pid);
+      else this.boosted.delete(pid);
+    }
+    void this.native
+      .request<BoostResult[]>({ type: 'process.boost', pids, on })
+      .then((results) => {
+        const failed = results.filter((result) => !result.ok).map((result) => `${result.pid} (${result.error ?? 'ошибка'})`);
+        log(`приоритет: ${on ? 'поднят' : 'возвращён'} — ${pids.join(', ')}${failed.length ? `; не вышло: ${failed.join(', ')}` : ''}`);
+      })
+      .catch((error: Error) => log(`приоритет: ${error.message}`));
   }
 
   // ----- метрики CI (ADR §10) -----

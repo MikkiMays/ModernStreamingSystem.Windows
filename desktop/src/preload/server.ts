@@ -12,9 +12,12 @@
  * дорожку в скрытый `<audio id="cord-desktop-capture-audio">` — страница читает `srcObject`
  * того же элемента (DOM один на оба мира, объект потока общий) и публикует дорожку как
  * ScreenShareAudio. О состоянии — событие `capture.audio`; новый слушатель получает текущее сразу.
+ * Порции идут в генератор не по приходу, а по часам из запаса в две порции (`PcmQueue`, R01–R03):
+ * пачка от потока захвата не уходит в сеть пачкой.
  */
 import { contextBridge, ipcRenderer } from 'electron';
 import { CAPTURE_AUDIO_ELEMENT, FEATURES, HOST_MESSAGES, IPC, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
+import { PCM_CHUNK_MS, PcmQueue } from './pcm-queue';
 
 const handed = ipcRenderer.sendSync(IPC.bootstrap) as { bootstrap: Bootstrap; version: string; features?: unknown } | null;
 const bootstrap = handed?.bootstrap ?? null;
@@ -84,7 +87,7 @@ declare const MediaStreamTrackGenerator: (new (init: { kind: 'audio' | 'video' }
 
 type CaptureAudioState = { state: 'ready' | 'failed' | 'ended'; mode: string; reason?: string };
 let captureAudio: CaptureAudioState | null = null;
-let captureSession: { port: MessagePort; writer: WritableStreamDefaultWriter<AudioData>; element: HTMLAudioElement; track: AudioTrackGenerator; done: boolean } | null = null;
+let captureSession: { port: MessagePort; writer: WritableStreamDefaultWriter<AudioData>; element: HTMLAudioElement; track: AudioTrackGenerator; timer: ReturnType<typeof setInterval>; done: boolean } | null = null;
 
 function setCaptureAudio(next: CaptureAudioState): void {
   captureAudio = next;
@@ -96,6 +99,7 @@ function endCaptureAudio(state: 'failed' | 'ended', reason?: string, tellMain = 
   captureSession = null;
   if (session && !session.done) {
     session.done = true;
+    clearInterval(session.timer);
     void session.writer.close().catch(() => {});
     session.track.stop();
     session.element.remove();
@@ -141,7 +145,19 @@ ipcRenderer.on(IPC.captureAudio, (event, info: unknown) => {
   let sampleRate = Number(data.sampleRate) || 48_000;
   let channels = Number(data.channels) || 2;
   let frames = 0;
-  const session = { port, writer, element, track, done: false };
+  const queue = new PcmQueue();
+  // Метка времени — по счётчику кадров: монотонна, сколько бы порций ни ушло за один тик.
+  const flush = () => {
+    if (captureSession !== session) return;
+    for (const samples of queue.take(performance.now())) {
+      const count = Math.floor(samples.length / channels);
+      if (count === 0) continue;
+      const chunk = new AudioData({ format: 'f32', sampleRate, numberOfFrames: count, numberOfChannels: channels, timestamp: Math.round((frames / sampleRate) * 1e6), data: samples });
+      frames += count;
+      writer.write(chunk).catch(() => endCaptureAudio('ended'));
+    }
+  };
+  const session = { port, writer, element, track, timer: setInterval(flush, PCM_CHUNK_MS), done: false };
   captureSession = session;
   track.addEventListener('ended', () => {
     // Страница остановила дорожку (показ закончен) — захват в utility-процессе больше не нужен.
@@ -150,12 +166,8 @@ ipcRenderer.on(IPC.captureAudio, (event, info: unknown) => {
   port.onmessage = ({ data: message }) => {
     if (captureSession !== session) return;
     if (message instanceof ArrayBuffer) {
-      const samples = new Float32Array(message);
-      const count = Math.floor(samples.length / channels);
-      if (count === 0) return;
-      const chunk = new AudioData({ format: 'f32', sampleRate, numberOfFrames: count, numberOfChannels: channels, timestamp: Math.round((frames / sampleRate) * 1e6), data: samples });
-      frames += count;
-      writer.write(chunk).catch(() => endCaptureAudio('ended'));
+      queue.push(new Float32Array(message));
+      flush();
       return;
     }
     const control = message && typeof message === 'object' ? (message as Record<string, unknown>) : {};
