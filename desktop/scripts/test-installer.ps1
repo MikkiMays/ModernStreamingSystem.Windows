@@ -17,12 +17,19 @@
 .PARAMETER Runs
 Сколько запусков для холодного старта (первый ещё и меряет память).
 
+.PARAMETER Previous
+Каталог с установщиком прошлого выпуска (CI: `desktop-v1.0.5`, sha256 сверен шагом скачивания). Тогда в
+конце — обновление поверх него так, как обновляет electron-updater (`--updated /S --force-run`, это
+`quitAndInstall(true, true)` в update/updater.ts): папка та же и одна, ярлыки с AUMID на месте, язык
+человека сохранён, `DesktopShortcut` убран, на диске — эта сборка, Cord запускается, запись удаления
+одна. Итог — в metrics.json (`update`); любая неудача — сбой прогона.
+
 .PARAMETER Screenshots
 Каталог для снимков обычного (не тихого) запуска установщика (R105, n04): окно выбора языка и окно с
 полосой. Окно языка подтверждается программно (IDOK), время установки печатается. Сбой снимка —
 предупреждение, не сбой: раннер без GPU и с чужим рабочим столом.
 #>
-param([string]$Release = 'release', [string]$Metrics = '', [int]$Runs = 5, [string]$Screenshots = '')
+param([string]$Release = 'release', [string]$Metrics = '', [int]$Runs = 5, [string]$Screenshots = '', [string]$Previous = '')
 $ErrorActionPreference = 'Stop'
 
 Add-Type -Namespace CordProbe -Name Win32 -MemberDefinition @'
@@ -188,8 +195,8 @@ if ($Metrics) {
     memoryIdle = [ordered]@{ privateMB = $privateMB; app = $appMemory }
     withinThresholds = $within
   }
-  $report | ConvertTo-Json -Depth 6 | Set-Content -Path $Metrics -Encoding utf8
-  Write-Host "metrics.json: $($report | ConvertTo-Json -Depth 6 -Compress)"
+  $report | ConvertTo-Json -Depth 8 | Set-Content -Path $Metrics -Encoding utf8
+  Write-Host "metrics.json: $($report | ConvertTo-Json -Depth 8 -Compress)"
   foreach ($name in $within.Keys) { if (-not $within[$name]) { Write-Warning "Порог ADR §10 превышен: $name" } }
 }
 
@@ -263,5 +270,104 @@ if ($Screenshots) {
     $uninstaller = Get-ChildItem $target -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($uninstaller) { Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait | Out-Null }
   }
+}
+# Обновление поверх настоящего прошлого выпуска (1.0.5 — последний с мастером MUI2 и своей галочкой ярлыка).
+# Ставится как у человека, обновляется как у electron-updater; любая неудача — сбой прогона.
+if ($Previous) {
+  $old = Get-Item (Join-Path $Previous 'Cord-Setup-*.exe') | Select-Object -First 1
+  if (-not $old) { throw "Нет установщика прошлого выпуска в $Previous" }
+  $checks = [ordered]@{}
+  function Check([string]$name, [bool]$ok, [string]$detail = '') {
+    $checks[$name] = [ordered]@{ ok = $ok; detail = $detail }
+    Write-Host "  $(if ($ok) { 'ok  ' } else { 'FAIL' }) $name $detail"
+  }
+  function Link-Info([string]$link) {
+    if (-not (Test-Path $link)) { return $null }
+    $item = $shellApp.Namespace((Split-Path $link)).ParseName((Split-Path $link -Leaf))
+    $linkTarget = (New-Object -ComObject WScript.Shell).CreateShortcut($link).TargetPath
+    return [ordered]@{ aumid = "$($item.ExtendedProperty('System.AppUserModel.ID'))"; target = "$linkTarget" }
+  }
+  $startMenuLink = Join-Path ([Environment]::GetFolderPath('Programs')) 'Cord.lnk'
+  $log = Join-Path $env:LOCALAPPDATA 'Cord\desktop\desktop.log'
+
+  # Чистая машина: ни Cord, ни его записей в реестре.
+  Get-Process Cord -ErrorAction SilentlyContinue | Stop-Process -Force
+  Remove-Item 'HKCU:\Software\Cord' -Recurse -ErrorAction SilentlyContinue
+  if (Test-Path (Join-Path $target 'Cord.exe')) { throw "Перед установкой $($old.Name) Cord уже стоит в $target" }
+
+  # 1. Прошлый выпуск. Его тихий режим ставит ярлык рабочего стола по своей галочке (DesktopShortcut = 1 по
+  # умолчанию), а язык не выбирает — берёт язык Windows (на раннере en). Выбор языка человеком воспроизведён
+  # тем, что мастер 1.0.5 пишет при выборе Deutsch: InstallerLanguage = Language = 1031. Язык не совпадает с
+  # языком Windows — так видно, сохранил ли обновлятель выбор или подставил свой.
+  $p = Start-Process -FilePath $old.FullName -ArgumentList '/S' -Wait -PassThru
+  if ($p.ExitCode -ne 0) { throw "Тихая установка $($old.Name) вернула код $($p.ExitCode)" }
+  if (-not (Test-Path (Join-Path $target 'Cord.exe'))) { throw "$($old.Name) не поставил Cord в $target" }
+  if ((Get-ItemProperty 'HKCU:\Software\Cord').DesktopShortcut -ne 1) { throw "$($old.Name) не записал DesktopShortcut = 1" }
+  if (-not (Test-Path $shortcut)) { throw "$($old.Name) не создал ярлык на рабочем столе" }
+  New-ItemProperty -Path 'HKCU:\Software\Cord' -Name InstallerLanguage -Value '1031' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path 'HKCU:\Software\Cord' -Name Language -Value '1031' -PropertyType String -Force | Out-Null
+  $oldAsar = (Get-FileHash (Join-Path $target 'resources\app.asar')).Hash
+  Write-Host "Прошлый выпуск $($old.Name) стоит: ярлык рабочего стола, DesktopShortcut = 1, язык 1031"
+
+  # 2. Обновление, как его запускает electron-updater: quitAndInstall(true, true) → --updated /S --force-run.
+  $logBefore = if (Test-Path $log) { @(Get-Content $log).Count } else { 0 }
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $p = Start-Process -FilePath $installer.FullName -ArgumentList '--updated', '/S', '--force-run' -PassThru
+  $null = $p.Handle
+  # Ждём только сам установщик: --force-run запускает Cord, и он может оказаться его потомком.
+  $finished = $p.WaitForExit(180000)
+  $clock.Stop()
+  $updateSeconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
+  Check 'installer-exit' ($finished -and $p.ExitCode -eq 0) "код $(if ($finished) { $p.ExitCode } else { 'нет за 180 с' }), $updateSeconds с"
+
+  # 3. Проверки.
+  Check 'same-folder' ((Test-Path (Join-Path $target 'Cord.exe')) -and -not (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\cord-desktop'))) $target
+  $newAsar = (Get-FileHash (Join-Path $target 'resources\app.asar')).Hash
+  $builtAsar = (Get-FileHash (Join-Path $Release 'win-unpacked\resources\app.asar')).Hash
+  Check 'new-build-on-disk' (($newAsar -eq $builtAsar) -and ($newAsar -ne $oldAsar)) "app.asar = сборка этого прогона: $($newAsar -eq $builtAsar), отличается от прошлого: $($newAsar -ne $oldAsar)"
+  foreach ($pair in @(@('desktop-shortcut', $shortcut), @('start-menu-shortcut', $startMenuLink))) {
+    $info = Link-Info $pair[1]
+    $ok = ($null -ne $info) -and ($info.aumid -eq $appId) -and ($info.target -like "$target\*")
+    Check $pair[0] $ok $(if ($info) { "AUMID $($info.aumid) → $($info.target)" } else { "нет $($pair[1])" })
+  }
+  $cord = Get-ItemProperty 'HKCU:\Software\Cord' -ErrorAction SilentlyContinue
+  Check 'language-kept' (("$($cord.InstallerLanguage)" -eq '1031') -and ("$($cord.Language)" -eq '1031')) "InstallerLanguage $($cord.InstallerLanguage), Language $($cord.Language)"
+  Check 'legacy-value-removed' ($null -eq $cord.DesktopShortcut) "DesktopShortcut $(if ($null -eq $cord.DesktopShortcut) { 'нет' } else { $cord.DesktopShortcut })"
+  Check 'cord-scheme' ((Get-ItemProperty 'HKCU:\Software\Classes\cord\shell\open\command' -ErrorAction SilentlyContinue).'(default)' -like "*$target\Cord.exe*") 'HKCU\Software\Classes\cord'
+  $entries = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { ($_ | Get-ItemProperty).DisplayName -eq 'Cord' })
+  $uninstallers = @(Get-ChildItem $target -Filter 'Uninstall*.exe')
+  $entryOk = ($entries.Count -eq 1) -and (($entries[0] | Get-ItemProperty).UninstallString -like "*$target\*")
+  Check 'one-uninstall-entry' ($entryOk -and $uninstallers.Count -eq 1) "записей в «Программах»: $($entries.Count), деинсталляторов в папке: $($uninstallers.Count)"
+
+  # Cord запускается: --force-run должен был поднять его сам; нет — запускаем, как человек с ярлыка.
+  $deadline = (Get-Date).AddSeconds(30)
+  while (-not (Get-Process Cord -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+  $forceRun = [bool](Get-Process Cord -ErrorAction SilentlyContinue)
+  if (-not $forceRun) { Start-Process -FilePath (Join-Path $target 'Cord.exe') | Out-Null }
+  $deadline = (Get-Date).AddSeconds(60)
+  $nativeLine = $null
+  while ((Get-Date) -lt $deadline) {
+    $nativeLine = if (Test-Path $log) { @(Get-Content $log) | Select-Object -Skip $logBefore | Where-Object { $_ -match 'native: ' } | Select-Object -Last 1 } else { $null }
+    if ($nativeLine) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  $alive = [bool](Get-Process Cord -ErrorAction SilentlyContinue)
+  Check 'cord-starts' ($alive -and ($nativeLine -match 'native: загружен')) "запустил --force-run: $forceRun; журнал: $nativeLine"
+
+  Get-Process Cord -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Sleep -Seconds 2
+  if ($uninstallers.Count -ge 1) { Start-Process -FilePath $uninstallers[0].FullName -ArgumentList '/S' -Wait | Out-Null }
+  Start-Sleep -Seconds 3
+  Check 'uninstall-after-update' ((-not (Test-Path (Join-Path $target 'Cord.exe'))) -and (-not (Test-Path $shortcut)) -and (-not (Test-Path $startMenuLink))) 'файлы и оба ярлыка убраны'
+
+  $failed = @($checks.Keys | Where-Object { -not $checks[$_].ok })
+  $update = [ordered]@{ from = $old.Name; command = '--updated /S --force-run'; seconds = $updateSeconds; forceRunStarted = $forceRun; ok = ($failed.Count -eq 0); checks = $checks }
+  if ($Metrics -and $report) {
+    $report['update'] = $update
+    $report | ConvertTo-Json -Depth 8 | Set-Content -Path $Metrics -Encoding utf8
+    Write-Host "metrics.json (с обновлением): $($update | ConvertTo-Json -Depth 6 -Compress)"
+  }
+  if ($failed.Count) { throw "Обновление поверх $($old.Name) не прошло: $($failed -join ', ')" }
+  Write-Host "Обновление поверх $($old.Name): все $($checks.Count) проверок прошли"
 }
 Write-Host 'Установка, запуск и удаление прошли'

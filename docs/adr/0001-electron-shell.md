@@ -373,7 +373,7 @@ Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все �
 - надпись над полосой и вопрос деинсталлятора — стандартные тексты electron-builder (`installing`, `areYouSureToUninstall`) на языке мастера; свой текст один — описание в карточке (`Comments`, восемь языков);
 - `uninstallDisplayName: "Cord"`, издатель «Cord», `deleteAppDataOnUninstall: false`; `VersionInfo*` в том же тоне.
 
-`test-installer.ps1` в CI: тихая установка ≤ 20 с (порог R105 — предупреждение, `metrics.json` → `installSeconds`), папка `Programs\Cord`, ярлыки с AUMID; с `-Screenshots` — обычный запуск со снимками окна языка и окна с полосой в артефакт.
+`test-installer.ps1` в CI: тихая установка ≤ 20 с (порог R105 — предупреждение, `metrics.json` → `installSeconds`), папка `Programs\Cord`, ярлыки с AUMID; с `-Screenshots` — обычный запуск со снимками окна языка и окна с полосой в артефакт; с `-Previous` — обновление поверх настоящего 1.0.5 (`--updated /S --force-run`, как `quitAndInstall(true, true)`): папка, ярлыки с AUMID, язык, `DesktopShortcut`, сборка на диске, запуск, одна запись удаления — `metrics.json` → `update`, неудача — сбой.
 
 Тест CI читает ключ удаления в HKCU и падает на любом из значений `HelpLink`, `URLInfoAbout`, `URLUpdateInfo`, `Readme`. Анимированный установщик «как у Discord» возможен позже — своим загрузчиком поверх того же NSIS (тихая установка с прогрессом), без смены механизма обновлений.
 

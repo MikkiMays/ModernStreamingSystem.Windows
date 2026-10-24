@@ -95,14 +95,27 @@ jobs:
           else
             node scripts/sign-manifest.mjs release
           fi
-      - name: Verify the packaged installer (silent install ≤ 20 s into Programs\Cord, uninstall key without links, shortcuts with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall, screenshots of the one-window installer)
+      - name: Previous release installer for the update check (desktop-v1.0.5, sha256 from the release)
+        # 1.0.5 — последний выпуск с мастером MUI2 и своей галочкой ярлыка: обновление с него проверяется поверх
+        # настоящего установщика. Скачивается из релиза этого репо (GITHUB_TOKEN, contents: read), не с зеркала стенда.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: desktop-v1.0.5
+        run: |
+          rm -rf previous && mkdir previous
+          gh release download "$PREVIOUS_TAG" -R "$GITHUB_REPOSITORY" -D previous -p 'Cord-Setup-*.exe' -p 'Cord-Setup-*.exe.sha256'
+          cd previous
+          ls -la
+          sha256sum --check Cord-Setup-*.exe.sha256
+      - name: Verify the packaged installer (silent install ≤ 20 s into Programs\Cord, uninstall key without links, shortcuts with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall, screenshots of the one-window installer, update over the real 1.0.5)
         shell: pwsh
         # metrics.json (ADR §10): размер установщика и установленного, холодный старт (медиана 5 запусков),
         # память в покое через 60 с после главной. Пороги — предупреждения: на раннере нет GPU.
         # Нативный модуль: файл в app.asar.unpacked и строка «native: загружен» в журнале установленного Cord.
         # Снимки обычного запуска установщика «одним окном» (R105): окно языка и окно с полосой — в артефакт.
         run: |
-          .\scripts\test-installer.ps1 -Release release -Metrics release\metrics.json -Runs 5 -Screenshots release
+          .\scripts\test-installer.ps1 -Release release -Metrics release\metrics.json -Runs 5 -Screenshots release -Previous previous
           if (Test-Path release\metrics.json) {
             "## Cord desktop: metrics.json" >> $env:GITHUB_STEP_SUMMARY
             '```json' >> $env:GITHUB_STEP_SUMMARY
