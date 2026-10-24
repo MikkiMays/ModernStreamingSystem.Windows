@@ -16,7 +16,7 @@ describe('метрики запуска для CI (ADR §10, metrics.json)', () 
     expect(markFor('cord-app://shell/splash.html')).toBe('splash');
     expect(markFor('cord-app://shell/loading.html')).toBe('main');
     expect(markFor('https://cord.nikg.tech/')).toBe('main');
-    expect(markFor('cord-app://shell/picker.html')).toBeNull();
+    expect(markFor('cord-app://shell/servers.html')).toBeNull();
     expect(markFor('cord-app://overlay/overlay.html')).toBeNull();
   });
 

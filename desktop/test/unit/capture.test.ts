@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureSourceViews, nativeAudioFor, readAudioMode, readCaptureSelect } from '../../src/main/capture';
+import { captureSourceViews, nativeAudioFor, readCaptureSelect } from '../../src/main/capture';
 import { isPageCall, readPageMessage } from '../../src/main/bridge/messages';
 import { featuresFor, FEATURES } from '../../src/shared/bridge';
 
@@ -47,12 +47,6 @@ describe('звук через cord-native (process loopback)', () => {
     expect(nativeAudioFor({ id: 'window:1:0', audio: 'app' }, false)).toEqual({ kind: 'failed', reason: 'unavailable' });
     expect(nativeAudioFor({ id: 'screen:0:0', audio: 'system' }, true)).toEqual({ kind: 'none' });
     expect(nativeAudioFor({ id: 'screen:0:0', audio: 'none' }, false)).toEqual({ kind: 'none' });
-  });
-  it('режим из окна выбора оболочки — только известные имена', () => {
-    expect(readAudioMode('system-except-cord')).toBe('system-except-cord');
-    expect(readAudioMode('app')).toBe('app');
-    expect(readAudioMode('loud')).toBe('none');
-    expect(readAudioMode(undefined)).toBe('none');
   });
 });
 

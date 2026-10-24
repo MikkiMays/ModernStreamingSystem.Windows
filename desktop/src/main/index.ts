@@ -18,7 +18,7 @@ import type { HotkeyBinding, Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
 import { appSettingsOf, keepAwake, readAppSettingsPatch, settingsPatchOf, type AppSettings } from './app-settings';
 import { buildConfig } from './config';
-import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readAudioMode, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
+import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
 import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { decideClose, startMode } from './close-policy';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
@@ -30,7 +30,7 @@ import { NATIVE_MODULE_FILE, type HostEvent, type NativeBinding, type NativeFore
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
-import { installShellProtocol, registerShellScheme, SHELL_SCHEME, shellUrl } from './protocol';
+import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
 import { SettingsStore } from './settings';
 import { Taskbar, type CallState } from './tray';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
@@ -817,19 +817,17 @@ class Shell {
 
   // ----- захват -----
 
-  /** Экраны и окна для окна выбора (веба или оболочки): миниатюры ≤ 320 px, без своих окон Cord. */
+  /** Экраны и окна для окна выбора веба: миниатюры ≤ 320 px, без своих окон Cord. */
   private async captureSources(): Promise<{ systemAudio: boolean; appAudio: boolean; sources: CaptureSourceView[] }> {
     const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true });
     const own = new Set(BrowserWindow.getAllWindows().filter((window) => !window.isDestroyed()).map((window) => window.getMediaSourceId()));
     return { systemAudio: process.platform === 'win32', appAudio: this.native.available, sources: captureSourceViews(sources, own) };
   }
 
-  private picker: BrowserWindow | null = null;
-  private pickerResolve: ((selection: { id: string; audio: AudioMode } | null) => void) | null = null;
-
   /**
-   * Веб зовёт `getDisplayMedia`. Если страница уже прислала `capture.select` (своё окно выбора по
-   * E16) — отдаём его; иначе показываем окно выбора оболочки. Без выбора человека экрана не будет.
+   * Веб зовёт `getDisplayMedia` только после своего окна выбора (`capture.select`, R60) — его выбор
+   * и отдаём. Выбора нет (страница без флага `capture` или он устарел) — отказ `callback({})`:
+   * второго окна выбора у оболочки нет, а экрана без выбора человека не будет.
    */
   private installDisplayMedia(): void {
     cordSession().setDisplayMediaRequestHandler(
@@ -840,80 +838,32 @@ class Shell {
           callback({});
           return;
         }
-        const resolve = (selection: { id: string; audio: AudioMode } | null) => {
-          if (!selection) {
+        const selection = this.capture.take();
+        if (!selection) {
+          log('захват: окно выбора веба не прислало capture.select — отказ');
+          callback({});
+          return;
+        }
+        void desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } }).then((sources) => {
+          const source = sources.find((candidate) => candidate.id === selection.id);
+          if (!source) {
             callback({});
             return;
           }
-          void desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } }).then((sources) => {
-            const source = sources.find((candidate) => candidate.id === selection.id);
-            if (!source) {
-              callback({});
-              return;
-            }
-            const audio = loopbackFor(selection.audio, process.platform);
-            callback({ video: source, ...(audio ? { audio } : {}) });
-            // Звук приложения / системы кроме Cord — отдельной дорожкой через cord-native.
-            this.stopCaptureAudio(false);
-            const decision = nativeAudioFor(selection, this.native.available);
-            if (decision.kind === 'native') void this.startCaptureAudio(decision.plan, selection.audio);
-            else if (decision.kind === 'failed') {
-              log(`захват: звук ${selection.audio} — ${decision.reason}`);
-              this.router.post('capture.audio', { state: 'failed', mode: selection.audio, reason: decision.reason });
-            }
-          });
-        };
-        const fresh = this.capture.take();
-        if (fresh) {
-          resolve(fresh);
-          return;
-        }
-        this.openPicker(resolve);
+          const audio = loopbackFor(selection.audio, process.platform);
+          callback({ video: source, ...(audio ? { audio } : {}) });
+          // Звук приложения / системы кроме Cord — отдельной дорожкой через cord-native.
+          this.stopCaptureAudio(false);
+          const decision = nativeAudioFor(selection, this.native.available);
+          if (decision.kind === 'native') void this.startCaptureAudio(decision.plan, selection.audio);
+          else if (decision.kind === 'failed') {
+            log(`захват: звук ${selection.audio} — ${decision.reason}`);
+            this.router.post('capture.audio', { state: 'failed', mode: selection.audio, reason: decision.reason });
+          }
+        });
       },
       { useSystemPicker: false },
     );
-  }
-
-  private openPicker(resolve: (selection: { id: string; audio: AudioMode } | null) => void): void {
-    if (!this.main) {
-      resolve(null);
-      return;
-    }
-    this.pickerResolve?.(null);
-    this.pickerResolve = resolve;
-    const picker = new BrowserWindow({
-      parent: this.main.window,
-      modal: true,
-      width: 760,
-      height: 560,
-      resizable: false,
-      minimizable: false,
-      maximizable: false,
-      frame: false,
-      roundedCorners: true,
-      show: false,
-      backgroundColor: '#15181f',
-      title: 'Что показать',
-      webPreferences: { preload: join(this.preloadDir, 'shell.js'), sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: !!process.env.CORD_DEVTOOLS },
-    });
-    picker.setMenuBarVisibility(false);
-    picker.once('ready-to-show', () => picker.show());
-    picker.on('closed', () => {
-      if (this.picker === picker) this.picker = null;
-      const pending = this.pickerResolve;
-      this.pickerResolve = null;
-      pending?.(null);
-    });
-    this.picker = picker;
-    void picker.loadURL(shellUrl('picker'));
-  }
-
-  private finishPicker(selection: { id: string; audio: AudioMode } | null): void {
-    const pending = this.pickerResolve;
-    this.pickerResolve = null;
-    pending?.(selection);
-    this.picker?.close();
-    this.picker = null;
   }
 
   // ----- окно серверов и вызовы оболочки -----
@@ -952,17 +902,6 @@ class Shell {
           this.router.attach(this.main.window.webContents, origin);
           return this.main.open(origin);
         }
-        case 'capture.sources':
-          return this.captureSources();
-        case 'capture.pick': {
-          const id = typeof data.id === 'string' && /^(screen|window):\d+:\d+$/.test(data.id) ? data.id : null;
-          const audio = readAudioMode(data.audio);
-          this.finishPicker(id ? { id, audio } : null);
-          return true;
-        }
-        case 'capture.cancel':
-          this.finishPicker(null);
-          return true;
         case 'shell.features':
           return { features: this.features(), version: app.getVersion() };
         default:

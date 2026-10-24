@@ -118,8 +118,3 @@ export function nativeAudioFor(selection: { id: string; audio: AudioMode }, nati
   if (!match) return { kind: 'failed', reason: 'not-a-window' };
   return { kind: 'native', plan: { mode: 'include', hwnd: Number(match[1]) } };
 }
-
-/** Режим из окна выбора оболочки (`capture.pick`) — только известные имена, иначе без звука. */
-export function readAudioMode(value: unknown): AudioMode {
-  return AUDIO_MODES.includes(value as AudioMode) ? (value as AudioMode) : 'none';
-}
