@@ -55,6 +55,8 @@ export class Taskbar {
   /** Название встречи — в строке состояния меню и в подсказке. */
   private title = '';
   private unread = 0;
+  /** Что сейчас нарисовано в меню: то же состояние и язык — меню не пересобирается. */
+  private drawn = '';
   private actions: { mic(): void; camera(): void; leave(): void } = { mic() {}, camera() {}, leave() {} };
 
   constructor(
@@ -77,6 +79,7 @@ export class Taskbar {
     const image = trayImage(this.appPath);
     if (!image) throw new Error('картинка значка не найдена (dist/shell/tray.ico, icon-256.png)');
     this.tray = new Tray(image);
+    this.drawn = '';
     this.tray.on('click', () => this.host.open());
     this.tray.on('double-click', () => this.host.open());
     this.refreshTray();
@@ -97,6 +100,10 @@ export class Taskbar {
     if (!this.tray || this.tray.isDestroyed()) return;
     const text = this.text();
     const state = { inCall: this.state.inCall, mic: this.state.mic, title: this.title, unread: this.unread, notifications: this.options().notifications };
+    // badge и call.state приходят часто — открытое меню не подменяется без причины.
+    const drawn = JSON.stringify([state, text.statusIdle]);
+    if (drawn === this.drawn) return;
+    this.drawn = drawn;
     const actions: Record<TrayItemId, () => void> = {
       status: () => {},
       return: () => this.host.open(),
