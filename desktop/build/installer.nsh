@@ -52,7 +52,14 @@
   ; Окно выбора языка — не в тихом режиме (обновление `/S --updated` и CI) и не при сборке
   ; деинсталлятора: electron-builder вставляет customInit только в обычную ветку .onInit, поэтому
   ; displayLanguageSelector в electron-builder.yml выключен.
-  ${IfNot} ${Silent}
+  ; В тихом режиме окна нет — язык берётся запомненный, иначе $LANGUAGE стал бы языком Windows и
+  ; customInstall перезаписал бы им выбор человека.
+  ${If} ${Silent}
+    ReadRegStr $0 HKCU "Software\Cord" "InstallerLanguage"
+    ${If} $0 != ""
+      StrCpy $LANGUAGE $0
+    ${EndIf}
+  ${Else}
     !insertmacro MUI_LANGDLL_DISPLAY
   ${EndIf}
 !macroend
