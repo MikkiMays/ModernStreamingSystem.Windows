@@ -295,19 +295,21 @@ if ($Previous) {
   Remove-Item 'HKCU:\Software\Cord' -Recurse -ErrorAction SilentlyContinue
   if (Test-Path (Join-Path $target 'Cord.exe')) { throw "Перед установкой $($old.Name) Cord уже стоит в $target" }
 
-  # 1. Прошлый выпуск. Его тихий режим ставит ярлык рабочего стола по своей галочке (DesktopShortcut = 1 по
+  # 1. Прошлый выпуск. Его тихий режим ставит ярлык рабочего стола (до 1.0.6 — по своей галочке, DesktopShortcut = 1 по
   # умолчанию), а язык не выбирает — берёт язык Windows (на раннере en). Выбор языка человеком воспроизведён
   # тем, что мастер 1.0.5 пишет при выборе Deutsch: InstallerLanguage = Language = 1031. Язык не совпадает с
   # языком Windows — так видно, сохранил ли обновлятель выбор или подставил свой.
   $p = Start-Process -FilePath $old.FullName -ArgumentList '/S' -Wait -PassThru
   if ($p.ExitCode -ne 0) { throw "Тихая установка $($old.Name) вернула код $($p.ExitCode)" }
   if (-not (Test-Path (Join-Path $target 'Cord.exe'))) { throw "$($old.Name) не поставил Cord в $target" }
-  if ((Get-ItemProperty 'HKCU:\Software\Cord').DesktopShortcut -ne 1) { throw "$($old.Name) не записал DesktopShortcut = 1" }
+  # Галочку DesktopShortcut пишут только выпуски до 1.0.6; с 1.0.6 ярлык ставит electron-builder, без неё.
+  $legacyShortcut = (Get-ItemProperty 'HKCU:\Software\Cord').DesktopShortcut
+  if ($null -ne $legacyShortcut -and $legacyShortcut -ne 1) { throw "$($old.Name) записал DesktopShortcut = $legacyShortcut" }
   if (-not (Test-Path $shortcut)) { throw "$($old.Name) не создал ярлык на рабочем столе" }
   New-ItemProperty -Path 'HKCU:\Software\Cord' -Name InstallerLanguage -Value '1031' -PropertyType String -Force | Out-Null
   New-ItemProperty -Path 'HKCU:\Software\Cord' -Name Language -Value '1031' -PropertyType String -Force | Out-Null
   $oldAsar = (Get-FileHash (Join-Path $target 'resources\app.asar')).Hash
-  Write-Host "Прошлый выпуск $($old.Name) стоит: ярлык рабочего стола, DesktopShortcut = 1, язык 1031"
+  Write-Host "Прошлый выпуск $($old.Name) стоит: ярлык рабочего стола, DesktopShortcut = $(if ($null -eq $legacyShortcut) { 'нет' } else { $legacyShortcut }), язык 1031"
 
   # 2. Обновление, как его запускает electron-updater: quitAndInstall(true, true) → --updated /S --force-run.
   $logBefore = if (Test-Path $log) { @(Get-Content $log).Count } else { 0 }

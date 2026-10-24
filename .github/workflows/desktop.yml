@@ -95,20 +95,25 @@ jobs:
           else
             node scripts/sign-manifest.mjs release
           fi
-      - name: Previous release installer for the update check (desktop-v1.0.5, sha256 from the release)
-        # 1.0.5 — последний выпуск с мастером MUI2 и своей галочкой ярлыка: обновление с него проверяется поверх
-        # настоящего установщика. Скачивается из релиза этого репо (GITHUB_TOKEN, contents: read), не с зеркала стенда.
+      - name: Previous release installer for the update check (latest published desktop-v*, sha256 from the release)
+        # Обновление проверяется поверх настоящего установщика прошлого выпуска (с 1.0.5 — мастер MUI2 и своя галочка
+        # ярлыка). Скачивается из релиза этого репо (GITHUB_TOKEN, contents: read), не с зеркала стенда.
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PREVIOUS_TAG: desktop-v1.0.5
         run: |
+          # Прежний выпуск — последний опубликованный desktop-v*: задание release этого прогона ещё не
+          # выпустило новый, так что обновление проверяется поверх того, что сейчас стоит у людей.
+          PREVIOUS_TAG=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 30 --json tagName \
+            -q '[.[] | select(.tagName | startswith("desktop-v"))][0].tagName')
+          test -n "$PREVIOUS_TAG"
+          echo "Прежний выпуск: $PREVIOUS_TAG"
           rm -rf previous && mkdir previous
           gh release download "$PREVIOUS_TAG" -R "$GITHUB_REPOSITORY" -D previous -p 'Cord-Setup-*.exe' -p 'Cord-Setup-*.exe.sha256'
           cd previous
           ls -la
           sha256sum --check Cord-Setup-*.exe.sha256
-      - name: Verify the packaged installer (silent install ≤ 20 s into Programs\Cord, uninstall key without links, shortcuts with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall, screenshots of the one-window installer, update over the real 1.0.5)
+      - name: Verify the packaged installer (silent install ≤ 20 s into Programs\Cord, uninstall key without links, shortcuts with AUMID, installer language in HKCU, native module loads, close hides to tray, metrics, uninstall, screenshots of the one-window installer, update over the real previous release)
         shell: pwsh
         # metrics.json (ADR §10): размер установщика и установленного, холодный старт (медиана 5 запусков),
         # память в покое через 60 с после главной. Пороги — предупреждения: на раннере нет GPU.
