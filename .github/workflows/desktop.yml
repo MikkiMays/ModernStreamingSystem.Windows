@@ -24,12 +24,29 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       # Сервер установки — переменная репозитория CORD_DEFAULT_SERVER (Settings → Variables), не код:
       # клиент знает его как сервер по умолчанию, канал обновлений — его зеркало (или CORD_UPDATE_CHANNEL).
+      # Другая установка со своим сервером и ключом обновлений (cordcam.ru) собирается веткой deploy/<имя>:
+      # в ней файл build/installation с именем, а сервер и ключи — в build/installations/<имя>.json.
       - name: Server of this installation
         shell: bash
         env:
           SERVER: ${{ vars.CORD_DEFAULT_SERVER }}
           CHANNEL: ${{ vars.CORD_UPDATE_CHANNEL }}
         run: |
+          if [ -f build/installation ]; then
+            INSTALLATION=$(tr -d '[:space:]' < build/installation)
+            if [ "$GITHUB_REF" = refs/heads/main ]; then
+              echo "::error::build/installation попал в main: main собирает только основную установку"
+              exit 1
+            fi
+            case "$INSTALLATION" in ''|*[!a-z0-9-]*) echo "::error::build/installation: имя из a-z, 0-9 и «-»"; exit 1 ;; esac
+            test -f "build/installations/$INSTALLATION.json"
+            SERVER=$(node -p "require('./build/installations/$INSTALLATION.json').server")
+            CHANNEL=""
+            # Ключи обновлений этой установки вместо основных: подпись её latest.yml — ключом её сервера.
+            node -e "const f=require('fs');const k=JSON.parse(f.readFileSync('build/update-keys.json'));k.keys=require('./build/installations/$INSTALLATION.json').keys;f.writeFileSync('build/update-keys.json',JSON.stringify(k,null,2)+'\\n')"
+            echo "CORD_INSTALLATION=$INSTALLATION" >> "$GITHUB_ENV"
+            echo "Установка: $INSTALLATION"
+          fi
           if [ -z "$SERVER" ]; then
             echo "::error::Не задана переменная репозитория CORD_DEFAULT_SERVER (например https://meet.example.com/)"
             exit 1
@@ -86,6 +103,8 @@ jobs:
           CSC_KEY_PASSWORD: ${{ secrets.CORD_SIGN_PASSWORD }}
         run: npx electron-builder --win nsis --x64 --publish never
       - name: Sign the update manifest (Ed25519, layer 1)
+        # У другой установки свой ключ, и он только на её сервере: там latest.yml и подписывается.
+        if: env.CORD_INSTALLATION == ''
         env:
           CORD_UPDATE_SIGN_KEY: ${{ secrets.CORD_UPDATE_SIGN_KEY }}
         shell: bash
@@ -160,7 +179,7 @@ jobs:
           retention-days: 1
           if-no-files-found: warn
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/deploy/'))
     needs: desktop
     runs-on: ubuntu-24.04
     permissions:
@@ -180,6 +199,17 @@ jobs:
         run: |
           version=$(node -p "require('./desktop/package.json').version")
           tag="desktop-v$version"
+          prerelease=""
+          if [ -f desktop/build/installation ]; then
+            # Выпуск другой установки — предварительный и со своим префиксом: «последний desktop-v*» для
+            # проверки обновления и publish-windows-release.py основного сервера его не увидят.
+            installation=$(tr -d '[:space:]' < desktop/build/installation)
+            tag="$installation-desktop-v$version"
+            prerelease="--prerelease"
+          elif [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::ветка deploy/* без desktop/build/installation"
+            exit 1
+          fi
           state=$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo missing)
           if [ "$state" = "false" ]; then
             echo "Release $tag already exists; preserving its artifacts."
@@ -194,7 +224,7 @@ jobs:
           test -s latest.yml
           notes="../docs/releases/desktop-$version.md"
           [ -f "$notes" ] || { echo "# Cord $version" > /tmp/notes.md; notes=/tmp/notes.md; }
-          gh release create "$tag" --target "$GITHUB_SHA" --title "Cord desktop $version" \
+          gh release create "$tag" --target "$GITHUB_SHA" --title "Cord desktop $version${installation:+ ($installation)}" $prerelease \
             --notes-file "$notes" \
             Cord-Setup-*.exe Cord-Setup-*.exe.sha256 Cord-Setup-*.exe.blockmap Cord-Setup-*.exe.blockmap.sha256 \
             latest.yml $(ls latest.yml.sig 2>/dev/null)

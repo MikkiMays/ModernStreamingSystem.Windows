@@ -1,0 +1,7 @@
+{
+  "_comment": "Установка cordcam.ru: свой сервер по умолчанию и свой ключ обновлений. Собирается веткой deploy/cordcam (файл desktop/build/installation с именем установки), выходит предварительным выпуском cordcam-desktop-vX.Y.Z. latest.yml подписывает сервер cordcam своим закрытым ключом (/root/cordcam-release/cordcam-client.sh), в CI его нет.",
+  "server": "https://cordcam.ru/",
+  "keys": [
+    "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEALEUzPU+xM+JTB6fbyfYSLDyXadNMJ/VgLLydwRTRDmI=\n-----END PUBLIC KEY-----\n"
+  ]
+}
