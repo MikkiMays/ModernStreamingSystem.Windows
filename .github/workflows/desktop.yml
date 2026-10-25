@@ -147,9 +147,18 @@ jobs:
             desktop/release/latest.yml.sig
             desktop/release/metrics.json
             desktop/release/installer-*.png
-            desktop/test-results/shots/*.png
           retention-days: 1
           if-no-files-found: error
+      # Снимки оверлея и мини-окна из дымового прогона — своим артефактом: в общем с выпуском пути
+      # разошлись бы по разным папкам, и корнем артефакта стала бы `desktop/` — задание release не нашло
+      # бы `Cord-Setup-*.exe.sha256` в корне (выпуск 1.0.8 так и не вышел с первого раза).
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        continue-on-error: true
+        with:
+          name: Cord-desktop-shots
+          path: desktop/test-results/shots/*.png
+          retention-days: 1
+          if-no-files-found: warn
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: desktop
