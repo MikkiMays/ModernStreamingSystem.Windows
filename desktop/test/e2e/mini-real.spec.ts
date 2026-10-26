@@ -46,14 +46,20 @@ test('мини-окно на настоящей встрече', async () => {
     await main.getByPlaceholder('What should we call you?').fill('host');
     await main.getByRole('button', { name: 'Start meeting' }).click();
     await main.waitForTimeout(6000);
-    const code = (await main.evaluate(() => document.body.innerText)).match(/\d{3}-\d{3}-\d{3}/)?.[0];
+    // Встреча на медленном раннере грузится дольше: код ждём до 30 с.
+    let code: string | undefined;
+    for (let t = 0; t < 60 && !code; t++) {
+      code = (await main.evaluate(() => document.body.innerText)).match(/\d{3}-\d{3}-\d{3}/)?.[0];
+      if (!code) await main.waitForTimeout(500);
+    }
+    if (!code) throw new Error('код встречи не появился');
     console.log('code', code, 'url', main.url());
     for (let i = 0; i < guests; i++) {
       const ctx = await browser.newContext({ locale: 'en-US', permissions: ['microphone'] });
       const g = await ctx.newPage();
       await g.goto(server, { waitUntil: 'networkidle' });
       await g.getByRole('button', { name: 'Skip' }).click({ timeout: 2000 }).catch(() => {});
-      await g.getByPlaceholder('123-456-789').fill(code!);
+      await g.getByPlaceholder('123-456-789').fill(code);
       await g.getByRole('button', { name: 'Join', exact: true }).click();
       await g.waitForTimeout(2500);
       await g.getByPlaceholder('What should we call you?').fill(`guest-${i}`).catch(() => {});
