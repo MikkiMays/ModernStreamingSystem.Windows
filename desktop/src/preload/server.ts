@@ -20,7 +20,7 @@
  * До 30 раз в секунду без лишнего прыжка через main: кольцо говорящего загорается сразу.
  */
 import { contextBridge, ipcRenderer } from 'electron';
-import { CAPTURE_AUDIO_ELEMENT, FEATURES, HOST_MESSAGES, IPC, LEVELS_LIMIT, LEVELS_MESSAGE, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
+import { CAPTURE_AUDIO_ELEMENT, FEATURES, HOST_MESSAGES, IPC, LEVELS_LIMIT, LEVELS_MESSAGE, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, TITLEBAR_HEIGHT, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
 import { PCM_CHUNK_MS, PcmQueue } from './pcm-queue';
 
 const handed = ipcRenderer.sendSync(IPC.bootstrap) as { bootstrap: Bootstrap; version: string; features?: unknown } | null;
@@ -218,7 +218,7 @@ const api: CordDesktopApi = {
   protocol: PROTOCOL,
   features,
   app: { version: handed?.version ?? '', arch: process.arch as 'x64' },
-  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true },
+  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true, titlebarHeight: TITLEBAR_HEIGHT },
   send(type, payload) {
     if ((type as string) === LEVELS_MESSAGE) {
       postLevels(payload);

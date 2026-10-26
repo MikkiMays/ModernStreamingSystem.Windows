@@ -20,6 +20,7 @@ import { installContextMenu } from '../menu';
 import { decideNavigation, isExternalWebLink, ServerOrigin } from '../origins';
 import { OVERLAY_ORIGIN, SHELL_ORIGIN, shellUrl } from '../protocol';
 import type { Settings } from '../settings';
+import { TITLEBAR_HEIGHT } from '../../shared/bridge';
 
 export const SESSION_PARTITION = 'persist:cord';
 
@@ -142,7 +143,7 @@ export class MainWindow {
       ...(process.platform === 'win32'
         ? {
             titleBarStyle: 'hidden' as const,
-            titleBarOverlay: { color: '#00000000', symbolColor: dark ? '#e9ecf1' : '#1a1d24', height: 36 },
+            titleBarOverlay: { color: '#00000000', symbolColor: dark ? '#e9ecf1' : '#1a1d24', height: TITLEBAR_HEIGHT },
             backgroundMaterial: 'mica' as const,
           }
         : { frame: false }),
@@ -249,7 +250,7 @@ export class MainWindow {
   applyTheme(theme: Settings['theme']): void {
     nativeTheme.themeSource = theme;
     if (process.platform === 'win32' && !this.window.isDestroyed())
-      this.window.setTitleBarOverlay({ color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#e9ecf1' : '#1a1d24', height: 36 });
+      this.window.setTitleBarOverlay({ color: '#00000000', symbolColor: nativeTheme.shouldUseDarkColors ? '#e9ecf1' : '#1a1d24', height: TITLEBAR_HEIGHT });
   }
 
   /** Показать и поднять окно — в том числе спрятанное в трей. */

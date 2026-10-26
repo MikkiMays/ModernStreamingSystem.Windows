@@ -13,7 +13,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
-import { featuresFor, IPC, type Bootstrap } from '../shared/bridge';
+import { featuresFor, IPC, TITLEBAR_HEIGHT, type Bootstrap } from '../shared/bridge';
 import { readGameCall, type MiniState, type Validated } from './bridge/messages';
 import { BridgeRouter } from './bridge/router';
 import { appSettingsOf, keepAwake, readAppSettingsPatch, readOffset, settingsPatchOf, type AppSettings } from './app-settings';
@@ -1100,6 +1100,7 @@ class Shell {
       showPing: saved.showPing,
       notificationSounds: saved.notificationSounds,
       autoConnect: entry?.autoConnect ?? saved.autoConnect,
+      titlebarHeight: TITLEBAR_HEIGHT,
     };
   }
 
