@@ -114,6 +114,14 @@ export const HOST_MESSAGES = [
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];
 
+/**
+ * Высота кнопок окна «— ⧉ ×» поверх страницы, DIP. 56 — высота шапки встречи и предвхода: звезда,
+ * ссылка и «Поддержка» стоят с кнопками окна по одной середине (владелец после R122: шапка 56, а не
+ * полоса 36). Странице высота уходит в `bootstrap.titlebarHeight` — веб считает по ней поле шапок.
+ * Окно — `main/windows/main.ts` (`titleBarOverlay`).
+ */
+export const TITLEBAR_HEIGHT = 56;
+
 export interface Bootstrap {
   /** Секрет профиля для этого origin — 43 символа base64url, как писал WinUI. */
   profile: string;
@@ -123,6 +131,8 @@ export interface Bootstrap {
   showPing: boolean;
   notificationSounds: boolean;
   autoConnect: boolean;
+  /** Высота кнопок окна «— ⧉ ×» в DIP (`TITLEBAR_HEIGHT`, с 1.0.10); без неё веб считает 36. */
+  titlebarHeight: number;
 }
 
 export interface CordDesktopApi {
