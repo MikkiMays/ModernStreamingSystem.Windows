@@ -80,9 +80,35 @@ test('мини-окно на настоящей встрече', async () => {
     await mini.waitForTimeout(3000);
     const tiles = await mini.locator('#tiles .tile').evaluateAll((els) => els.map((e) => `${(e as HTMLElement).dataset.id || ''}:${e.textContent?.trim().slice(0, 12)}:tier${(e as HTMLElement).dataset.tier}`));
     console.log('mini tiles', tiles.join(' | '));
+    // Цепочка нажатия: мини-окно (click) → main → страница (mini.action) → mini.state обратно.
+    await mini.evaluate(() => { const w = window as unknown as { clicks: string[] }; w.clicks = []; document.addEventListener('click', (e) => w.clicks.push((e.target as Element).closest('[id]')?.id ?? '?'), true); });
+    await main.evaluate(() => {
+      const w = window as unknown as { seen: unknown[]; sent: unknown[]; cordDesktop: { on(t: string, l: (d: unknown) => void): void; send(t: string, p?: unknown): void } };
+      w.seen = []; w.sent = [];
+      w.cordDesktop.on('mini.action', (d) => w.seen.push(d));
+      const send = w.cordDesktop.send.bind(w.cordDesktop);
+      w.cordDesktop.send = (t, p) => { if (t === 'mini.state') w.sent.push(p); send(t, p); };
+    }).catch((e) => console.log('hook main', String(e)));
+    const consoleLines: string[] = [];
+    main.on('console', (m) => { if (m.type() !== 'debug') consoleLines.push(`${m.type()}: ${m.text().slice(0, 200)}`); });
     const before = await mini.locator('#dock-mic').getAttribute('aria-pressed');
     await osClick(app, mini, '#dock-mic');
-    await expect.poll(() => mini.locator('#dock-mic').getAttribute('aria-pressed'), { timeout: 8000 }).not.toBe(before);
+    try {
+      await expect.poll(() => mini.locator('#dock-mic').getAttribute('aria-pressed'), { timeout: 8000 }).not.toBe(before);
+    } catch (error) {
+      const diag = async (label: string) => console.log(label,
+        '\n  mini clicks', JSON.stringify(await mini.evaluate(() => (window as unknown as { clicks: string[] }).clicks)),
+        '\n  page mini.action', JSON.stringify(await main.evaluate(() => (window as unknown as { seen: unknown[] }).seen).catch(String)),
+        '\n  page mini.state', JSON.stringify(await main.evaluate(() => (window as unknown as { sent: unknown[] }).sent.slice(-2)).catch(String)),
+        '\n  page mic buttons', JSON.stringify(await main.locator('button[aria-label*="icrophone" i]').evaluateAll((els) => els.map((e) => `${e.getAttribute('aria-label')}|${e.getAttribute('aria-pressed')}|${(e as HTMLButtonElement).disabled}`)).catch(String)),
+        '\n  page text', (await main.evaluate(() => document.body.innerText).catch(String)).replace(/\s+/g, ' ').slice(0, 400),
+        '\n  console', consoleLines.slice(-12).join('\n    '));
+      await diag('mic не переключился (мышь Windows)');
+      await mini.locator('#dock-mic').click();
+      await mini.waitForTimeout(3000);
+      await diag(`после нажатия CDP: aria-pressed ${await mini.locator('#dock-mic').getAttribute('aria-pressed')}`);
+      throw error;
+    }
     console.log('mic', before, '→', await mini.locator('#dock-mic').getAttribute('aria-pressed'));
     for (let i = 0; i < 15; i++) { await mainDo(app, i % 2 ? 'hide' : 'focus'); await front(app, i % 2 ? other : { ...other, cord: true, exe: 'Cord.exe' }); await mini.waitForTimeout(300); }
     await front(app, other); await mainDo(app, 'hide');
