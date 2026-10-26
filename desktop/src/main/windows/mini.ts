@@ -25,6 +25,8 @@ export interface MiniHost {
   moved(x: number, y: number): void;
   /** Страница мини-окна загрузилась заново: ей нужен новый порт уровней. */
   loaded(contents: WebContents): void;
+  /** Процесс мини-окна упал или завис — окно убрано; если оно нужно, его создаст `setVisible`. */
+  gone(reason: string): void;
 }
 
 export class MiniWindow {
@@ -79,9 +81,19 @@ export class MiniWindow {
       this.host.loaded(window.webContents);
       for (const [event, payload] of Object.entries(this.state)) window.webContents.send(IPC.shellEvent, event, payload);
     });
+    // Упавшее или зависшее окно поверх всех — прозрачный прямоугольник, который ловит мышь и ни на что
+    // не отвечает: убрать его и создать новое (состояние повторит `did-finish-load`).
+    const drop = (reason: string) => {
+      if (window.isDestroyed()) return;
+      if (this.window === window) this.window = null;
+      window.destroy();
+      this.host.gone(reason);
+    };
+    window.webContents.on('render-process-gone', (_, details) => drop(`упало: ${details.reason}`));
+    window.on('unresponsive', () => drop('не отвечает'));
     void window.loadURL(shellUrl('mini', 'mini'));
     window.on('closed', () => {
-      this.window = null;
+      if (this.window === window) this.window = null;
     });
     return window;
   }
@@ -104,6 +116,7 @@ export class MiniWindow {
       if (this.visible) this.window!.hide();
       return;
     }
+    if (this.window?.isDestroyed()) this.window = null;
     this.window ??= this.create(position, expanded);
     if (!this.window.isVisible()) {
       // Монитор с запомненным местом могли отключить — окно возвращается на видимый экран.

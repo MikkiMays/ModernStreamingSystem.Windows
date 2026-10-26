@@ -94,12 +94,15 @@ describe('readPageMessage — границы, как BridgeProtocol.Read', () =>
   });
   it('mini.state (R93) — форма мини-окна звонка', () => {
     expect(readPageMessage('mini.state', { room: 'Пятница', self: 'p-1', mic: true, camera: false, screen: true, unread: 3, count: 4 })).toEqual({
-      type: 'mini.state', state: { room: 'Пятница', self: 'p-1', mic: true, camera: false, screen: true, unread: 3, count: 4 },
+      type: 'mini.state', state: { room: 'Пятница', self: 'p-1', mic: true, camera: false, screen: true, unread: 3, count: 4, status: 'connected', remaining: 0 },
     });
-    expect(readPageMessage('mini.state', {})).toEqual({ type: 'mini.state', state: { room: '', self: '', mic: false, camera: false, screen: false, unread: 0, count: 0 } });
+    expect(readPageMessage('mini.state', {})).toEqual({ type: 'mini.state', state: { room: '', self: '', mic: false, camera: false, screen: false, unread: 0, count: 0, status: 'connected', remaining: 0 } });
     expect(readPageMessage('mini.state', { unread: 5000, count: -2 })).toMatchObject({ state: { unread: 999, count: 0 } });
     expect(readPageMessage('mini.state', { room: 'x'.repeat(81) })).toBeNull();
     expect(readPageMessage('mini.state', { self: 'не id' })).toBeNull();
+    expect(readPageMessage('mini.state', { status: 'recovering', remaining: 17 }), 'связь восстанавливается').toMatchObject({ state: { status: 'recovering', remaining: 17 } });
+    expect(readPageMessage('mini.state', { status: 'connecting', remaining: 17 }), 'секунды — только при восстановлении').toMatchObject({ state: { status: 'connecting', remaining: 0 } });
+    expect(readPageMessage('mini.state', { status: 'ended' }), 'чужое значение — как веб до status').toMatchObject({ state: { status: 'connected' } });
   });
   it('games.set / games.forget (R62) — только имя exe', () => {
     expect(readGameCall('games.set', { exe: 'CS2.exe', enabled: false })).toEqual({ exe: 'cs2.exe', enabled: false });

@@ -46,6 +46,8 @@ export interface MainWindowHost {
   onSessionEnd(): void;
   /** Фокус и видимость окна изменились. */
   onWindowState(state: WindowState): void;
+  /** Процесс страницы упал (`render-process-gone`): встречи в нём больше нет. */
+  onPageGone(reason: string): void;
   /** Закрытие окна в звонке: ждать `close.ready` ≤ 2,5 с. */
   requestClose(): Promise<void>;
   log(message: string): void;
@@ -162,7 +164,10 @@ export class MainWindow {
     if (saved?.maximized) this.window.maximize();
     guardNavigation(this.window.webContents, host);
     installContextMenu(this.window.webContents);
-    this.window.webContents.on('render-process-gone', (_, details) => host.log(`рендерер упал: ${details.reason}`));
+    this.window.webContents.on('render-process-gone', (_, details) => {
+      host.log(`рендерер упал: ${details.reason}`);
+      host.onPageGone(details.reason);
+    });
     this.window.on('close', (event) => {
       if (this.closing) return;
       if (host.closeAction() === 'hide') {
@@ -203,7 +208,10 @@ export class MainWindow {
 
   state(): WindowState {
     if (this.window.isDestroyed()) return { focused: false, visible: false };
-    return { focused: this.window.isFocused(), visible: this.window.isVisible() && !this.window.isMinimized() };
+    const visible = this.window.isVisible() && !this.window.isMinimized();
+    // Спрятанное окно может считаться «в фокусе» (после перезагрузки страницы, когда оно в трее), но
+    // смотреть в него нельзя: иначе мини-окно не появится, пока Cord не покажут и не спрячут заново.
+    return { focused: visible && this.window.isFocused(), visible };
   }
 
   remember(): void {
@@ -231,6 +239,11 @@ export class MainWindow {
       await this.showOffline(origin);
       return false;
     }
+  }
+
+  /** Загрузить страницу заново (после падения процесса страницы). */
+  reload(): void {
+    if (!this.window.isDestroyed()) this.window.webContents.reload();
   }
 
   applyTheme(theme: Settings['theme']): void {

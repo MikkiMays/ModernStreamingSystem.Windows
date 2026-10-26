@@ -19,6 +19,8 @@
   --accent-fill: #3564f3;
   --danger-fill: #d4323a;
   --danger-fill-hover: #b8262e;
+  --warning: #f2c14e;
+  --warning-veil: rgb(242 193 78 / 0.12);
   --face-0-bg: #d9e4fc; --face-0: #315589;
   --face-1-bg: #e7dcf6; --face-1: #72528d;
   --face-2-bg: #d8ede8; --face-2: #2f6a5a;
@@ -34,6 +36,7 @@
 html, body { margin: 0; background: transparent; overflow: hidden; }
 body {
   font: 14px/1.3 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
   color: var(--stage-text);
   user-select: none;
   -webkit-user-select: none;
@@ -62,6 +65,14 @@ button { appearance: none; border: 0; font: inherit; color: inherit; background:
 .bar__button { -webkit-app-region: no-drag; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--stage-muted); }
 .bar__button:hover { background: var(--stage-glint-1); color: var(--stage-text); }
 .mini[data-mode='compact'] #compact { display: none; }
+
+/* Связь со звуком восстанавливается: полоса над плитками, кнопки микрофона, камеры и показа погашены. */
+.link { display: flex; align-items: center; gap: 6px; margin: 0 12px 8px; padding: 6px 10px; border-radius: 8px; background: var(--warning-veil); color: var(--warning); font-size: 12px; font-weight: 500; }
+.link[hidden] { display: none; }
+.link__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link__seconds { flex: none; font-weight: 600; }
+button:disabled { opacity: 0.38; pointer-events: none; }
+.mini[data-link='recovering'] .tile .face, .mini[data-link='connecting'] .tile .face { opacity: 0.6; }
 
 .tiles { display: grid; gap: 6px; padding: 0 12px; }
 .tile {

@@ -64,6 +64,11 @@ export interface ShellText {
   miniOpen: string;
   miniMore: string;
   miniCompact: string;
+  /** Связь со звуком восстанавливается / ещё не установлена — полоса в мини-окне (как шапка встречи). */
+  miniRecovering: string;
+  miniConnecting: string;
+  /** Секунды до конца ожидания связи: `{n}` — число. */
+  miniSeconds: string;
   stateOn: string;
   stateOff: string;
   camera: string;
@@ -122,6 +127,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Открыть Cord',
     miniMore: 'Ещё',
     miniCompact: 'Компактно',
+    miniRecovering: 'Связь восстанавливается…',
+    miniConnecting: 'Подключаемся…',
+    miniSeconds: '{n} с',
     stateOn: 'вкл.',
     stateOff: 'выкл.',
     camera: 'Камера',
@@ -176,6 +184,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Open Cord',
     miniMore: 'More',
     miniCompact: 'Compact',
+    miniRecovering: 'Reconnecting…',
+    miniConnecting: 'Connecting…',
+    miniSeconds: '{n} s',
     stateOn: 'on',
     stateOff: 'off',
     camera: 'Camera',
@@ -230,6 +241,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Cord öffnen',
     miniMore: 'Mehr',
     miniCompact: 'Kompakt',
+    miniRecovering: 'Verbindung wird wiederhergestellt…',
+    miniConnecting: 'Verbinden…',
+    miniSeconds: '{n} s',
     stateOn: 'an',
     stateOff: 'aus',
     camera: 'Kamera',
@@ -284,6 +298,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Abrir Cord',
     miniMore: 'Más',
     miniCompact: 'Compacto',
+    miniRecovering: 'Restableciendo la conexión…',
+    miniConnecting: 'Conectando…',
+    miniSeconds: '{n} s',
     stateOn: 'activado',
     stateOff: 'desactivado',
     camera: 'Cámara',
@@ -338,6 +355,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Ouvrir Cord',
     miniMore: 'Plus',
     miniCompact: 'Compact',
+    miniRecovering: 'Rétablissement de la connexion…',
+    miniConnecting: 'Connexion…',
+    miniSeconds: '{n} s',
     stateOn: 'activé',
     stateOff: 'désactivé',
     camera: 'Caméra',
@@ -392,6 +412,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Apri Cord',
     miniMore: 'Altro',
     miniCompact: 'Compatto',
+    miniRecovering: 'Ripristino della connessione…',
+    miniConnecting: 'Connessione…',
+    miniSeconds: '{n} s',
     stateOn: 'attivo',
     stateOff: 'disattivato',
     camera: 'Fotocamera',
@@ -446,6 +469,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: 'Abrir o Cord',
     miniMore: 'Mais',
     miniCompact: 'Compacto',
+    miniRecovering: 'Restabelecendo a conexão…',
+    miniConnecting: 'Conectando…',
+    miniSeconds: '{n} s',
     stateOn: 'ligado',
     stateOff: 'desligado',
     camera: 'Câmera',
@@ -500,6 +526,9 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     miniOpen: '打开 Cord',
     miniMore: '更多',
     miniCompact: '紧凑',
+    miniRecovering: '正在恢复连接…',
+    miniConnecting: '正在连接…',
+    miniSeconds: '{n} 秒',
     stateOn: '开',
     stateOff: '关',
     camera: '摄像头',
