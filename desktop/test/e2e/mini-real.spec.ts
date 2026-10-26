@@ -1,5 +1,6 @@
 /** Мини-окно на настоящей встрече: клиент создаёт встречу, заходят N участников из Chrome без аватаров. */
 import { _electron as electron, chromium, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { osClick } from './os-click';
 
@@ -52,7 +53,12 @@ test('мини-окно на настоящей встрече', async () => {
       code = (await main.evaluate(() => document.body.innerText)).match(/\d{3}-\d{3}-\d{3}/)?.[0];
       if (!code) await main.waitForTimeout(500);
     }
-    if (!code) throw new Error('код встречи не появился');
+    if (!code) {
+      mkdirSync(join(root, 'test-results', 'shots'), { recursive: true });
+      await main.screenshot({ path: join(root, 'test-results', 'shots', 'mini-real-no-code.png') }).catch(() => {});
+      console.log('url', main.url(), 'errors', errors.join(' / '), '\ntext', (await main.evaluate(() => document.body.innerText)).slice(0, 800));
+      throw new Error('код встречи не появился');
+    }
     console.log('code', code, 'url', main.url());
     for (let i = 0; i < guests; i++) {
       const ctx = await browser.newContext({ locale: 'en-US', permissions: ['microphone'] });
