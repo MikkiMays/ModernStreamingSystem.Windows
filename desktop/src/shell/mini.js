@@ -2,7 +2,9 @@
 // плиток (показ экрана первым, затем тот, кто говорил последним) и пульт: микрофон, показ, «ещё»;
 // развёрнутое — своя плитка, всё управление звонком и красная «Выйти из встречи». Нажатия уходят в
 // main (`mini.action`), состояние встречи — `mini.state`, состав — `overlay.roster`, кто говорит —
-// по порту уровней прямо со страницы встречи (`overlay.levels`).
+// по порту уровней прямо со страницы встречи (`overlay.levels`). Пока связь со звуком восстанавливается
+// (`state.status`), встреча не исполняет микрофон, камеру и показ — эти кнопки погашены, сверху полоса
+// «Связь восстанавливается… 18 с», кольца говорящих сняты.
 (() => {
   const $ = (id) => document.getElementById(id);
   const mini = $('mini');
@@ -10,16 +12,26 @@
   /** Порядок плиток пересчитывается не чаще раза в секунду: плитки не прыгают на каждом «угу». */
   const REORDER_MS = 1000;
   const SLOTS = 3;
+  /** Уровни перестали приходить дольше этого — кольца гаснут, а не светятся последним «угу». */
+  const LEVELS_STALE_MS = 1500;
 
   let config = { expanded: false, language: 'ru', text: {} };
-  let state = { room: '', self: '', mic: false, camera: false, screen: false, unread: 0, count: 0 };
+  let state = { room: '', self: '', mic: false, camera: false, screen: false, unread: 0, count: 0, status: 'connected', remaining: 0 };
   let people = [];
   const tiers = new Map();
   /** Когда человек говорил последний раз (ступень ≥ 2). */
   const spoke = new Map();
   let order = [];
+  let levelsAt = 0;
 
-  const act = (id) => void window.cordShell.call('mini.action', { id });
+  /** Встреча исполняет микрофон, камеру и показ — только пока связь идёт (как пульт встречи). */
+  const live = () => state.status === 'connected';
+  /** Это встреча исполняет только при связи — без неё нажатие не уходит, даже если кнопка не успела погаснуть. */
+  const NEEDS_LINK = new Set(['mic', 'camera', 'screen']);
+  const act = (id) => {
+    if (NEEDS_LINK.has(id) && !live()) return;
+    void window.cordShell.call('mini.action', { id });
+  };
   for (const button of document.querySelectorAll('[data-action]')) button.addEventListener('click', () => act(button.dataset.action));
   $('bar').addEventListener('dblclick', (event) => {
     if (event.target.closest('button')) return;
@@ -67,6 +79,27 @@
     if (pressed !== undefined) element.setAttribute('aria-pressed', String(pressed));
   }
 
+  /** Полоса связи: текст и секунды. Секунды меняются раз в секунду — только они, без перерисовки плиток. */
+  function renderLink() {
+    const text = config.text;
+    const link = $('link');
+    link.hidden = live();
+    if (link.hidden) return;
+    const label = state.status === 'recovering' ? text.recovering || '' : text.connecting || '';
+    const seconds = state.status === 'recovering' && state.remaining > 0 ? (text.seconds || '{n}').replace('{n}', String(state.remaining)) : '';
+    let caption = link.querySelector('.link__text');
+    let count = link.querySelector('.link__seconds');
+    if (!caption || !count) {
+      caption = document.createElement('span');
+      caption.className = 'link__text';
+      count = document.createElement('b');
+      count.className = 'link__seconds';
+      link.replaceChildren(window.cordIcon('wifi', 14), caption, count);
+    }
+    if (caption.textContent !== label) caption.textContent = label;
+    if (count.textContent !== seconds) count.textContent = seconds;
+  }
+
   function others() {
     return people.filter((person) => person.id !== state.self);
   }
@@ -92,6 +125,7 @@
       stop.className = 'tile__stop';
       stop.type = 'button';
       button(stop, 'monitor-x', text.stopShare || '');
+      stop.disabled = !live();
       stop.addEventListener('click', () => act('screen'));
       share.append(label, stop);
       list.push(share);
@@ -113,14 +147,18 @@
     button($('dock-mic'), state.mic ? 'mic' : 'mic-off', state.mic ? text.micMute || '' : text.micUnmute || '', state.mic);
     button($('dock-screen'), state.screen ? 'monitor-x' : 'monitor-up', state.screen ? text.stopShare || '' : text.screenShare || '');
     $('dock-screen').dataset.live = String(state.screen);
+    $('dock-mic').disabled = !live();
+    $('dock-screen').disabled = !live();
     button($('dock-more'), 'more', text.more || '');
   }
 
-  function action(id, icon, label, extra, live) {
+  function action(id, icon, label, extra, on, disabled) {
     const element = document.createElement('button');
     element.type = 'button';
     element.className = 'action';
-    element.dataset.live = String(!!live);
+    element.dataset.action = id;
+    element.dataset.live = String(!!on);
+    element.disabled = !!disabled;
     element.append(window.cordIcon(icon, 20), document.createTextNode(label));
     if (extra) element.append(extra);
     element.addEventListener('click', () => act(id));
@@ -148,9 +186,9 @@
     own.id = 'self';
     $('self').replaceWith(own);
     $('actions').replaceChildren(
-      action('mic', state.mic ? 'mic' : 'mic-off', text.microphone || '', small(state.mic ? text.on || '' : text.off || '')),
-      action('camera', state.camera ? 'video' : 'video-off', text.camera || '', small(state.camera ? text.on || '' : text.off || '')),
-      action('screen', 'monitor-up', text.screenShare || '', state.screen ? small(text.screenStop || '') : null, state.screen),
+      action('mic', state.mic ? 'mic' : 'mic-off', text.microphone || '', small(state.mic ? text.on || '' : text.off || ''), false, !live()),
+      action('camera', state.camera ? 'video' : 'video-off', text.camera || '', small(state.camera ? text.on || '' : text.off || ''), false, !live()),
+      action('screen', 'monitor-up', text.screenShare || '', state.screen ? small(text.screenStop || '') : null, state.screen, !live()),
       action('people', 'users', text.people || '', state.count ? badge(state.count, false) : null),
       action('chat', 'message', text.chat || '', state.unread ? badge(state.unread, true) : null),
       action('settings', 'sliders', text.soundSettings || ''),
@@ -168,6 +206,9 @@
     button($('compact'), 'minimize-2', text.compact || '');
     button($('collapse'), 'minus', text.collapse || '');
     button($('open'), 'maximize-2', text.open || '');
+    mini.dataset.link = state.status;
+    renderLink();
+    if (!live()) applyLevels([]);
     if (config.expanded) renderExpanded();
     else renderCompact();
   }
@@ -175,8 +216,9 @@
   /** Уровни с порта: кольца у плиток — точечно; порядок плиток — по таймеру. */
   function applyLevels(levels) {
     const now = Date.now();
+    levelsAt = now;
     tiers.clear();
-    for (const entry of Array.isArray(levels) ? levels : []) {
+    for (const entry of Array.isArray(levels) && live() ? levels : []) {
       if (!Array.isArray(entry)) continue;
       const tier = Number(entry[1]) || 0;
       tiers.set(String(entry[0]), tier);
@@ -189,6 +231,7 @@
   }
 
   setInterval(() => {
+    if (tiers.size && Date.now() - levelsAt > LEVELS_STALE_MS) applyLevels([]);
     if (config.expanded) return;
     const before = order.join(',');
     reorder();
@@ -206,7 +249,10 @@
   });
   window.cordShell.on('mini.state', (next) => {
     if (!next || typeof next !== 'object') return;
+    const before = { ...state, remaining: 0 };
     state = { ...state, ...next };
+    // Пока связь восстанавливается, меняются только секунды — плитки и пульт не перерисовываются.
+    if (JSON.stringify(before) === JSON.stringify({ ...state, remaining: 0 })) return renderLink();
     reorder();
     render();
   });

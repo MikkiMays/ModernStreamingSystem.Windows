@@ -1,4 +1,8 @@
-/** Мини-окно на настоящей встрече: клиент создаёт встречу, заходят N участников из Chrome без аватаров. */
+/**
+ * Мини-окно на настоящей встрече: клиент создаёт встречу, заходят N участников из Chrome без аватаров.
+ * Создаёт встречи на сервере и зависит от его связи — только по просьбе (`CORD_MINI_REAL=1`); всё, что
+ * в мини-окне нажимается, без сервера проверяет `mini-ui.spec.ts`.
+ */
 import { _electron as electron, chromium, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -30,6 +34,7 @@ const mainDo = (app: ElectronApplication, what: string) =>
   }, { server, what });
 
 test('мини-окно на настоящей встрече', async () => {
+  test.skip(process.env.CORD_MINI_REAL !== '1', 'встречи на сервере — только с CORD_MINI_REAL=1');
   test.setTimeout(300_000);
   const app = await electron.launch({
     args: [root, '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],

@@ -46,6 +46,13 @@ export interface MiniState {
   unread: number;
   /** Сколько людей во встрече. */
   count: number;
+  /**
+   * Связь со звуком: пока `recovering`, встреча не исполняет микрофон, камеру и показ — мини-окно их
+   * гасит и пишет, что связь восстанавливается. Веб до этого поля его не шлёт — тогда `connected`.
+   */
+  status: 'connecting' | 'connected' | 'recovering';
+  /** Секунд до конца ожидания связи (пока `recovering`). */
+  remaining: number;
 }
 
 export interface RoomRef {
@@ -241,7 +248,17 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       const count = (value: unknown) => (typeof value === 'number' && Number.isInteger(value) && value >= 0 ? Math.min(value, 999) : 0);
       return {
         type: kind,
-        state: { room, self, mic: data.mic === true, camera: data.camera === true, screen: data.screen === true, unread: count(data.unread), count: count(data.count) },
+        state: {
+          room,
+          self,
+          mic: data.mic === true,
+          camera: data.camera === true,
+          screen: data.screen === true,
+          unread: count(data.unread),
+          count: count(data.count),
+          status: data.status === 'recovering' || data.status === 'connecting' ? data.status : 'connected',
+          remaining: data.status === 'recovering' ? count(data.remaining) : 0,
+        },
       };
     }
   }

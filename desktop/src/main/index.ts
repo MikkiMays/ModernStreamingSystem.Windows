@@ -210,6 +210,10 @@ class Shell {
   private readonly mini = new MiniWindow(this.preloadDir, {
     moved: (x, y) => void this.settings.update({ mini: { ...this.settings.get().mini, x, y } }),
     loaded: (contents) => this.pairLevels('mini', contents),
+    gone: (reason) => {
+      log(`мини-окно ${reason} — создаём заново`);
+      this.updateMini();
+    },
   });
   private main: MainWindow | null = null;
   private splash: SplashWindow | null = null;
@@ -244,6 +248,8 @@ class Shell {
    * пустое окно и кнопка, на которую страница не ответит, хуже, чем ничего.
    */
   private rosterSeen = false;
+  /** Когда процесс страницы упал в последний раз (`onPageGone`). */
+  private pageGoneAt = 0;
   private miniState: MiniState | null = null;
   /** «—» в мини-окне: спрятать до следующего возврата в Cord. */
   private miniDismissed = false;
@@ -371,9 +377,31 @@ class Shell {
       this.router.post('window.state', { ...state });
       this.updateMini();
     },
+    onPageGone: (reason: string) => this.onPageGone(reason),
     requestClose: () => this.requestClose(),
     log,
   };
+
+  /**
+   * Процесс страницы упал. Звонка в нём больше нет: мини-окно, оверлей, трей и кнопки на панели задач
+   * не должны показывать прежнюю встречу с кнопками, которые некому исполнить («окошко не отвечает»).
+   * Страница загружается заново; упала снова за 30 с — страница «нет связи» с «Повторить», а не круг
+   * падений.
+   */
+  private onPageGone(reason: string): void {
+    this.stopCaptureAudio(false);
+    this.rosterSeen = false;
+    this.miniState = null;
+    this.overlay.roster({ participants: [] });
+    this.updateCall({ inCall: false, mic: false, camera: false, screen: false });
+    const main = this.main;
+    if (!main || main.window.isDestroyed() || reason === 'clean-exit') return;
+    const now = Date.now();
+    const again = now - this.pageGoneAt < 30_000;
+    this.pageGoneAt = now;
+    if (again) void main.showOffline(this.currentOrigin());
+    else main.reload();
+  }
 
   /** Окно спрятано по крестику (R57): один раз сказать, что Cord живёт в трее; встреча продолжается. */
   private onMainHidden(): void {
@@ -770,25 +798,29 @@ class Shell {
 
   // ----- мини-окно звонка (R93) -----
 
-  /** Видно ли мини-окно (`mini-policy.ts`); появление — через 400 мс, уход — сразу. */
-  private updateMini(): void {
+  /** Нужно ли сейчас мини-окно (`mini-policy.ts`). */
+  private miniWanted(): boolean {
     const main = this.main && !this.main.window.isDestroyed() ? this.main : null;
     const state = main ? main.state() : null;
     if (state?.focused) this.miniDismissed = false;
     const foreground = this.foreground;
     let sameDisplay: boolean | null = null;
     if (main && state?.visible && foreground) sameDisplay = screen.getDisplayMatching(main.window.getBounds()).id === displayFor(foreground.monitor).id;
-    const saved = this.settings.get();
-    const show = decideMini({
+    return decideMini({
       inCall: this.call.inCall && !!this.miniState,
-      enabled: saved.mini.enabled,
+      enabled: this.settings.get().mini.enabled,
       dismissed: this.miniDismissed,
       main: main && state ? { exists: true, ...state } : null,
       foreground: foreground ? { cord: foreground.cord, fullscreen: foreground.fullscreen } : null,
       overlayVisible: this.overlay.visible,
       sameDisplay,
     });
-    if (!show) {
+  }
+
+  /** Видно ли мини-окно; появление — через 400 мс, уход — сразу. */
+  private updateMini(): void {
+    const saved = this.settings.get();
+    if (!this.miniWanted()) {
       if (this.miniTimer) clearTimeout(this.miniTimer);
       this.miniTimer = null;
       this.mini.setVisible(false, saved.mini, saved.mini.expanded);
@@ -797,10 +829,10 @@ class Shell {
     if (this.mini.visible || this.miniTimer) return;
     this.miniTimer = setTimeout(() => {
       this.miniTimer = null;
-      // Через 400 мс всё могло вернуться (Alt+Tab туда и обратно) — решить заново.
+      // Через 400 мс всё могло вернуться (Alt+Tab туда и обратно) или впереди встало окно во весь
+      // экран — решить заново тем же правилом.
+      if (!this.miniWanted()) return;
       const still = this.settings.get();
-      const now = this.main && !this.main.window.isDestroyed() ? this.main.state() : null;
-      if (!now || now.focused || !this.call.inCall || !this.miniState || this.miniDismissed || !still.mini.enabled || this.overlay.visible) return;
       this.mini.setVisible(true, still.mini, still.mini.expanded);
     }, MINI_DELAY_MS);
   }
@@ -815,6 +847,7 @@ class Shell {
         label: text.miniLabel, collapse: text.miniCollapse, open: text.miniOpen, more: text.miniMore, compact: text.miniCompact, on: text.stateOn, off: text.stateOff,
         microphone: text.microphone, micMute: text.micMute, micUnmute: text.micUnmute, camera: text.camera, screenShare: text.screenShare, screenStop: text.screenStop,
         youShare: text.youShare, stopShare: text.stopShare, people: text.people, chat: text.chat, soundSettings: text.soundSettings, leave: text.leave, you: text.you,
+        recovering: text.miniRecovering, connecting: text.miniConnecting, seconds: text.miniSeconds,
       },
     };
   }
