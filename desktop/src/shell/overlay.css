@@ -15,7 +15,6 @@
   --stage-muted: #a9b2c1;
   --stage-veil-3: rgb(10 12 17 / 0.86);
   --pill: rgb(10 12 17 / 0.72);
-  --pill-speaking: rgb(69 209 127 / 0.24);
   --brand-games: #8b5cf6;
   --face-0-bg: #d9e4fc; --face-0: #315589;
   --face-1-bg: #e7dcf6; --face-1: #72528d;
@@ -153,7 +152,7 @@ body[data-locked='false'] .widget.dragging { cursor: grabbing; }
   text-shadow: 0 1px 2px rgb(0 0 0 / 0.5);
   transition: background-color 90ms var(--ease-standard), opacity 160ms var(--ease-standard), transform 160ms var(--ease-standard);
 }
-.person:not([data-tier='0']) .name { background: var(--pill-speaking); }
+/* Имена у всех на одной плашке: говорящего выделяет кольцо, а не зелёная плашка среди тёмных (R127, как образец в настройках). */
 .widget[data-names='never'] .name { display: none; }
 .widget[data-names='speaking'] .person[data-tier='0'] .name { opacity: 0; transform: translateX(-4px); }
 .corner[data-corner$='r'] .widget[data-names='speaking'] .person[data-tier='0'] .name { transform: translateX(4px); }
