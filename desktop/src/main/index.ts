@@ -8,7 +8,7 @@
  *
  * Версия приложения нигде не показывается, кроме «О программе» в вебе (`invoke('update.status')`).
  */
-import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, MessageChannelMain, net, powerSaveBlocker, safeStorage, screen, utilityProcess, type WebContents } from 'electron';
+import { app, BrowserWindow, desktopCapturer, dialog, globalShortcut, ipcMain, MessageChannelMain, net, powerMonitor, powerSaveBlocker, safeStorage, screen, utilityProcess, type WebContents } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, type PathLike } from 'node:fs';
 import type { KeyObject } from 'node:crypto';
@@ -30,7 +30,7 @@ import { readInstallerLanguage, shellLanguage, type Language } from './language'
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
-import { decideMini, MINI_DELAY_MS } from './mini-policy';
+import { decideMini, displayNeedsRebuild, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
@@ -177,8 +177,9 @@ class Shell {
         this.router.post('chat.open');
       },
       openSettings: () => this.handleDeepLink({ kind: 'settings' }),
-      // «Микрофон» трея — нажатие мини-окна (R138): кнопок на миниатюре и их сообщения `thumbar` больше нет.
-      toggleMicrophone: () => void this.router.post('mini.action', { id: 'mic' }),
+      // «Микрофон» трея — нажатие мини-окна с нужным состоянием (R137, R138): кнопок на миниатюре и их
+      // сообщения `thumbar` больше нет; веб до R137 исполняет его как «переключить».
+      toggleMicrophone: () => void this.router.post('mini.action', { id: 'mic', want: !this.call.mic }),
       toggleNotifications: () => this.applyAppSettings({ notifications: !this.settings.get().notifications }, true),
       quit: () => void this.trayQuit(),
     },
@@ -211,11 +212,22 @@ class Shell {
   private readonly mini = new MiniWindow(this.preloadDir, {
     moved: (x, y) => void this.settings.update({ mini: { ...this.settings.get().mini, x, y } }),
     loaded: (contents) => this.pairLevels('mini', contents),
-    gone: (reason) => {
-      log(`мини-окно ${reason} — создаём заново`);
+    gone: () => {
+      // Окно убрано: во встрече — новое заранее (порт уровней, состояние), видно ли — решит правило.
+      const mini = this.settings.get().mini;
+      if (this.call.inCall && mini.enabled) {
+        this.mini.prepare(mini, mini.expanded);
+        this.mini.send('mini.config', this.miniConfig());
+      }
       this.updateMini();
     },
+    // Пропуски кадров не считаются, пока человек не трогает мышь и клавиатуру (экран мог погаснуть).
+    // Дымовой прогон мышь не двигает — там человек «всегда смотрит».
+    active: () => smoke || powerMonitor.getSystemIdleState(MINI_WATCH.idleSeconds) === 'active',
+    log,
   });
+  /** Смена мониторов приходит пачкой событий — окно пересоздаётся один раз. */
+  private displayTimer: ReturnType<typeof setTimeout> | null = null;
   private main: MainWindow | null = null;
   private splash: SplashWindow | null = null;
   private servers: ServersWindow | null = null;
@@ -279,6 +291,7 @@ class Shell {
     configureSession(cordSession(), this.windowHost);
     this.router.install();
     this.installShellCalls();
+    this.installMiniRecovery();
     this.installDisplayMedia();
     this.installCaptureAudio();
     this.native.start();
@@ -857,37 +870,89 @@ class Shell {
   /**
    * Нажатие в мини-окне. Микрофон, камера и выход исполняет веб, не поднимая Cord; участники, чат,
    * настройки и начало показа (окно выбора) — в окне Cord, оно выходит вперёд.
+   *
+   * С R137 нажатие несёт нужное состояние (`want`: включить или выключить, а не «переключить» — два
+   * быстрых нажатия до нового состояния не отменяют друг друга) и номер (`seq`). На номер мини-окну
+   * приходит `mini.ack`: от main — сразу, если нажатие исполняет он сам или странице его не доставить;
+   * иначе — от страницы. Веб до R137 не отвечает: «ожидание» снимет новое состояние или тайм-аут.
    */
-  private onMiniAction(id: string): void {
+  private onMiniAction(id: string, want: boolean | undefined, seq: number | undefined): void {
+    const ack = (result: 'ok' | 'ignored', reason?: string) => {
+      if (seq !== undefined) this.mini.event('mini.ack', { seq, result, ...(reason ? { reason } : {}) });
+    };
+    const toPage = () => {
+      const delivered = this.router.post('mini.action', { id, ...(want !== undefined ? { want } : {}), ...(seq !== undefined ? { seq } : {}) });
+      if (!delivered) ack('ignored', 'page');
+    };
     switch (id) {
       case 'open':
         this.focus();
+        ack('ok');
         return;
       case 'collapse':
         this.miniDismissed = true;
         this.updateMini();
+        ack('ok');
         return;
       case 'expand':
       case 'compact':
         this.settings.update({ mini: { ...this.settings.get().mini, expanded: id === 'expand' } });
         this.mini.send('mini.config', this.miniConfig());
+        ack('ok');
         return;
       case 'mic':
       case 'camera':
       case 'leave':
-        this.router.post('mini.action', { id });
+        toPage();
         return;
       case 'screen':
-        if (!this.call.screen) this.focus();
-        this.router.post('mini.action', { id });
+        // Начать показ — окно выбора в Cord; остановить — без него.
+        if (want ?? !this.call.screen) this.focus();
+        toPage();
         return;
       case 'people':
       case 'chat':
       case 'settings':
         this.focus();
-        this.router.post('mini.action', { id });
+        toPage();
         return;
+      default:
+        ack('ignored', 'unknown');
     }
+  }
+
+  /**
+   * Самовосстановление мини-окна (R137): после сна, разблокировки экрана, сброса процесса GPU и смены
+   * мониторов (размер, масштаб, поворот) окно пересоздаётся — его поверхность могла умереть, а страница
+   * при этом жива («замёрзшее» окно, Electron #37361, #40578). Пока экран заблокирован или система спит,
+   * сторож кадров не считает пропуски. Не чаще `MINI_REBUILDS` — это решает `MiniWindow.rebuild`.
+   */
+  private installMiniRecovery(): void {
+    powerMonitor.on('suspend', () => this.mini.pause(true));
+    powerMonitor.on('lock-screen', () => this.mini.pause(true));
+    powerMonitor.on('resume', () => {
+      this.mini.pause(false);
+      this.mini.rebuild('после сна', false);
+    });
+    powerMonitor.on('unlock-screen', () => {
+      this.mini.pause(false);
+      this.mini.rebuild('после блокировки экрана', false);
+    });
+    app.on('child-process-gone', (_, details) => {
+      if (details.type === 'GPU') this.mini.rebuild(`процесс GPU: ${details.reason}`, false);
+    });
+    const displays = (reason: string) => {
+      if (this.displayTimer) clearTimeout(this.displayTimer);
+      this.displayTimer = setTimeout(() => {
+        this.displayTimer = null;
+        this.mini.rebuild(reason, false);
+      }, 1000);
+    };
+    screen.on('display-added', () => displays('монитор подключён'));
+    screen.on('display-removed', () => displays('монитор отключён'));
+    screen.on('display-metrics-changed', (_, _display, changed) => {
+      if (displayNeedsRebuild(changed)) displays(`монитор изменился (${changed.join(', ')})`);
+    });
   }
 
   /**
@@ -1171,6 +1236,8 @@ class Shell {
         return;
       case 'overlay.roster':
         this.rosterSeen = true;
+        // Записи не по схеме пропущены, остальные пришли (R137) — в журнал, чтобы было видно, кого нет.
+        if (message.skipped) log(`мост: в составе пропущено записей: ${message.skipped}`);
         this.overlay.roster({ participants: message.participants });
         this.mini.send('overlay.roster', { participants: message.participants });
         return;
@@ -1184,6 +1251,10 @@ class Shell {
         if (first) this.updateMini();
         return;
       }
+      case 'mini.ack':
+        // Ответ встречи на нажатие (R137): мини-окно снимает «ожидание» с кнопки.
+        this.mini.event('mini.ack', { seq: message.seq, result: message.result, ...(message.reason ? { reason: message.reason } : {}) });
+        return;
       case 'notify':
         // «Уведомления» выключены в меню трея (R103) — Windows их не показывает.
         if (!this.settings.get().notifications) return;
@@ -1514,10 +1585,30 @@ class Shell {
           if (event.sender.id !== this.overlay.contents?.id) return null;
           this.closeGoLive();
           return true;
-        // Мини-окно звонка: нажатия и размер по содержимому (R93).
-        case 'mini.action':
+        // Мини-окно звонка: нажатия и размер по содержимому (R93); ответ сторожу, «пришли всё заново»
+        // и перетаскивание (R137).
+        case 'mini.action': {
           if (event.sender.id !== this.mini.contents?.id || typeof data.id !== 'string') return null;
-          this.onMiniAction(data.id);
+          const want = typeof data.want === 'boolean' ? data.want : undefined;
+          const seq = typeof data.seq === 'number' && Number.isInteger(data.seq) && data.seq >= 0 ? data.seq : undefined;
+          this.onMiniAction(data.id, want, seq);
+          return true;
+        }
+        case 'mini.pong':
+          if (event.sender.id !== this.mini.contents?.id) return null;
+          if (typeof data.seq === 'number') this.mini.pong(data.seq);
+          return true;
+        case 'mini.resync':
+          // Кнопка не дождалась ответа встречи: мини-окну — всё, что знает main, странице — прислать заново.
+          if (event.sender.id !== this.mini.contents?.id) return null;
+          this.mini.resync();
+          this.router.post('mini.resync');
+          return true;
+        case 'mini.drag':
+          if (event.sender.id !== this.mini.contents?.id) return null;
+          if (data.phase === 'start') this.mini.dragStart();
+          else if (data.phase === 'move' && typeof data.dx === 'number' && typeof data.dy === 'number') this.mini.dragMove(data.dx, data.dy);
+          else if (data.phase === 'end') this.mini.dragEnd();
           return true;
         case 'mini.size':
           if (event.sender.id !== this.mini.contents?.id) return null;

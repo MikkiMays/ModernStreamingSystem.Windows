@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isPageCall, readGameCall, readPageMessage, ROSTER_SIZE, validHotkey } from '../../src/main/bridge/messages';
-import { ROSTER_LIMIT } from '../../src/shared/bridge';
+import { HOST_MESSAGES, PAGE_MESSAGES, ROSTER_LIMIT } from '../../src/shared/bridge';
 
 const room = { roomId: '3f2504e0-4f89-11d3-9a0c-0305e82c3301', title: 'Пятница', code: '123456789' };
 
@@ -79,18 +79,33 @@ describe('readPageMessage — границы, как BridgeProtocol.Read', () =>
     const avatar = 'data:image/png;base64,' + 'A'.repeat(4000);
     const person = (i: number) => ({ id: `p-${i}`, name: `Участник ${i}`, avatar, muted: i % 2 === 0 });
     const full = readPageMessage('overlay.roster', { participants: Array.from({ length: ROSTER_SIZE }, (_, i) => person(i)) });
-    expect(full).toMatchObject({ type: 'overlay.roster' });
+    expect(full).toMatchObject({ type: 'overlay.roster', skipped: 0 });
     expect((full as { participants: unknown[] }).participants).toHaveLength(ROSTER_SIZE);
     expect(JSON.stringify(Array.from({ length: ROSTER_SIZE }, (_, i) => person(i))).length).toBeLessThan(ROSTER_LIMIT);
-    expect(readPageMessage('overlay.roster', { participants: Array.from({ length: ROSTER_SIZE + 1 }, (_, i) => person(i)) })).toBeNull();
-    expect(readPageMessage('overlay.roster', { participants: [{ id: 'a', name: 'А' }] })).toEqual({ type: 'overlay.roster', participants: [{ id: 'a', name: 'А', avatar: '', muted: false }] });
-    expect(readPageMessage('overlay.roster', { participants: [{ ...person(1), avatar: 'https://evil/a.png' }] }), 'адрес вместо картинки').toBeNull();
-    expect(readPageMessage('overlay.roster', { participants: [{ ...person(1), avatar: 'data:image/svg+xml;base64,AAAA' }] }), 'SVG — нет').toBeNull();
-    expect(readPageMessage('overlay.roster', { participants: [{ ...person(1), avatar: 'data:image/png;base64,' + 'A'.repeat(4100) }] })).toBeNull();
-    expect(readPageMessage('overlay.roster', { participants: [person(1), person(1)] }), 'повтор id').toBeNull();
-    expect(readPageMessage('overlay.roster', { participants: [{ ...person(1), id: '../x y' }] })).toBeNull();
-    expect(readPageMessage('overlay.roster', { participants: [{ ...person(1), name: 'x'.repeat(41) }] })).toBeNull();
+    expect(readPageMessage('overlay.roster', { participants: [{ id: 'a', name: 'А' }] })).toEqual({ type: 'overlay.roster', participants: [{ id: 'a', name: 'А', avatar: '', muted: false }], skipped: 0 });
     expect(readPageMessage('overlay.roster', { participants: 'все' })).toBeNull();
+  });
+  it('overlay.roster (R137) — мягкая проверка: плохая запись пропускается, плохой аватар — пустой, а не весь состав в корзину', () => {
+    const avatar = 'data:image/png;base64,AAAA';
+    const person = (i: number, extra: Record<string, unknown> = {}) => ({ id: `p-${i}`, name: `Участник ${i}`, avatar, muted: false, ...extra });
+    const read = (participants: unknown[]) => readPageMessage('overlay.roster', { participants }) as { participants: { id: string; avatar: string }[]; skipped: number } | null;
+    const ids = (participants: unknown[]) => read(participants)?.participants.map((entry) => entry.id);
+    // Аватар не по образцу — человек остаётся, без картинки: адрес, SVG, длиннее 4 КиБ.
+    for (const bad of ['https://evil/a.png', 'data:image/svg+xml;base64,AAAA', 'data:image/png;base64,' + 'A'.repeat(4100), 42]) {
+      const roster = read([person(1, { avatar: bad }), person(2)]);
+      expect(roster?.participants, String(bad).slice(0, 30)).toEqual([{ id: 'p-1', name: 'Участник 1', avatar: '', muted: false }, { id: 'p-2', name: 'Участник 2', avatar, muted: false }]);
+      expect(roster?.skipped).toBe(0);
+    }
+    // Запись без id, с чужим id, повтором или длинным именем — пропускается, остальные приходят.
+    expect(ids([person(1), person(1)]), 'повтор id').toEqual(['p-1']);
+    expect(ids([{ ...person(1), id: '../x y' }, person(2)])).toEqual(['p-2']);
+    expect(ids([{ ...person(1), name: 'x'.repeat(41) }, person(2)])).toEqual(['p-2']);
+    expect(ids([null, 'Аня', person(3)])).toEqual(['p-3']);
+    expect(read([person(1), null, { id: 7 }])?.skipped).toBe(2);
+    // Больше 25 — первые 25, а не отказ: веб режет так же.
+    const many = read(Array.from({ length: ROSTER_SIZE + 5 }, (_, i) => person(i)));
+    expect(many?.participants).toHaveLength(ROSTER_SIZE);
+    expect(many?.skipped).toBe(5);
   });
   it('mini.state (R93) — форма мини-окна звонка', () => {
     expect(readPageMessage('mini.state', { room: 'Пятница', self: 'p-1', mic: true, camera: false, screen: true, unread: 3, count: 4 })).toEqual({
@@ -103,6 +118,18 @@ describe('readPageMessage — границы, как BridgeProtocol.Read', () =>
     expect(readPageMessage('mini.state', { status: 'recovering', remaining: 17 }), 'связь восстанавливается').toMatchObject({ state: { status: 'recovering', remaining: 17 } });
     expect(readPageMessage('mini.state', { status: 'connecting', remaining: 17 }), 'секунды — только при восстановлении').toMatchObject({ state: { status: 'connecting', remaining: 0 } });
     expect(readPageMessage('mini.state', { status: 'ended' }), 'чужое значение — как веб до status').toMatchObject({ state: { status: 'connected' } });
+  });
+  it('mini.state с номером (R137): seq — целое ≥ 0, чужое значение пропускается, сообщение принято', () => {
+    expect(readPageMessage('mini.state', { room: 'Пятница', seq: 12 })).toMatchObject({ state: { room: 'Пятница', seq: 12 } });
+    for (const bad of [-1, 1.5, '3', null]) expect((readPageMessage('mini.state', { seq: bad }) as unknown as { state: Record<string, unknown> }).state, String(bad)).not.toHaveProperty('seq');
+  });
+  it('mini.ack (R137) — ответ встречи на нажатие в мини-окне: номер, итог, причина', () => {
+    expect(PAGE_MESSAGES).toContain('mini.ack');
+    expect(HOST_MESSAGES).toContain('mini.resync');
+    expect(readPageMessage('mini.ack', { seq: 3, result: 'ok' })).toEqual({ type: 'mini.ack', seq: 3, result: 'ok' });
+    expect(readPageMessage('mini.ack', { seq: 4, result: 'ignored', reason: 'link' })).toEqual({ type: 'mini.ack', seq: 4, result: 'ignored', reason: 'link' });
+    expect(readPageMessage('mini.ack', { seq: 4, result: 'ignored', reason: 'Связь!' }), 'причина — код, а не фраза').toEqual({ type: 'mini.ack', seq: 4, result: 'ignored' });
+    for (const bad of [{ result: 'ok' }, { seq: -1, result: 'ok' }, { seq: 1.5, result: 'ok' }, { seq: 1, result: 'maybe' }, { seq: 1 }]) expect(readPageMessage('mini.ack', bad), JSON.stringify(bad)).toBeNull();
   });
   it('games.set / games.forget (R62) — только имя exe', () => {
     expect(readGameCall('games.set', { exe: 'CS2.exe', enabled: false })).toEqual({ exe: 'cs2.exe', enabled: false });

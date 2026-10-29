@@ -1,6 +1,8 @@
 /*
   Мини-окно звонка (R93, DESIGN.md → Мини-оверлей звонка; n06/n07 — Телемост). Всегда тёмное, как
-  плитки сцены (`--stage-*`). Окно прозрачное: тень рисуется внутри поля 12 px вокруг карточки.
+  плитки сцены (`--stage-*`). Окно непрозрачное, без тени и без поля вокруг карточки (R137): карточка —
+  это всё окно, фон окна — `--stage-bg` (`MINI_BACKGROUND` в `windows/mini.ts`), углы на Windows 11
+  скругляет система. Анимаций появления и тени нет: окно должно отвечать сразу.
   Цвета — значения токенов веба (`web/src/styles/tokens.css`): страница оболочки их не грузит.
 */
 :root {
@@ -26,14 +28,11 @@
   --face-2-bg: #d8ede8; --face-2: #2f6a5a;
   --face-3-bg: #f2e4d8; --face-3: #7a5a40;
   --face-4-bg: #e1e4eb; --face-4: #4d5566;
-  --shadow-2: 0 10px 24px -10px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.06);
-  --shadow-3: 0 12px 28px -8px rgb(0 0 0 / 0.7), 0 0 0 1px rgb(255 255 255 / 0.08);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: transparent; overflow: hidden; }
+html, body { margin: 0; background: var(--stage-bg); overflow: hidden; }
 body {
   font: 14px/1.3 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
@@ -41,28 +40,24 @@ body {
   user-select: none;
   -webkit-user-select: none;
 }
-.frame { padding: 12px; width: max-content; }
-.mini {
-  width: 220px;
-  border-radius: 16px;
-  background: var(--stage-bg);
-  box-shadow: var(--shadow-2);
-  overflow: hidden;
-  transition: box-shadow 160ms var(--ease-standard);
-}
-.mini:hover { box-shadow: var(--shadow-3); }
+.frame { width: max-content; }
+.mini { width: 220px; background: var(--stage-bg); overflow: hidden; }
 .mini[data-mode='expanded'] { width: 260px; }
-.view { animation: fade 160ms var(--ease-emphasized) both; }
-@keyframes fade { from { opacity: 0; } }
 .mini[data-mode='compact'] #expanded-view, .mini[data-mode='expanded'] #compact-view { display: none; }
 
 button { appearance: none; border: 0; font: inherit; color: inherit; background: transparent; padding: 0; cursor: default; }
+/* Нажатие всегда попадает в саму кнопку, а не в значок или подпись внутри: их можно менять на лету —
+   нажатие, начатое на прежнем значке, не теряется (R137). */
+button * { pointer-events: none; }
 .icon { flex: none; }
+/* Нажатие ушло во встречу, ответа ещё нет (R137): не дольше 4 с. */
+button[data-pending='true'] { opacity: 0.55; }
 
-.bar { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 10px; -webkit-app-region: drag; }
+/* Полоса — тащить окно (своим кодом в mini.js, без `app-region: drag`, R137) и двойной щелчок. */
+.bar { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px 0 10px; touch-action: none; }
 .mark { width: 14px; height: 14px; border-radius: 4px; background: var(--accent-fill); flex: none; }
 .bar__title { flex: 1; min-width: 0; margin-left: 4px; color: var(--stage-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bar__button { -webkit-app-region: no-drag; width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--stage-muted); }
+.bar__button { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--stage-muted); }
 .bar__button:hover { background: var(--stage-glint-1); color: var(--stage-text); }
 .mini[data-mode='compact'] #compact { display: none; }
 
@@ -157,6 +152,8 @@ button:disabled { opacity: 0.38; pointer-events: none; }
   text-align: left;
 }
 .action:hover { background: var(--stage-glint-1); }
+.action__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action__extra:empty { display: none; }
 .action .icon { color: var(--stage-muted); }
 .action small { color: var(--stage-muted); font-size: 12px; font-weight: 400; }
 .action[data-live='true'] .icon, .action[data-live='true'] small { color: var(--voice-3); }
@@ -178,6 +175,5 @@ button:disabled { opacity: 0.38; pointer-events: none; }
 .leave:hover { background: var(--danger-fill-hover); }
 
 @media (prefers-reduced-motion: reduce) {
-  .view { animation: none; }
-  .tile__ring, .mini, .dock__button { transition: none; }
+  .tile__ring, .dock__button { transition: none; }
 }
