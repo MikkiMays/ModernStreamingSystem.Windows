@@ -177,7 +177,8 @@ class Shell {
         this.router.post('chat.open');
       },
       openSettings: () => this.handleDeepLink({ kind: 'settings' }),
-      toggleMicrophone: () => this.router.post('thumbar', { action: 'mic' }),
+      // «Микрофон» трея — нажатие мини-окна (R138): кнопок на миниатюре и их сообщения `thumbar` больше нет.
+      toggleMicrophone: () => void this.router.post('mini.action', { id: 'mic' }),
       toggleNotifications: () => this.applyAppSettings({ notifications: !this.settings.get().notifications }, true),
       quit: () => void this.trayQuit(),
     },
@@ -328,6 +329,8 @@ class Shell {
     const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, startMode({ hiddenFlag: this.hiddenFlag, tray: this.taskbar.hasTray }));
     this.hiddenFlag = false;
     this.main = main;
+    // Кнопок на миниатюре и значка поверх иконки больше нет (R138) — у окна их не должно остаться.
+    this.taskbar.clear(main.window);
     main.window.webContents.on('did-start-navigation', (details) => {
       // Новый документ — прежняя дорожка звука захвата ему не принадлежит.
       if (!details.isMainFrame) return;
@@ -454,7 +457,6 @@ class Shell {
    */
   private applyAppSettings(patch: Partial<AppSettings>, announce = false): AppSettings {
     const next = Object.keys(patch).length ? this.settings.update(settingsPatchOf(patch, this.settings.get())) : this.settings.get();
-    const window = this.main?.window ?? null;
     if (patch.tray !== undefined) {
       if (!next.tray) {
         this.taskbar.removeTray();
@@ -466,7 +468,7 @@ class Shell {
     if (patch.overlay !== undefined) this.updateOverlay();
     if (['overlayCorner', 'overlaySize', 'overlayNames', 'overlayOpacity'].some((key) => key in patch)) this.overlay.configure(this.overlayConfig());
     if (patch.mini !== undefined) this.updateMini();
-    if (patch.thumbar !== undefined || patch.badge !== undefined || patch.notifications !== undefined) this.taskbar.refresh(window);
+    if (patch.notifications !== undefined) this.taskbar.refresh();
     if (patch.sleepBlocker !== undefined) this.applySleepBlocker();
     const values = appSettingsOf(next);
     if (announce) this.router.post('app.settings', { ...values });
@@ -1113,7 +1115,7 @@ class Shell {
         // Язык интерфейса страницы (если назвала) — для трея и диалогов оболочки; пишется только при смене.
         if (message.language && message.language !== this.settings.get().uiLanguage) {
           this.settings.update({ uiLanguage: message.language });
-          this.taskbar.refresh(window);
+          this.taskbar.refresh();
           this.overlay.configure(this.overlayConfig());
           this.mini.send('mini.config', this.miniConfig());
         }
@@ -1177,6 +1179,8 @@ class Shell {
         this.miniState = message.state;
         if (first) this.mini.send('mini.config', this.miniConfig());
         this.mini.send('mini.state', { ...message.state });
+        // «Чат · N» в меню трея — по непрочитанным встречи (значка поверх иконки больше нет, R138).
+        this.taskbar.setUnread(message.state.unread);
         if (first) this.updateMini();
         return;
       }
@@ -1195,7 +1199,8 @@ class Shell {
         this.taskbar.setProgress(window, message.value);
         return;
       case 'badge':
-        this.taskbar.setBadge(window, message.count);
+        // Веб, которому прежняя оболочка дала флаг `badge`: значка поверх иконки нет (R138), число — в меню трея.
+        this.taskbar.setUnread(message.count);
         return;
       case 'capture.select':
         if (sender.id === this.main?.window.webContents.id) this.capture.select(message.id, message.audio);
@@ -1257,17 +1262,7 @@ class Shell {
   private updateCall(next: CallState): void {
     const was = this.call;
     this.call = next;
-    const window = this.main?.window ?? null;
-    this.taskbar.applyCall(
-      window,
-      next,
-      {
-        mic: () => this.router.post('thumbar', { action: 'mic' }),
-        camera: () => this.router.post('thumbar', { action: 'camera' }),
-        leave: () => this.router.post('thumbar', { action: 'leave' }),
-      },
-      this.roomTitle,
-    );
+    this.taskbar.applyCall(next, this.roomTitle);
     this.applySleepBlocker();
     this.updateBoost();
     if (next.inCall && this.settings.get().hotkeys.length && !this.hotkeys.active.length) void this.hotkeys.apply(this.settings.get().hotkeys);

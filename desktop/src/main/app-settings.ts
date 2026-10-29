@@ -3,8 +3,10 @@
  * настройках веба (E03). Веб читает и меняет их запросом `invoke('app.settings', патч)`; оболочка
  * сама меняет `overlay` клавишей `overlay.toggle` и рассказывает об этом событием `app.settings`.
  *
- * По умолчанию (ADR §4.4): трей, кнопки на миниатюре, значок поверх иконки, мигание, запрет сна,
- * оверлей (R61) и уведомления — включены; автозапуск — выключен. Уведомления переключаются и из меню
+ * По умолчанию (ADR §4.4): трей, мигание, запрет сна, оверлей (R61) и уведомления — включены; автозапуск
+ * — выключен. Кнопок на миниатюре и значка поверх иконки с 1.0.11 нет (R138): их ключи `thumbar` и
+ * `badge` остаются в ответе (веб до R138 ждёт все булевы ключи) — всегда `false`, а патч к ним
+ * принимается и ничего не меняет. Уведомления переключаются и из меню
  * трея (R103) — тогда оболочка рассказывает вебу событием `app.settings`, как с клавишей оверлея.
  *
  * Не только переключатели (R63, R93): виджет говорящих в игре — угол (`overlayCorner`), размер аватара
@@ -73,9 +75,9 @@ export function readOverlayWidget(raw: unknown): OverlayWidget {
 export interface AppSettings {
   /** Значок в трее: открыть, микрофон, выйти. */
   tray: boolean;
-  /** Кнопки на миниатюре в панели задач во время встречи: микрофон, камера, завершить. */
+  /** Кнопки на миниатюре — убраны (R138): всегда `false`, патч игнорируется. */
   thumbar: boolean;
-  /** Значок поверх иконки: микрофон во встрече, непрочитанное вне её. */
+  /** Значок поверх иконки — убран (R138): всегда `false`, патч игнорируется. */
   badge: boolean;
   /** Мигание кнопки окна при упоминании, если окно не в фокусе. */
   flash: boolean;
@@ -101,14 +103,14 @@ export interface AppSettings {
 const BOOLEAN_KEYS = ['tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlay', 'autostart', 'notifications', 'mini', 'overlayToast'] as const satisfies readonly (keyof AppSettings)[];
 export const APP_SETTING_KEYS = [...BOOLEAN_KEYS, 'overlayCorner', 'overlaySize', 'overlayNames', 'overlayOpacity'] as const satisfies readonly (keyof AppSettings)[];
 
-type Stored = Pick<Settings, 'tray' | 'thumbar' | 'badge' | 'flash' | 'sleepBlocker' | 'overlayEnabled' | 'autostart' | 'notifications' | 'overlay' | 'mini'>;
+type Stored = Pick<Settings, 'tray' | 'flash' | 'sleepBlocker' | 'overlayEnabled' | 'autostart' | 'notifications' | 'overlay' | 'mini'>;
 
 /** Значения для веба из настроек оболочки. */
 export function appSettingsOf(settings: Stored): AppSettings {
   return {
     tray: settings.tray,
-    thumbar: settings.thumbar,
-    badge: settings.badge,
+    thumbar: false,
+    badge: false,
     flash: settings.flash,
     sleepBlocker: settings.sleepBlocker,
     overlay: settings.overlayEnabled,
@@ -128,7 +130,8 @@ export function appSettingsOf(settings: Stored): AppSettings {
  * записано (`current`); новый угол сбрасывает смещение — иначе виджет уехал бы от нового угла.
  */
 export function settingsPatchOf(patch: Partial<AppSettings>, current: Pick<Stored, 'overlay' | 'mini'>): Partial<Stored> {
-  const { overlay, mini, overlayCorner, overlaySize, overlayNames, overlayOpacity, overlayToast, ...rest } = patch;
+  // thumbar и badge (R138) — переключатели того, чего больше нет: принимаются и отбрасываются.
+  const { overlay, mini, overlayCorner, overlaySize, overlayNames, overlayOpacity, overlayToast, thumbar: _thumbar, badge: _badge, ...rest } = patch;
   const next: Partial<Stored> = { ...rest, ...(overlay !== undefined ? { overlayEnabled: overlay } : {}) };
   if (mini !== undefined) next.mini = { ...current.mini, enabled: mini };
   const widget = {
@@ -175,19 +178,7 @@ export interface CallFlags {
   screen: boolean;
 }
 
-type TaskbarOptions = Pick<AppSettings, 'thumbar' | 'badge' | 'flash' | 'sleepBlocker'>;
-
-/** Кнопки на миниатюре — только во встрече и только если человек их не выключил. */
-export function showThumbar(call: CallFlags, options: TaskbarOptions): boolean {
-  return call.inCall && options.thumbar;
-}
-
-/** Что рисовать поверх иконки: во встрече — состояние микрофона, вне её — непрочитанное. */
-export function overlayIconFor(call: CallFlags, unread: number, options: TaskbarOptions): 'in-call' | 'muted' | 'unread' | null {
-  if (!options.badge) return null;
-  if (call.inCall) return call.mic ? 'in-call' : 'muted';
-  return unread > 0 ? 'unread' : null;
-}
+type TaskbarOptions = Pick<AppSettings, 'flash' | 'sleepBlocker'>;
 
 /** Запрет сна — во встрече и при показе экрана, если он включён. */
 export function keepAwake(call: CallFlags, options: TaskbarOptions): boolean {

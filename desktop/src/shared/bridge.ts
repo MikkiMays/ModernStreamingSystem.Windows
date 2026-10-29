@@ -16,8 +16,8 @@ export const FEATURES = [
   'capture.app-audio', // cord-native, process loopback: audio: 'app' (звук приложения) и 'system-except-cord'; дорожка — элемент #cord-desktop-capture-audio, событие capture.audio
   'overlay', // окно поверх игр без инъекций
   'notify',
-  'thumbar',
-  'badge',
+  // 'thumbar' и 'badge' (кнопки на миниатюре, значок поверх иконки) убраны в 1.0.11 (R138): без флагов
+  // веб прячет их переключатели, а в ответе app.settings они остаются — всегда false.
   'progress',
   'attention',
   'deeplink',
@@ -35,8 +35,8 @@ export const FEATURES = [
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
-/** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки (API панели задач), автозапуск. */
-const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge', 'autostart']);
+/** Только в Windows: loopback-звук и автозапуск. */
+const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'autostart']);
 /** Только с загруженным `cord-native` (utility-процесс жив и модуль на месте). */
 const NATIVE_ONLY: ReadonlySet<Feature> = new Set<Feature>(['ptt', 'capture.app-audio', 'games', 'golive']);
 
@@ -64,7 +64,7 @@ export const PAGE_MESSAGES = [
   'notify',
   'attention',
   'progress',
-  'badge',
+  'badge', // с 1.0.11 (R138) значка поверх иконки нет и флага нет: число идёт только в «Чат · N» меню трея
   'capture.select',
   'overlay.roster', // {participants: [{id, name, avatar, muted}]} — кто в звонке для виджета в игре и мини-окна (R63, R93), ≤ 128 КиБ
   'mini.state', // {room, mic, camera, screen, unread, count, self} — что показывать в мини-окне звонка (R93)
@@ -98,7 +98,7 @@ export const HOST_MESSAGES = [
   'close-request',
   'update.status',
   'session.token',
-  'thumbar',
+  // 'thumbar' — нажатие кнопки на миниатюре — больше не шлётся (R138): кнопок нет, «Микрофон» трея идёт mini.action.
   'deeplink',
   'notification.action',
   'power',

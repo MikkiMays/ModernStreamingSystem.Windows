@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { appSettingsOf, keepAwake, OVERLAY_WIDGET_DEFAULTS, overlayIconFor, readAppSettingsPatch, readOverlayWidget, settingsPatchOf, showThumbar } from '../../src/main/app-settings';
+import { appSettingsOf, keepAwake, OVERLAY_WIDGET_DEFAULTS, readAppSettingsPatch, readOverlayWidget, settingsPatchOf } from '../../src/main/app-settings';
 import { isPageCall } from '../../src/main/bridge/messages';
 import { FEATURES, HOST_MESSAGES } from '../../src/shared/bridge';
 
 const call = { inCall: true, mic: true, camera: false, screen: false };
 const idle = { inCall: false, mic: false, camera: false, screen: false };
-const all = { thumbar: true, badge: true, flash: true, sleepBlocker: true };
+const all = { flash: true, sleepBlocker: true };
 
 describe('app.settings — переключатели раздела «Windows» в настройках веба (E03, T53)', () => {
   it('запрос и событие объявлены, у каждого переключателя свой флаг', () => {
     expect(isPageCall('app.settings')).toBe(true);
     expect(HOST_MESSAGES).toContain('app.settings');
-    for (const flag of ['app.settings', 'tray', 'thumbar', 'badge', 'attention', 'sleep', 'overlay', 'autostart']) expect(FEATURES).toContain(flag);
+    for (const flag of ['app.settings', 'tray', 'attention', 'sleep', 'overlay', 'autostart']) expect(FEATURES).toContain(flag);
   });
 
   it('патч: только известные имена и только true/false; пустой — чтение', () => {
@@ -29,12 +29,12 @@ describe('app.settings — переключатели раздела «Windows»
   const mini = { enabled: true, expanded: false, x: 100, y: 200 };
 
   it('настройки ↔ значения для веба: overlay — это overlayEnabled, виджет и мини-окно — свои имена', () => {
-    const values = appSettingsOf({ tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlayEnabled: true, autostart: false, notifications: false, overlay: widget, mini });
+    const values = appSettingsOf({ tray: true, flash: true, sleepBlocker: false, overlayEnabled: true, autostart: false, notifications: false, overlay: widget, mini });
     expect(values).toEqual({
-      tray: true, thumbar: false, badge: true, flash: true, sleepBlocker: false, overlay: true, autostart: false, notifications: false,
+      tray: true, thumbar: false, badge: false, flash: true, sleepBlocker: false, overlay: true, autostart: false, notifications: false,
       mini: true, overlayCorner: 'tl', overlaySize: 'm', overlayNames: 'always', overlayOpacity: 100, overlayToast: true,
     });
-    expect(settingsPatchOf({ overlay: false, badge: false }, { overlay: widget, mini })).toEqual({ overlayEnabled: false, badge: false });
+    expect(settingsPatchOf({ overlay: false, flash: false }, { overlay: widget, mini })).toEqual({ overlayEnabled: false, flash: false });
   });
 
   it('виджет говорящих (R63): значения не булевы, но только из своих списков; прозрачность — целое 30–100', () => {
@@ -60,19 +60,17 @@ describe('app.settings — переключатели раздела «Windows»
 });
 
 describe('что делает панель задач при каждом переключателе', () => {
-  it('кнопки на миниатюре — только в звонке и только если включены', () => {
-    expect(showThumbar(call, all)).toBe(true);
-    expect(showThumbar(idle, all)).toBe(false);
-    expect(showThumbar(call, { ...all, thumbar: false })).toBe(false);
-  });
-
-  it('значок поверх иконки: в звонке — микрофон, вне — непрочитанное; выключен — ничего', () => {
-    expect(overlayIconFor(call, 0, all)).toBe('in-call');
-    expect(overlayIconFor({ ...call, mic: false }, 5, all)).toBe('muted');
-    expect(overlayIconFor(idle, 3, all)).toBe('unread');
-    expect(overlayIconFor(idle, 0, all)).toBeNull();
-    expect(overlayIconFor(call, 3, { ...all, badge: false })).toBeNull();
-    expect(overlayIconFor(idle, 3, { ...all, badge: false })).toBeNull();
+  it('кнопок на миниатюре и значка поверх иконки нет (R138): флагов нет, в ответе — false, патч к ним принимается и ничего не меняет', () => {
+    const widget = { ...OVERLAY_WIDGET_DEFAULTS };
+    const mini = { enabled: true, expanded: false };
+    expect(FEATURES).not.toContain('thumbar');
+    expect(FEATURES).not.toContain('badge');
+    expect(HOST_MESSAGES, 'кнопки на миниатюре странице больше ничего не шлют').not.toContain('thumbar');
+    // Веб до R138 ждёт в ответе все булевы ключи — они остаются, но всегда «выключено».
+    expect(appSettingsOf({ tray: true, flash: true, sleepBlocker: true, overlayEnabled: true, autostart: false, notifications: true, overlay: widget, mini })).toMatchObject({ thumbar: false, badge: false });
+    expect(readAppSettingsPatch({ thumbar: true, badge: true })).toEqual({ thumbar: true, badge: true });
+    expect(readAppSettingsPatch({ thumbar: 'да' }), 'не булево — отказ, как раньше').toBeNull();
+    expect(settingsPatchOf({ thumbar: true, badge: true, tray: false }, { overlay: widget, mini })).toEqual({ tray: false });
   });
 
   it('запрет сна — в звонке или при показе экрана, если включён', () => {

@@ -42,8 +42,6 @@ export interface Settings {
   hotkeys: HotkeyBinding[];
   /** Переключатели раздела «Windows» в настройках веба (`app-settings.ts`, ADR §4.4). */
   tray: boolean;
-  thumbar: boolean;
-  badge: boolean;
   flash: boolean;
   sleepBlocker: boolean;
   overlayEnabled: boolean;
@@ -82,8 +80,6 @@ const DEFAULTS: Settings = {
   catalogSeq: 0,
   hotkeys: [],
   tray: true,
-  thumbar: true,
-  badge: true,
   flash: true,
   sleepBlocker: true,
   overlayEnabled: true,
@@ -199,7 +195,7 @@ function sanitize(raw: unknown): Partial<Settings> {
   if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') result.theme = data.theme;
   if (typeof data.language === 'string' && LANGUAGES.has(data.language)) result.language = data.language as Language;
   if (typeof data.uiLanguage === 'string' && LANGUAGES.has(data.uiLanguage)) result.uiLanguage = data.uiLanguage as Language;
-  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'tray', 'thumbar', 'badge', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart', 'notifications', 'trayHintShown'] as const)
+  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'tray', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart', 'notifications', 'trayHintShown'] as const)
     if (typeof data[flag] === 'boolean') result[flag] = data[flag] as boolean;
   if (typeof data.catalogSeq === 'number' && Number.isInteger(data.catalogSeq) && data.catalogSeq >= 0) result.catalogSeq = data.catalogSeq;
   if (typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 600) result.sidebarWidth = Math.round(data.sidebarWidth);
