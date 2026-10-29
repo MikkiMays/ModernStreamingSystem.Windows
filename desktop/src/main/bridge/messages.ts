@@ -3,6 +3,10 @@
  * известный тип, UUID комнаты, код из 9 цифр, аватар `data:image/` ≤ 4 КиБ, имя ≤ 40,
  * заголовок ≤ 80, сочетание — из модели E03.
  *
+ * Состав для виджета и мини-окна (`overlay.roster`) проверяется мягко (R137): запись не по схеме
+ * пропускается, чужой аватар становится пустым. Прежде одна такая запись отправляла в корзину весь
+ * состав, а страница тот же состав второй раз не шлёт — мини-окно показывало старый навсегда.
+ *
  * Здесь нет Electron: модуль чистый и проверяется тестами. Origin отправителя сверяет
  * маршрутизатор (`router.ts`) до того, как сюда попадёт JSON.
  */
@@ -53,6 +57,18 @@ export interface MiniState {
   status: 'connecting' | 'connected' | 'recovering';
   /** Секунд до конца ожидания связи (пока `recovering`). */
   remaining: number;
+  /**
+   * Номер состояния (R137): растёт, когда состояние меняется; страница повторяет последнее раз в 5 с
+   * и по `mini.resync` с тем же номером. Веб до R137 его не шлёт.
+   */
+  seq?: number;
+}
+
+/** Ответ встречи на нажатие в мини-окне (R137): `seq` — номер нажатия, `reason` — код (`link`, `busy`…). */
+export interface MiniAck {
+  seq: number;
+  result: 'ok' | 'ignored';
+  reason?: string;
 }
 
 export interface RoomRef {
@@ -78,8 +94,10 @@ export type Validated =
   | { type: 'progress'; value: number }
   | { type: 'badge'; count: number }
   | { type: 'capture.select'; id: string; audio: 'none' | 'system' | 'app' | 'system-except-cord' }
-  | { type: 'overlay.roster'; participants: RosterEntry[] }
-  | { type: 'mini.state'; state: MiniState };
+  /** `skipped` — сколько записей не прошло проверку и пропущено (R137); остальные приходят. */
+  | { type: 'overlay.roster'; participants: RosterEntry[]; skipped: number }
+  | { type: 'mini.state'; state: MiniState }
+  | ({ type: 'mini.ack' } & MiniAck);
 
 const ROOM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Кнопки мыши Mouse3 (средняя), Mouse4 и Mouse5 (боковые) — только через cord-native (Raw Input); без него — «в окне встречи».
@@ -90,6 +108,12 @@ const ACTIONS: readonly HotkeyAction[] = ['mic.toggle', 'ptt', 'deafen', 'overla
 const PARTICIPANT_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 /** Больше людей виджет не рисует — дальше «+N». */
 export const ROSTER_SIZE = 25;
+/** Аватар — только картинка `data:` в base64: аватар пришёл от другого участника, адреса окно оболочки не грузит. */
+const AVATAR = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+/** Номер нажатия и состояния (R137) — неотрицательное целое. */
+function sequence(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER ? value : undefined;
+}
 
 export function validHotkey(value: unknown): value is Hotkey {
   if (!value || typeof value !== 'object') return false;
@@ -225,21 +249,22 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       return selection ? { type: kind, ...selection } : null;
     }
     case 'overlay.roster': {
-      if (!Array.isArray(data.participants) || data.participants.length > ROSTER_SIZE) return null;
+      if (!Array.isArray(data.participants)) return null;
       const participants: RosterEntry[] = [];
       const seen = new Set<string>();
+      let skipped = 0;
       for (const item of data.participants) {
-        if (!item || typeof item !== 'object') return null;
-        const entry = item as Record<string, unknown>;
-        const name = text(entry.name, 40);
-        const avatar = text(entry.avatar, AVATAR_LIMIT);
-        if (typeof entry.id !== 'string' || !PARTICIPANT_ID.test(entry.id) || seen.has(entry.id) || name === undefined || avatar === undefined) return null;
-        // Только картинка `data:`: аватар пришёл от другого участника, адреса окно оболочки не грузит.
-        if (avatar && !/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(avatar)) return null;
+        const entry = item && typeof item === 'object' ? (item as Record<string, unknown>) : null;
+        const name = entry ? text(entry.name, 40) : undefined;
+        if (!entry || typeof entry.id !== 'string' || !PARTICIPANT_ID.test(entry.id) || seen.has(entry.id) || name === undefined || participants.length >= ROSTER_SIZE) {
+          skipped += 1;
+          continue;
+        }
+        const avatar = typeof entry.avatar === 'string' && entry.avatar.length <= AVATAR_LIMIT && AVATAR.test(entry.avatar) ? entry.avatar : '';
         seen.add(entry.id);
         participants.push({ id: entry.id, name, avatar, muted: entry.muted === true });
       }
-      return { type: kind, participants };
+      return { type: kind, participants, skipped };
     }
     case 'mini.state': {
       const room = text(data.room, 80);
@@ -258,8 +283,15 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
           count: count(data.count),
           status: data.status === 'recovering' || data.status === 'connecting' ? data.status : 'connected',
           remaining: data.status === 'recovering' ? count(data.remaining) : 0,
+          ...(sequence(data.seq) !== undefined ? { seq: sequence(data.seq) } : {}),
         },
       };
+    }
+    case 'mini.ack': {
+      const seq = sequence(data.seq);
+      if (seq === undefined || (data.result !== 'ok' && data.result !== 'ignored')) return null;
+      const reason = typeof data.reason === 'string' && /^[a-z-]{1,30}$/.test(data.reason) ? data.reason : undefined;
+      return { type: kind, seq, result: data.result, ...(reason ? { reason } : {}) };
     }
   }
   return null;

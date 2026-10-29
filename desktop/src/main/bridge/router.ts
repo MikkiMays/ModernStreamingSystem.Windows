@@ -79,12 +79,16 @@ export class BridgeRouter {
     this.prepared.set(origin.origin, await this.handlers.bootstrap(origin));
   }
 
-  /** Сообщение оболочки странице; уходит только в документ выбранного сервера. */
-  post(type: HostMessage, data: Record<string, unknown> = {}): void {
+  /**
+   * Сообщение оболочки странице; уходит только в документ выбранного сервера. `false` — не ушло
+   * (окна нет, в нём заставка или «нет связи»): мини-окно тогда сразу узнаёт, что нажатие некому исполнить.
+   */
+  post(type: HostMessage, data: Record<string, unknown> = {}): boolean {
     const contents = this.contents;
-    if (!contents || contents.isDestroyed() || !this.current) return;
+    if (!contents || contents.isDestroyed() || !this.current) return false;
     const frame = contents.mainFrame;
-    if (!this.current.owns(frame.url)) return;
+    if (!this.current.owns(frame.url)) return false;
     contents.send(IPC.host, type, data);
+    return true;
   }
 }

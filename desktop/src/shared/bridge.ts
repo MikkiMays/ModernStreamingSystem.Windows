@@ -16,8 +16,8 @@ export const FEATURES = [
   'capture.app-audio', // cord-native, process loopback: audio: 'app' (звук приложения) и 'system-except-cord'; дорожка — элемент #cord-desktop-capture-audio, событие capture.audio
   'overlay', // окно поверх игр без инъекций
   'notify',
-  'thumbar',
-  'badge',
+  // 'thumbar' и 'badge' (кнопки на миниатюре, значок поверх иконки) убраны в 1.0.11 (R138): без флагов
+  // веб прячет их переключатели, а в ответе app.settings они остаются — всегда false.
   'progress',
   'attention',
   'deeplink',
@@ -30,13 +30,13 @@ export const FEATURES = [
   'autostart', // запуск вместе с Windows
   'games', // cord-native: реестр игр (R62) — invoke('games.list' | 'games.set' | 'games.forget' | 'games.pick'), события games.changed, game.active
   'overlay.widget', // виджет говорящих в игре (R63): send('overlay.roster'), send('overlay.levels') — по порту мимо main, app.settings overlayCorner/Size/Names/Opacity/Toast, действие overlay.lock (Backquote)
-  'mini', // мини-окно звонка (R93): send('mini.state'), событие mini.action {id}, app.settings mini
+  'mini', // мини-окно звонка (R93): send('mini.state'), событие mini.action {id}, app.settings mini; с 1.0.11 (R137) — mini.action {id, want?, seq?}, ответ send('mini.ack'), событие mini.resync
   'golive', // cord-native: «Показать игру» (R104) — событие golive {id, name}: начать показ окна игры
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
-/** Только в Windows: loopback-звук, кнопки на миниатюре и значок поверх иконки (API панели задач), автозапуск. */
-const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'thumbar', 'badge', 'autostart']);
+/** Только в Windows: loopback-звук и автозапуск. */
+const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-audio', 'autostart']);
 /** Только с загруженным `cord-native` (utility-процесс жив и модуль на месте). */
 const NATIVE_ONLY: ReadonlySet<Feature> = new Set<Feature>(['ptt', 'capture.app-audio', 'games', 'golive']);
 
@@ -64,10 +64,11 @@ export const PAGE_MESSAGES = [
   'notify',
   'attention',
   'progress',
-  'badge',
+  'badge', // с 1.0.11 (R138) значка поверх иконки нет и флага нет: число идёт только в «Чат · N» меню трея
   'capture.select',
   'overlay.roster', // {participants: [{id, name, avatar, muted}]} — кто в звонке для виджета в игре и мини-окна (R63, R93), ≤ 128 КиБ
-  'mini.state', // {room, mic, camera, screen, unread, count, self} — что показывать в мини-окне звонка (R93)
+  'mini.state', // {room, mic, camera, screen, unread, count, self, status, remaining, seq?} — что показывать в мини-окне звонка (R93, R137)
+  'mini.ack', // {seq, result: 'ok' | 'ignored', reason?} — встреча исполнила нажатие мини-окна или нет (R137)
 ] as const;
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
 
@@ -98,7 +99,7 @@ export const HOST_MESSAGES = [
   'close-request',
   'update.status',
   'session.token',
-  'thumbar',
+  // 'thumbar' — нажатие кнопки на миниатюре — больше не шлётся (R138): кнопок нет, «Микрофон» трея идёт mini.action.
   'deeplink',
   'notification.action',
   'power',
@@ -109,7 +110,8 @@ export const HOST_MESSAGES = [
   'chat.open', // «Чат · N» в меню трея (R103): открыть чат встречи; веб без поддержки пропускает
   'games.changed', // {games, active} — реестр игр сменился (R62)
   'game.active', // {game: {exe, name, enabled, exclusive} | null} — игра, которая сейчас запущена (R62)
-  'mini.action', // {id} — нажатие в мини-окне звонка (R93): mic, camera, screen, people, chat, settings, leave
+  'mini.action', // {id, want?, seq?} — нажатие в мини-окне звонка (R93): mic, camera, screen, people, chat, settings, leave; want — нужное состояние (R137), seq — номер для mini.ack
+  'mini.resync', // мини-окно не дождалось ответа (R137): прислать mini.state и overlay.roster заново
   'golive', // {id, name} — «Показать игру» (R104): начать показ этого окна; оболочка уже дала странице жест
 ] as const;
 export type HostMessage = (typeof HOST_MESSAGES)[number];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideMini, type MiniInput } from '../../src/main/mini-policy';
+import { decideMini, decideRebuild, displayNeedsRebuild, MINI_REBUILDS, MINI_WATCH, watchStep, type MiniInput } from '../../src/main/mini-policy';
 
 const away: MiniInput = {
   inCall: true,
@@ -44,5 +44,58 @@ describe('decideMini — когда видно мини-окно звонка (R
   it('без cord-native (о переднем окне неизвестно) — по главному окну: не в фокусе — видно', () => {
     expect(decideMini({ ...away, foreground: null, sameDisplay: null })).toBe(true);
     expect(decideMini({ ...away, foreground: null, sameDisplay: null, main: { exists: true, visible: true, focused: true } })).toBe(false);
+  });
+});
+
+describe('сторож мини-окна (R137): окно, переставшее рисовать кадры, пересоздаётся', () => {
+  it('кадр раз в 2 с, ответ ждём 1,5 с, два пропуска подряд — пересоздать', () => {
+    expect(MINI_WATCH).toMatchObject({ intervalMs: 2000, timeoutMs: 1500, misses: 2 });
+    const first = watchStep(0, false);
+    expect(first).toEqual({ misses: 1, rebuild: false });
+    expect(watchStep(first.misses, false), 'второй пропуск подряд').toEqual({ misses: 0, rebuild: true });
+  });
+
+  it('ответ между пропусками обнуляет счёт: два пропуска не подряд — не повод', () => {
+    const missed = watchStep(0, false);
+    const answered = watchStep(missed.misses, true);
+    expect(answered).toEqual({ misses: 0, rebuild: false });
+    expect(watchStep(answered.misses, false)).toEqual({ misses: 1, rebuild: false });
+  });
+
+  it('человек не трогает мышь и клавиатуру (экран мог погаснуть) — пропуски не считаются', () => {
+    expect(watchStep(1, false, false)).toEqual({ misses: 0, rebuild: false });
+  });
+});
+
+describe('лимит пересозданий (R137): не больше 3 за 5 минут', () => {
+  const minute = 60_000;
+  it('три подряд — можно, четвёртое в те же 5 минут — нет, и известно, когда снова можно', () => {
+    expect(MINI_REBUILDS).toEqual({ count: 3, windowMs: 5 * minute });
+    let history: number[] = [];
+    for (const at of [0, minute, 2 * minute]) {
+      const decision = decideRebuild(history, at);
+      expect(decision.allowed).toBe(true);
+      history = decision.history;
+    }
+    const fourth = decideRebuild(history, 3 * minute);
+    expect(fourth.allowed).toBe(false);
+    expect(fourth.retryAt).toBe(5 * minute);
+    expect(fourth.history, 'отказ ничего не записывает').toEqual([0, minute, 2 * minute]);
+  });
+
+  it('старше 5 минут — забыто', () => {
+    const decision = decideRebuild([0, minute, 2 * minute], 5 * minute + 1);
+    expect(decision.allowed).toBe(true);
+    expect(decision.history).toEqual([minute, 2 * minute, 5 * minute + 1]);
+  });
+});
+
+describe('смена мониторов (R137): что пересоздаёт окно', () => {
+  it('размер, масштаб и поворот — пересоздать; только рабочая область (панель задач) — нет', () => {
+    expect(displayNeedsRebuild(['scaleFactor'])).toBe(true);
+    expect(displayNeedsRebuild(['bounds', 'workArea'])).toBe(true);
+    expect(displayNeedsRebuild(['rotation'])).toBe(true);
+    expect(displayNeedsRebuild(['workArea'])).toBe(false);
+    expect(displayNeedsRebuild([])).toBe(false);
   });
 });
