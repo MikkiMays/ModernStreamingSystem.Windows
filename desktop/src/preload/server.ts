@@ -5,7 +5,8 @@
  *
  * `bootstrap` берётся синхронно один раз на документ и пишется в те же ключи, что и WinUI:
  * `cord:profile:v1`, `cord:theme`, `cord:preferences:v1` (слияние), `cord:servers:v1`,
- * `dataset.desktop`. Так веб читает их здесь так же, как читал в WebView2.
+ * `dataset.desktop`. Так веб читает их здесь так же, как читал в WebView2. С 1.1.0 (R146) туда же
+ * ложатся общие для всех серверов настройки и токен Яндекс Музыки (`merge.ts`).
  *
  * Звук захвата (§4.1, `capture.app-audio`): main присылает порт PCM из utility-процесса
  * (`cord:capture-audio`); preload собирает из порций `MediaStreamTrackGenerator` и кладёт
@@ -21,6 +22,7 @@
  */
 import { contextBridge, ipcRenderer } from 'electron';
 import { CAPTURE_AUDIO_ELEMENT, FEATURES, HOST_MESSAGES, IPC, LEVELS_LIMIT, LEVELS_MESSAGE, PAGE_CALLS, PAGE_MESSAGES, PROTOCOL, TITLEBAR_HEIGHT, type Bootstrap, type CordDesktopApi, type Feature, type HostMessage } from '../shared/bridge';
+import { mergeBootstrap } from './merge';
 import { PCM_CHUNK_MS, PcmQueue } from './pcm-queue';
 
 const handed = ipcRenderer.sendSync(IPC.bootstrap) as { bootstrap: Bootstrap; version: string; features?: unknown } | null;
@@ -32,35 +34,8 @@ const features: readonly Feature[] = Object.freeze(
 
 if (bootstrap && window === window.top) {
   try {
-    localStorage.setItem('cord:profile:v1', bootstrap.profile);
-    localStorage.setItem('cord:theme', bootstrap.theme);
-    let saved: Record<string, unknown> = {};
-    try {
-      saved = (JSON.parse(localStorage.getItem('cord:preferences:v1') ?? 'null') as Record<string, unknown>) ?? {};
-    } catch {
-      saved = {};
-    }
-    if (typeof saved !== 'object' || saved === null || Array.isArray(saved)) saved = {};
-    saved.showPing = bootstrap.showPing;
-    saved.notificationSounds = bootstrap.notificationSounds;
-    // Язык из установщика (R64) — один раз на origin: дальше человек выбирает язык в настройках Cord,
-    // и даже возврат к «языку системы» (null) оболочка не перебивает.
-    const handed = 'cord:installer-language';
-    if (bootstrap.language && localStorage.getItem(handed) !== bootstrap.language) {
-      if (typeof saved.language !== 'string') saved.language = bootstrap.language;
-      localStorage.setItem(handed, bootstrap.language);
-    }
-    localStorage.setItem('cord:preferences:v1', JSON.stringify(saved));
-    let server: Record<string, unknown> = {};
-    try {
-      server = (JSON.parse(localStorage.getItem('cord:servers:v1') ?? 'null') as Record<string, unknown>) ?? {};
-    } catch {
-      server = {};
-    }
-    if (typeof server !== 'object' || server === null || Array.isArray(server)) server = {};
-    server.url = location.origin + '/';
-    server.autoConnect = bootstrap.autoConnect;
-    localStorage.setItem('cord:servers:v1', JSON.stringify(server));
+    // Общие настройки (R146) и прежние ключи — до первого скрипта страницы (`merge.ts`).
+    mergeBootstrap(localStorage, bootstrap, location.origin);
     document.documentElement.dataset.desktop = 'true';
   } catch {
     // Хранилище недоступно — страница спросит имя заново; мост всё равно работает.
@@ -218,7 +193,7 @@ const api: CordDesktopApi = {
   protocol: PROTOCOL,
   features,
   app: { version: handed?.version ?? '', arch: process.arch as 'x64' },
-  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true, titlebarHeight: TITLEBAR_HEIGHT },
+  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true, titlebarHeight: TITLEBAR_HEIGHT, shared: {}, yandexMusicToken: null },
   send(type, payload) {
     if ((type as string) === LEVELS_MESSAGE) {
       postLevels(payload);

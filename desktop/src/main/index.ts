@@ -37,6 +37,7 @@ import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
 import { SettingsStore } from './settings';
+import { bootstrapShared, SharedPreferences } from './shared-preferences';
 import { shellText, type ShellText } from './shell-text';
 import { Taskbar, type CallState } from './tray';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
@@ -134,8 +135,11 @@ class Shell {
   private readonly preloadDir = join(app.getAppPath(), 'dist', 'preload');
   private readonly config = buildConfig(app.getAppPath());
   private readonly settings = new SettingsStore(app.getPath('userData'), safeStorage);
+  /** Общие для всех серверов настройки и токен Яндекс Музыки (R146, R157, `shared-preferences.ts`). */
+  private readonly shared = new SharedPreferences(app.getPath('userData'), safeStorage, Date.now, log);
   private readonly router = new BridgeRouter({
     bootstrap: (origin) => this.bootstrap(origin),
+    live: (origin) => this.liveBootstrap(origin),
     message: (message, sender) => this.onMessage(message, sender),
     call: (method, payload) => this.onCall(method, payload),
     version: () => app.getVersion(),
@@ -1197,13 +1201,47 @@ class Shell {
     const entry = saved.servers.find((server) => server.url === origin.url);
     return {
       profile: await this.settings.profileFor(origin),
-      theme: saved.theme,
       language: saved.language,
-      showPing: saved.showPing,
-      notificationSounds: saved.notificationSounds,
       autoConnect: entry?.autoConnect ?? saved.autoConnect,
       titlebarHeight: TITLEBAR_HEIGHT,
+      ...this.liveBootstrap(origin),
     };
+  }
+
+  /**
+   * Что меняется, пока документ открыт: тема, PING и сигналы, общие настройки и токен (R146). Router
+   * читает это заново при каждой выдаче bootstrap — перезагрузка страницы не возвращает старое.
+   */
+  private liveBootstrap(origin: ServerOrigin): Pick<Bootstrap, 'theme' | 'showPing' | 'notificationSounds' | 'shared' | 'yandexMusicToken'> {
+    const saved = this.settings.get();
+    return { theme: saved.theme, showPing: saved.showPing, notificationSounds: saved.notificationSounds, ...bootstrapShared(this.shared, origin, this.allowedOrigins()) };
+  }
+
+  /**
+   * Правка общих настроек со страницы (R146): «последний пишущий» по ключу. PING и сигналы оболочка
+   * помнит и сама (`settings.json`, для прежнего веба). Где у хранилища значение новее — странице
+   * уходит победившее (`preferences.changed {shared}`), и она показывает правду, а не своё.
+   */
+  private applyShared(message: Extract<Validated, { type: 'preferences.changed' }>): void {
+    const own = { ...(message.showPing !== undefined ? { showPing: message.showPing } : {}), ...(message.notificationSounds !== undefined ? { notificationSounds: message.notificationSounds } : {}) };
+    if (!message.shared) {
+      // Прежний веб (без prefs.shared) правит только PING и сигналы — пусть и общее знает о них.
+      if (!Object.keys(own).length) return;
+      this.settings.update(own);
+      const at = Date.now();
+      this.shared.apply(Object.fromEntries(Object.entries(own).map(([key, value]) => [key, { value, at }])));
+      return;
+    }
+    const result = this.shared.apply(message.shared, message.seed === true);
+    const flags: Partial<Pick<ReturnType<SettingsStore['get']>, 'showPing' | 'notificationSounds'>> = { ...own };
+    for (const key of ['showPing', 'notificationSounds'] as const) {
+      const entry = this.shared.entry(key);
+      if (result.applied.includes(key) && entry && typeof entry.value === 'boolean') flags[key] = entry.value;
+    }
+    if (Object.keys(flags).length) this.settings.update(flags);
+    const kept = Object.fromEntries(Object.entries(result.kept).map(([key, entry]) => [key, entry.value]));
+    if (Object.keys(kept).length) this.router.post('preferences.changed', { shared: kept });
+    if (result.applied.length) log(`общие настройки: ${message.seed ? 'перенесены' : 'записаны'} ${result.applied.join(', ')}`);
   }
 
   private onMessage(message: Validated, sender: WebContents): void {
@@ -1244,7 +1282,7 @@ class Shell {
       case 'favorites.changed':
         return;
       case 'preferences.changed':
-        this.settings.update({ ...(message.showPing !== undefined ? { showPing: message.showPing } : {}), ...(message.notificationSounds !== undefined ? { notificationSounds: message.notificationSounds } : {}) });
+        this.applyShared(message);
         return;
       case 'server.autoconnect': {
         const origin = this.router.origin;

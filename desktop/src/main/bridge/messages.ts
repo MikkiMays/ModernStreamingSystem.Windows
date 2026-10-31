@@ -3,6 +3,9 @@
  * известный тип, UUID комнаты, код из 9 цифр, аватар `data:image/` ≤ 4 КиБ, имя ≤ 40,
  * заголовок ≤ 80, сочетание — из модели E03.
  *
+ * Общие настройки (`preferences.changed {shared}`, R146) проверяются строго, по белому списку ключей:
+ * чужой ключ, не тот тип или лишний размер — отказ всему сообщению (как у `app.settings`).
+ *
  * Состав для виджета и мини-окна (`overlay.roster`) проверяется мягко (R137): запись не по схеме
  * пропускается, чужой аватар становится пустым. Прежде одна такая запись отправляла в корзину весь
  * состав, а страница тот же состав второй раз не шлёт — мини-окно показывало старый навсегда.
@@ -10,7 +13,19 @@
  * Здесь нет Electron: модуль чистый и проверяется тестами. Origin отправителя сверяет
  * маршрутизатор (`router.ts`) до того, как сюда попадёт JSON.
  */
-import { AVATAR_LIMIT, MESSAGE_LIMIT, PAGE_CALLS, PAGE_MESSAGES, ROSTER_LIMIT, type PageCall, type PageMessage } from '../../shared/bridge';
+import {
+  AVATAR_LIMIT,
+  MESSAGE_LIMIT,
+  PAGE_CALLS,
+  PAGE_MESSAGES,
+  ROSTER_LIMIT,
+  SECRET_PREFERENCES,
+  SHARED_PREFERENCES,
+  type PageCall,
+  type PageMessage,
+  type SecretPreference,
+  type SharedPreference,
+} from '../../shared/bridge';
 import { readCaptureSelect } from '../capture';
 import { isLanguage, type Language } from '../language';
 
@@ -71,6 +86,15 @@ export interface MiniAck {
   reason?: string;
 }
 
+/** Ключ общей настройки или секрета (R146). */
+export type SharedKey = SharedPreference | SecretPreference;
+/** Запись общей настройки: значение и когда его записали (мс эпохи) — «последний пишущий» по ключу. */
+export interface SharedEntry {
+  value: unknown;
+  at: number;
+}
+export type SharedEntries = Partial<Record<SharedKey, SharedEntry>>;
+
 export interface RoomRef {
   roomId: string;
   title: string;
@@ -82,7 +106,7 @@ export type Validated =
   | { type: 'call.state'; inCall: boolean; mic: boolean; camera: boolean; screen: boolean; room: RoomRef | null }
   | { type: 'hotkeys.configure'; bindings: HotkeyBinding[] }
   | { type: 'favorites.changed' }
-  | { type: 'preferences.changed'; showPing?: boolean; notificationSounds?: boolean }
+  | { type: 'preferences.changed'; showPing?: boolean; notificationSounds?: boolean; shared?: SharedEntries; seed?: true }
   | { type: 'server.autoconnect'; autoConnect: boolean }
   | { type: 'servers.open' }
   | { type: 'close.ready' }
@@ -145,6 +169,118 @@ function bool(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+// ---------- общие настройки (R146) ----------
+
+/** Аватар — `data:` картинка не длиннее, чем веб кладёт в настройки (`preferences.ts`). */
+export const SHARED_AVATAR_LIMIT = 3500;
+/** Токен Яндекс Музыки — печатные ASCII не длиннее этого. */
+export const TOKEN_LIMIT = 1000;
+const SHARED_KEYS: readonly string[] = [...SHARED_PREFERENCES, ...SECRET_PREFERENCES];
+const LANGUAGES_OR_NULL = (value: unknown) => value === null || isLanguage(value);
+/** Имя значения перечисления, которое веб может расширить (раскладка, режим показа): незнакомое веб сам сведёт к умолчанию. */
+const IDENT = /^[a-z][a-z0-9-]{0,23}$/;
+const SHARED_AVATAR = /^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+
+function integerIn(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+
+/** Объект только с этими ключами (лишний — отказ) и значениями по `check`. */
+function record(value: unknown, keys: readonly string[] | RegExp, check: (key: string, item: unknown) => boolean, max = 16): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length > max) return false;
+  return entries.every(([key, item]) => (Array.isArray(keys) ? keys.includes(key) : (keys as RegExp).test(key)) && check(key, item));
+}
+
+function level(value: unknown, extra: readonly string[] = []): boolean {
+  return record(
+    value,
+    ['resolution', 'fps', ...extra],
+    (key, item) =>
+      key === 'resolution' ? integerIn(item, 1, 4320) : key === 'fps' ? integerIn(item, 1, 240) : key === 'preview' ? typeof item === 'boolean' : typeof item === 'string' && IDENT.test(item),
+    8,
+  );
+}
+
+/**
+ * Проверить значение общей настройки по её ключу. Значение проходит как есть (оболочка его не
+ * правит): веб читает его своим `readPreferences` и сам сводит к допустимому на этом сервере.
+ */
+export function validSharedValue(key: string, value: unknown): boolean {
+  switch (key as SharedKey) {
+    case 'language':
+      return LANGUAGES_OR_NULL(value);
+    case 'name':
+      return typeof value === 'string' && value.length <= 40;
+    case 'avatar':
+      return value === '' || (typeof value === 'string' && value.length <= SHARED_AVATAR_LIMIT && SHARED_AVATAR.test(value));
+    case 'audio':
+      return record(
+        value,
+        ['suppression', 'suppressionChosen', 'echoCancellation', 'autoGainControl', 'gain'],
+        (name, item) =>
+          name === 'suppression' ? typeof item === 'string' && IDENT.test(item) : name === 'gain' ? typeof item === 'number' && Number.isFinite(item) && item >= 0 && item <= 2 : typeof item === 'boolean',
+        5,
+      );
+    case 'outputVolume':
+    case 'soundVolume':
+    case 'watchVolume':
+      return integerIn(value, 0, 100);
+    case 'notificationSounds':
+    case 'deafened':
+    case 'pokerHints':
+    case 'pokerFeed':
+    case 'showPing':
+      return typeof value === 'boolean';
+    case 'gameSounds':
+      return record(value, IDENT, (_, item) => typeof item === 'boolean');
+    case 'micHotkey':
+    case 'overlayHotkey':
+    case 'overlayLockHotkey':
+    case 'deafenHotkey':
+      return value === null || (validHotkey(value) && Object.keys(value).length === 5);
+    case 'micHotkeyMode':
+      return value === 'toggle' || value === 'hold';
+    case 'layout':
+      return typeof value === 'string' && IDENT.test(value);
+    case 'watchAudio':
+      return typeof value === 'string' && value.length <= 24;
+    case 'watchSubtitles':
+      return typeof value === 'string' && value.length <= 32;
+    case 'screen':
+      return level(value, ['mode', 'preview', 'audio']);
+    case 'camera':
+      return level(value);
+    case 'cinemaLinks':
+      return Array.isArray(value) && value.length <= 10 && value.every((url) => typeof url === 'string' && url.length <= 2000 && /^https?:\/\//i.test(url));
+    case 'lastPlatform':
+      return record(value, IDENT, (_, item) => typeof item === 'string' && /^[a-z][a-z-]{0,31}$/.test(item), 8);
+    case 'devices':
+      // Устройства — по названию (`deviceId` у каждого origin свой): {camera?, microphone?, speaker?}.
+      return record(value, ['camera', 'microphone', 'speaker'], (_, item) => typeof item === 'string' && item.length > 0 && item.length <= 200, 3);
+    case 'yandexMusicToken':
+      return typeof value === 'string' && value.length <= TOKEN_LIMIT && /^[\x21-\x7e]*$/.test(value);
+  }
+  return false;
+}
+
+/** `{ключ: {value, at}}` по белому списку; любой чужой ключ, тип или время — `null` (отказ всему). */
+export function readSharedEntries(raw: unknown): SharedEntries | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entries = Object.entries(raw as Record<string, unknown>);
+  if (entries.length > SHARED_KEYS.length) return null;
+  const result: SharedEntries = {};
+  for (const [key, item] of entries) {
+    if (!SHARED_KEYS.includes(key) || !item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const entry = item as Record<string, unknown>;
+    if (Object.keys(entry).some((name) => name !== 'value' && name !== 'at')) return null;
+    if (!integerIn(entry.at, 0, Number.MAX_SAFE_INTEGER) || !('value' in entry) || !validSharedValue(key, entry.value)) return null;
+    result[key as SharedKey] = { value: entry.value, at: entry.at };
+  }
+  return result;
+}
+
 /**
  * Разобрать сообщение страницы. `null` — отказ: неизвестный тип, лишний размер, поле не по
  * схеме. Отказ пишется в журнал, но странице не сообщается — как и сейчас.
@@ -198,7 +334,17 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
     case 'preferences.changed': {
       const showPing = bool(data.showPing);
       const notificationSounds = bool(data.notificationSounds);
-      return { type: kind, ...(showPing !== undefined ? { showPing } : {}), ...(notificationSounds !== undefined ? { notificationSounds } : {}) };
+      // Общие настройки (R146): строго по белому списку — не прошла одна запись, не проходит ничего.
+      const shared = data.shared === undefined ? undefined : readSharedEntries(data.shared);
+      if (shared === null) return null;
+      if (data.seed !== undefined && data.seed !== true) return null;
+      return {
+        type: kind,
+        ...(showPing !== undefined ? { showPing } : {}),
+        ...(notificationSounds !== undefined ? { notificationSounds } : {}),
+        ...(shared ? { shared } : {}),
+        ...(shared && data.seed === true ? { seed: true as const } : {}),
+      };
     }
     case 'server.autoconnect': {
       const autoConnect = bool(data.autoConnect);

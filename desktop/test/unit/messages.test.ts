@@ -147,3 +147,100 @@ describe('readPageMessage — границы, как BridgeProtocol.Read', () =>
     expect(isPageCall('fs.read')).toBe(false);
   });
 });
+
+/*
+  Общие настройки (R146, Р-39): preferences.changed {shared: {ключ: {value, at}}, seed?} — строго по
+  белому списку: чужой ключ, не тот тип, лишний размер — отказ всему сообщению; прежняя форма
+  {showPing, notificationSounds} принимается как раньше.
+*/
+describe('preferences.changed — общие настройки (R146)', () => {
+  const at = 1_793_451_200_000;
+  const entry = (value: unknown) => ({ value, at });
+  const full = {
+    language: entry('de'),
+    name: entry('Ника'),
+    avatar: entry('data:image/webp;base64,UklGRg=='),
+    audio: entry({ suppression: 'rnnoise', suppressionChosen: true, echoCancellation: true, autoGainControl: false, gain: 1.4 }),
+    outputVolume: entry(80),
+    soundVolume: entry(0),
+    notificationSounds: entry(false),
+    gameSounds: entry({ poker: true, durak: false, chess: true, gartic: true }),
+    micHotkey: entry({ code: 'KeyM', ctrl: true, alt: false, shift: true, meta: false }),
+    micHotkeyMode: entry('hold'),
+    overlayHotkey: entry(null),
+    overlayLockHotkey: entry({ code: 'Backquote', ctrl: false, alt: false, shift: true, meta: false }),
+    deafened: entry(true),
+    deafenHotkey: entry({ code: 'KeyD', ctrl: true, alt: false, shift: true, meta: false }),
+    layout: entry('speaker'),
+    watchVolume: entry(70),
+    watchAudio: entry('ru'),
+    watchSubtitles: entry(''),
+    screen: entry({ resolution: 1440, fps: 60, mode: 'sharp', preview: true, audio: 'system-except-cord' }),
+    camera: entry({ resolution: 720, fps: 30 }),
+    pokerHints: entry(false),
+    pokerFeed: entry(true),
+    showPing: entry(true),
+    cinemaLinks: entry(['https://www.youtube.com/watch?v=1', 'https://rutube.ru/video/2/']),
+    lastPlatform: entry({ music: 'yandex', cinema: 'youtube' }),
+    devices: entry({ microphone: 'Микрофон (Realtek(R) Audio)', camera: 'HD Webcam' }),
+    yandexMusicToken: entry('y0_AgAAAAB1token'),
+  };
+
+  it('все общие ключи и токен — проходят; seed — признак переноса', () => {
+    expect(readPageMessage('preferences.changed', { shared: full })).toEqual({ type: 'preferences.changed', shared: full });
+    expect(readPageMessage('preferences.changed', { shared: { name: entry('Ника') }, seed: true })).toEqual({ type: 'preferences.changed', shared: { name: entry('Ника') }, seed: true });
+    // Прежняя форма — как раньше.
+    expect(readPageMessage('preferences.changed', { showPing: true, notificationSounds: false })).toEqual({ type: 'preferences.changed', showPing: true, notificationSounds: false });
+  });
+
+  it('свои у сервера ключи и всё незнакомое — отказ всему сообщению', () => {
+    for (const key of ['favorites', 'autojoin', 'recent', 'session', 'password', 'volumes', 'quality', 'admin', 'showIntegrationPanel', '__proto__x'])
+      expect(readPageMessage('preferences.changed', { shared: { name: entry('Ника'), [key]: entry(true) } }), key).toBeNull();
+  });
+
+  it('не тот тип или форма записи — отказ', () => {
+    const bad: Record<string, unknown>[] = [
+      { name: entry(42) },
+      { name: { value: 'Ника' } },
+      { name: { value: 'Ника', at: -1 } },
+      { name: { value: 'Ника', at: 1.5 } },
+      { name: { value: 'Ника', at, extra: 1 } },
+      { name: 'Ника' },
+      { language: entry('xx') },
+      { outputVolume: entry(101) },
+      { outputVolume: entry(50.5) },
+      { deafened: entry('yes') },
+      { micHotkeyMode: entry('push') },
+      { micHotkey: entry({ code: 'KeyM', ctrl: true }) },
+      { micHotkey: entry({ code: 'F25', ctrl: false, alt: false, shift: false, meta: false }) },
+      { audio: entry({ suppression: 'rnnoise', gain: 3 }) },
+      { audio: entry({ suppression: 'rnnoise', evil: true }) },
+      { screen: entry({ resolution: 99999, fps: 60 }) },
+      { camera: entry({ resolution: 720, fps: 30, mode: 'sharp' }) },
+      { cinemaLinks: entry(['javascript:alert(1)']) },
+      { cinemaLinks: entry(Array.from({ length: 11 }, (_, i) => `https://x.ru/${i}`)) },
+      { lastPlatform: entry({ music: 'Yandex Music!' }) },
+      { devices: entry({ microphone: 'default-id', webcam: 'x' }) },
+      { devices: entry({ microphone: '' }) },
+      { avatar: entry('https://evil.example/a.png') },
+      { yandexMusicToken: entry('токен с пробелом') },
+    ];
+    for (const shared of bad) expect(readPageMessage('preferences.changed', { shared }), JSON.stringify(shared)).toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: full, seed: 'yes' })).toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: [entry(1)] })).toBeNull();
+  });
+
+  it('пределы: имя ≤ 40, аватар ≤ 3500, токен ≤ 1000, ссылка ≤ 2000, всё сообщение ≤ 16 КиБ', () => {
+    const picture = (length: number) => 'data:image/png;base64,' + 'A'.repeat(length - 'data:image/png;base64,'.length);
+    expect(readPageMessage('preferences.changed', { shared: { name: entry('я'.repeat(40)) } })).not.toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: { name: entry('я'.repeat(41)) } })).toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: { avatar: entry(picture(3500)) } })).not.toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: { avatar: entry(picture(3501)) } })).toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: { yandexMusicToken: entry('t'.repeat(1000)) } })).not.toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: { yandexMusicToken: entry('t'.repeat(1001)) } })).toBeNull();
+    expect(readPageMessage('preferences.changed', { shared: { cinemaLinks: entry(['https://x.ru/' + 'a'.repeat(1990)]) } })).toBeNull();
+    // Десять ссылок по 1990 знаков — каждая в пределе, но всё сообщение больше 16 КиБ.
+    const links = Array.from({ length: 10 }, (_, i) => `https://x.ru/${i}/` + 'a'.repeat(1970));
+    expect(readPageMessage('preferences.changed', { shared: { cinemaLinks: entry(links) } })).toBeNull();
+  });
+});

@@ -5,7 +5,8 @@
  * только при несовместимости. Копия контракта в ядре — `contracts/desktop-bridge.v2.schema.json`.
  */
 
-export const PROTOCOL = { major: 2, minor: 0 } as const;
+/** `minor: 1` (1.1.0, R146) — общие настройки: `Bootstrap.shared`, `Bootstrap.yandexMusicToken`, флаг `prefs.shared`. */
+export const PROTOCOL = { major: 2, minor: 1 } as const;
 
 /** Что умеет эта сборка оболочки. Веб показывает понятный отказ там, где флага нет. */
 export const FEATURES = [
@@ -34,6 +35,7 @@ export const FEATURES = [
   'golive', // cord-native: «Показать игру» (R104) — событие golive {id, name}: начать показ окна игры
   'app.gpu', // видеокарта для выбора кодека (R152): invoke('app.gpu') → {devices, encoders, av1hw: {enabled, allowed}}
   'codec.av1hw', // в этом запуске включён аппаратный AV1 для WebRTC (`WebRtcAV1HWEncode`, белый список `gpu.ts`)
+  'prefs.shared', // общие настройки для всех серверов (R146, Р-39): Bootstrap.shared и yandexMusicToken, send('preferences.changed', {shared: {ключ: {value, at}}, seed?}), событие preferences.changed {shared}
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -61,7 +63,7 @@ export const PAGE_MESSAGES = [
   'call.state',
   'hotkeys.configure',
   'favorites.changed',
-  'preferences.changed',
+  'preferences.changed', // {showPing?, notificationSounds?} — прежний веб; с флагом prefs.shared (R146) — ещё {shared: {ключ: {value, at}}, seed?: true}
   'server.autoconnect',
   'servers.open',
   'close.ready',
@@ -97,7 +99,7 @@ export const HOST_MESSAGES = [
   'hotkeys.status',
   'navigate',
   'theme.changed',
-  'preferences.changed',
+  'preferences.changed', // {showPing?, notificationSounds?}; с prefs.shared (R146) — {shared: {ключ: значение}}: у оболочки значение новее присланного
   'settings.open',
   'favorite.settings',
   'favorites.changed',
@@ -131,6 +133,47 @@ export type HostMessage = (typeof HOST_MESSAGES)[number];
  */
 export const TITLEBAR_HEIGHT = 56;
 
+/**
+ * Общие для всех серверов настройки (R146, Р-39): то, что принадлежит устройству и человеку, а не
+ * серверу. Имена — поля `cord:preferences:v1` веба (`web/src/core/shared-preferences.ts`); `devices`
+ * — выбранные устройства **по названию** (`{camera?, microphone?, speaker?}`): `deviceId` Chromium
+ * солит по origin, и чужой id на другом сервере не совпадёт. Своё у сервера — избранное, недавние,
+ * сессия, пароль сервера, громкости участников, кеш возможностей, активная встреча — сюда не входит.
+ */
+export const SHARED_PREFERENCES = [
+  'language',
+  'name',
+  'avatar',
+  'audio',
+  'outputVolume',
+  'soundVolume',
+  'notificationSounds',
+  'gameSounds',
+  'micHotkey',
+  'micHotkeyMode',
+  'overlayHotkey',
+  'overlayLockHotkey',
+  'deafened',
+  'deafenHotkey',
+  'layout',
+  'watchVolume',
+  'watchAudio',
+  'watchSubtitles',
+  'screen',
+  'camera',
+  'pokerHints',
+  'pokerFeed',
+  'showPing',
+  'cinemaLinks',
+  'lastPlatform',
+  'devices',
+] as const;
+export type SharedPreference = (typeof SHARED_PREFERENCES)[number];
+/** Секрет: хранится отдельно, зашифрован `safeStorage`, отдаётся только серверам каталога. */
+export const SECRET_PREFERENCES = ['yandexMusicToken'] as const;
+export type SecretPreference = (typeof SECRET_PREFERENCES)[number];
+export type SharedValues = Partial<Record<SharedPreference, unknown>>;
+
 export interface Bootstrap {
   /** Секрет профиля для этого origin — 43 символа base64url, как писал WinUI. */
   profile: string;
@@ -142,6 +185,14 @@ export interface Bootstrap {
   autoConnect: boolean;
   /** Высота кнопок окна «— ⧉ ×» в DIP (`TITLEBAR_HEIGHT`, с 1.0.10); без неё веб считает 36. */
   titlebarHeight: number;
+  /**
+   * Общие настройки без секретов (R146): значение последней записи каждого ключа (`SHARED_PREFERENCES`).
+   * Пусто — общее хранилище ещё пустое: первая страница новой версии присылает свои с `seed: true`.
+   * Preload кладёт их в `cord:preferences:v1` и `cord:name` до первого скрипта страницы (кроме `devices`).
+   */
+  shared: SharedValues;
+  /** Токен Яндекс Музыки (R157) — только серверам подписанного каталога; null — токена нет или сервер чужой; '' — отключён. */
+  yandexMusicToken: string | null;
 }
 
 export interface CordDesktopApi {
