@@ -244,3 +244,11 @@ describe('preferences.changed — общие настройки (R146)', () => {
     expect(readPageMessage('preferences.changed', { shared: { cinemaLinks: entry(links) } })).toBeNull();
   });
 });
+
+describe('mini.state — «звук встречи» (R156)', () => {
+  it('deafened — только логическое и только если веб его прислал: иначе кнопки и пункта трея нет', () => {
+    expect(readPageMessage('mini.state', { room: 'Пятница', deafened: true })).toMatchObject({ state: { deafened: true } });
+    expect(readPageMessage('mini.state', { room: 'Пятница', deafened: false })).toMatchObject({ state: { deafened: false } });
+    for (const bad of [undefined, 'yes', 1, null]) expect((readPageMessage('mini.state', { deafened: bad }) as unknown as { state: Record<string, unknown> }).state, String(bad)).not.toHaveProperty('deafened');
+  });
+});

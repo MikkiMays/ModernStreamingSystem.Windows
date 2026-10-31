@@ -79,6 +79,11 @@ export interface ShellText {
   people: string;
   soundSettings: string;
   you: string;
+  /** «Звук встречи» (R156): пункт трея и кнопка мини-окна; подписи кнопки; хвост подсказки значка, со строчной. */
+  sound: string;
+  deafen: string;
+  undeafen: string;
+  deafenedNote: string;
 }
 
 const NBSP = ' ';
@@ -140,6 +145,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'Участники',
     soundSettings: 'Настройки звука',
     you: 'Вы',
+    sound: 'Звук встречи',
+    deafen: 'Выключить звук встречи',
+    undeafen: 'Включить звук встречи',
+    deafenedNote: 'звук встречи выключен',
   },
   en: {
     statusInCall: 'In a meeting',
@@ -197,6 +206,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'People',
     soundSettings: 'Sound settings',
     you: 'You',
+    sound: 'Meeting sound',
+    deafen: 'Turn off meeting sound',
+    undeafen: 'Turn on meeting sound',
+    deafenedNote: 'meeting sound off',
   },
   de: {
     statusInCall: 'Im Meeting',
@@ -254,6 +267,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'Teilnehmende',
     soundSettings: 'Toneinstellungen',
     you: 'Du',
+    sound: 'Meeting-Ton',
+    deafen: 'Meeting-Ton ausschalten',
+    undeafen: 'Meeting-Ton einschalten',
+    deafenedNote: 'Meeting-Ton aus',
   },
   es: {
     statusInCall: 'En una reunión',
@@ -311,6 +328,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'Participantes',
     soundSettings: 'Ajustes de sonido',
     you: 'Tú',
+    sound: 'Sonido de la reunión',
+    deafen: 'Silenciar la reunión',
+    undeafen: 'Activar el sonido de la reunión',
+    deafenedNote: 'sonido de la reunión desactivado',
   },
   fr: {
     statusInCall: 'En réunion',
@@ -368,6 +389,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'Participants',
     soundSettings: 'Réglages du son',
     you: 'Vous',
+    sound: 'Son de la réunion',
+    deafen: 'Couper le son de la réunion',
+    undeafen: 'Activer le son de la réunion',
+    deafenedNote: 'son de la réunion coupé',
   },
   it: {
     statusInCall: 'In riunione',
@@ -425,6 +450,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'Partecipanti',
     soundSettings: 'Impostazioni audio',
     you: 'Tu',
+    sound: 'Audio della riunione',
+    deafen: "Disattiva l'audio della riunione",
+    undeafen: "Attiva l'audio della riunione",
+    deafenedNote: 'audio della riunione disattivato',
   },
   'pt-BR': {
     statusInCall: 'Em uma reunião',
@@ -482,6 +511,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: 'Participantes',
     soundSettings: 'Configurações de som',
     you: 'Você',
+    sound: 'Som da reunião',
+    deafen: 'Desligar o som da reunião',
+    undeafen: 'Ligar o som da reunião',
+    deafenedNote: 'som da reunião desligado',
   },
   'zh-Hans': {
     statusInCall: '会议中',
@@ -539,6 +572,10 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     people: '参与者',
     soundSettings: '声音设置',
     you: '你',
+    sound: '会议声音',
+    deafen: '关闭会议声音',
+    undeafen: '开启会议声音',
+    deafenedNote: '会议声音已关闭',
   },
 };
 

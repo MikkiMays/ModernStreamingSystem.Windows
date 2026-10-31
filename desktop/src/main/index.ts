@@ -31,7 +31,7 @@ import { readInstallerLanguage, shellLanguage, type Language } from './language'
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
-import { decideMini, displayNeedsRebuild, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
+import { decideMini, displayNeedsRebuild, miniActionRoute, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
@@ -192,6 +192,8 @@ class Shell {
       // «Микрофон» трея — нажатие мини-окна с нужным состоянием (R137, R138): кнопок на миниатюре и их
       // сообщения `thumbar` больше нет; веб до R137 исполняет его как «переключить».
       toggleMicrophone: () => void this.router.post('mini.action', { id: 'mic', want: !this.call.mic }),
+      // «Звук встречи» трея (R156) — тоже нажатие мини-окна: want — нужное «выключен ли звук встречи».
+      toggleDeafen: () => void this.router.post('mini.action', { id: 'deafen', want: !this.miniState?.deafened }),
       toggleNotifications: () => this.applyAppSettings({ notifications: !this.settings.get().notifications }, true),
       quit: () => void this.trayQuit(),
     },
@@ -899,7 +901,8 @@ class Shell {
       language: this.language(),
       text: {
         label: text.miniLabel, collapse: text.miniCollapse, open: text.miniOpen, more: text.miniMore, compact: text.miniCompact, on: text.stateOn, off: text.stateOff,
-        microphone: text.microphone, micMute: text.micMute, micUnmute: text.micUnmute, camera: text.camera, screenShare: text.screenShare, screenStop: text.screenStop,
+        microphone: text.microphone, micMute: text.micMute, micUnmute: text.micUnmute, sound: text.sound, deafen: text.deafen, undeafen: text.undeafen,
+        camera: text.camera, screenShare: text.screenShare, screenStop: text.screenStop,
         youShare: text.youShare, stopShare: text.stopShare, people: text.people, chat: text.chat, soundSettings: text.soundSettings, leave: text.leave, you: text.you,
         recovering: text.miniRecovering, connecting: text.miniConnecting, seconds: text.miniSeconds,
       },
@@ -907,8 +910,9 @@ class Shell {
   }
 
   /**
-   * Нажатие в мини-окне. Микрофон, камера и выход исполняет веб, не поднимая Cord; участники, чат,
-   * настройки и начало показа (окно выбора) — в окне Cord, оно выходит вперёд.
+   * Нажатие в мини-окне (`miniActionRoute`). Микрофон, «звук встречи» (R156), камера и выход исполняет
+   * веб, не поднимая Cord; участники, чат, настройки и начало показа (окно выбора) — в окне Cord, оно
+   * выходит вперёд.
    *
    * С R137 нажатие несёт нужное состояние (`want`: включить или выключить, а не «переключить» — два
    * быстрых нажатия до нового состояния не отменяют друг друга) и номер (`seq`). На номер мини-окну
@@ -923,41 +927,26 @@ class Shell {
       const delivered = this.router.post('mini.action', { id, ...(want !== undefined ? { want } : {}), ...(seq !== undefined ? { seq } : {}) });
       if (!delivered) ack('ignored', 'page');
     };
+    const route = miniActionRoute(id, want, this.call.screen);
+    if (route === 'unknown') return ack('ignored', 'unknown');
+    if (route === 'page' || route === 'page-focus') {
+      if (route === 'page-focus') this.focus();
+      toPage();
+      return;
+    }
     switch (id) {
       case 'open':
         this.focus();
-        ack('ok');
-        return;
+        break;
       case 'collapse':
         this.miniDismissed = true;
         this.updateMini();
-        ack('ok');
-        return;
-      case 'expand':
-      case 'compact':
+        break;
+      default:
         this.settings.update({ mini: { ...this.settings.get().mini, expanded: id === 'expand' } });
         this.mini.send('mini.config', this.miniConfig());
-        ack('ok');
-        return;
-      case 'mic':
-      case 'camera':
-      case 'leave':
-        toPage();
-        return;
-      case 'screen':
-        // Начать показ — окно выбора в Cord; остановить — без него.
-        if (want ?? !this.call.screen) this.focus();
-        toPage();
-        return;
-      case 'people':
-      case 'chat':
-      case 'settings':
-        this.focus();
-        toPage();
-        return;
-      default:
-        ack('ignored', 'unknown');
     }
+    ack('ok');
   }
 
   /**
@@ -1319,8 +1308,10 @@ class Shell {
         this.miniState = message.state;
         if (first) this.mini.send('mini.config', this.miniConfig());
         this.mini.send('mini.state', { ...message.state });
-        // «Чат · N» в меню трея — по непрочитанным встречи (значка поверх иконки больше нет, R138).
+        // «Чат · N» в меню трея — по непрочитанным встречи (значка поверх иконки больше нет, R138);
+        // «Звук встречи» — если веб его знает (R156).
         this.taskbar.setUnread(message.state.unread);
+        this.taskbar.setDeafened(message.state.deafened ?? null);
         if (first) this.updateMini();
         return;
       }

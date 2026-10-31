@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideMini, decideRebuild, displayNeedsRebuild, MINI_REBUILDS, MINI_WATCH, watchStep, type MiniInput } from '../../src/main/mini-policy';
+import { decideMini, decideRebuild, displayNeedsRebuild, miniActionRoute, MINI_REBUILDS, MINI_WATCH, watchStep, type MiniInput } from '../../src/main/mini-policy';
 
 const away: MiniInput = {
   inCall: true,
@@ -97,5 +97,26 @@ describe('смена мониторов (R137): что пересоздаёт о
     expect(displayNeedsRebuild(['rotation'])).toBe(true);
     expect(displayNeedsRebuild(['workArea'])).toBe(false);
     expect(displayNeedsRebuild([])).toBe(false);
+  });
+});
+
+describe('нажатия мини-окна и трея — кто исполняет (R93, R137, R156)', () => {
+  it('«звук встречи» исполняет встреча, не поднимая Cord, — как микрофон, камера и выход', () => {
+    for (const id of ['mic', 'deafen', 'camera', 'leave']) expect(miniActionRoute(id, undefined, false), id).toBe('page');
+    expect(miniActionRoute('deafen', true, false)).toBe('page');
+    expect(miniActionRoute('deafen', false, true)).toBe('page');
+  });
+
+  it('участники, чат, настройки и начало показа — окно Cord впереди; остановить показ — без него', () => {
+    for (const id of ['people', 'chat', 'settings']) expect(miniActionRoute(id, undefined, false), id).toBe('page-focus');
+    expect(miniActionRoute('screen', undefined, false)).toBe('page-focus');
+    expect(miniActionRoute('screen', true, true)).toBe('page-focus');
+    expect(miniActionRoute('screen', undefined, true)).toBe('page');
+    expect(miniActionRoute('screen', false, false)).toBe('page');
+  });
+
+  it('развернуть, свернуть, открыть — сама оболочка; незнакомое — unknown (мини-окну сразу ignored)', () => {
+    for (const id of ['open', 'collapse', 'expand', 'compact']) expect(miniActionRoute(id, undefined, false), id).toBe('main');
+    expect(miniActionRoute('record', undefined, false)).toBe('unknown');
   });
 });

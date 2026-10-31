@@ -157,6 +157,9 @@ button:disabled { opacity: 0.38; pointer-events: none; }
 .action .icon { color: var(--stage-muted); }
 .action small { color: var(--stage-muted); font-size: 12px; font-weight: 400; }
 .action[data-live='true'] .icon, .action[data-live='true'] small { color: var(--voice-3); }
+/* «Звук встречи» выключен (R156): перечёркнутые наушники красным — правило пульта «красный значок — выключено». */
+.action[data-off='true'] .icon { color: var(--danger-fill); }
+.action[hidden] { display: none; }
 .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; font-size: 12px; font-weight: 600; background: var(--stage-glint-2); }
 .badge--alert { background: var(--danger-fill); color: #fff; }
 .leave {

@@ -76,7 +76,7 @@ export const PAGE_MESSAGES = [
   'badge', // с 1.0.11 (R138) значка поверх иконки нет и флага нет: число идёт только в «Чат · N» меню трея
   'capture.select',
   'overlay.roster', // {participants: [{id, name, avatar, muted}]} — кто в звонке для виджета в игре и мини-окна (R63, R93), ≤ 128 КиБ
-  'mini.state', // {room, mic, camera, screen, unread, count, self, status, remaining, seq?} — что показывать в мини-окне звонка (R93, R137)
+  'mini.state', // {room, mic, camera, screen, unread, count, self, status, remaining, seq?, deafened?} — что показывать в мини-окне звонка (R93, R137); deafened — «звук встречи» выключен (R156)
   'mini.ack', // {seq, result: 'ok' | 'ignored', reason?} — встреча исполнила нажатие мини-окна или нет (R137)
 ] as const;
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
@@ -119,7 +119,7 @@ export const HOST_MESSAGES = [
   'chat.open', // «Чат · N» в меню трея (R103): открыть чат встречи; веб без поддержки пропускает
   'games.changed', // {games, active} — реестр игр сменился (R62)
   'game.active', // {game: {exe, name, enabled, exclusive} | null} — игра, которая сейчас запущена (R62)
-  'mini.action', // {id, want?, seq?} — нажатие в мини-окне звонка (R93): mic, camera, screen, people, chat, settings, leave; want — нужное состояние (R137), seq — номер для mini.ack
+  'mini.action', // {id, want?, seq?} — нажатие в мини-окне звонка (R93): mic, deafen (R156), camera, screen, people, chat, settings, leave; want — нужное состояние (R137), seq — номер для mini.ack
   'mini.resync', // мини-окно не дождалось ответа (R137): прислать mini.state и overlay.roster заново
   'golive', // {id, name} — «Показать игру» (R104): начать показ этого окна; оболочка уже дала странице жест
 ] as const;

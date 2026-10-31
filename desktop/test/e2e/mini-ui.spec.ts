@@ -13,7 +13,8 @@
  * R137: окно непрозрачное, без тени и поля; кнопки — те же узлы, нажатие не теряется, если окно
  * перерисовалось посреди него; нажатие несёт нужное состояние и номер, кнопка ждёт ответа встречи
  * (`mini.ack`) не дольше 4 с; перетаскивание — своим кодом; сторож кадров пересоздаёт замершее окно;
- * сон, сброс GPU — тоже, но не чаще 3 раз за 5 минут.
+ * сон, сброс GPU — тоже, но не чаще 3 раз за 5 минут. R156: «Звук встречи» в развёрнутом виде между
+ * микрофоном и камерой — нужное состояние, ответ `mini.ack`; веб без `deafened` — кнопки нет.
  * Снимки — в `test-results/shots/mini-ui-*.png`.
  */
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -216,7 +217,9 @@ test('мини-окно: вид, каждая кнопка, связь, паде
 
     await test.step('развёрнутый: каждое действие своим id, бейджи', async () => {
       await send(app, 'mini.state', { ...base, count: 25, unread: 120 });
-      await expect(mini.locator('.action')).toHaveCount(6);
+      // Веб до R156 «звук встречи» не шлёт — его кнопки нет.
+      await expect(mini.locator('.action:not([hidden])')).toHaveCount(6);
+      await expect(mini.locator('.action[data-action="deafen"]')).toBeHidden();
       await expect(mini.locator('.action[data-action="chat"] .badge--alert')).toHaveText('99+');
       await expect(mini.locator('.action[data-action="people"] .badge')).toHaveText('25');
       await expect(mini.locator('#self')).toBeVisible();
@@ -227,6 +230,27 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await osClick(app, mini, '#leave');
       await expect.poll(() => seen(app), { timeout: 5_000 }).toEqual(['mic', 'camera', 'leave']);
       expect(await shown(app, 'cord-app://mini'), 'микрофон, камера и выход Cord не поднимают').toBe(true);
+    });
+
+    await test.step('«Звук встречи» (R156): между микрофоном и камерой, нужное состояние и ответ mini.ack, Cord не поднимается', async () => {
+      await send(app, 'mini.state', { ...base, count: 25, deafened: false });
+      const deafen = mini.locator('.action[data-action="deafen"]');
+      await expect(deafen).toBeVisible();
+      expect(await mini.locator('.action:not([hidden])').evaluateAll((list) => list.map((item) => item.getAttribute('data-action')))).toEqual(['mic', 'deafen', 'camera', 'screen', 'people', 'chat', 'settings']);
+      await forget(app);
+      await osClick(app, mini, '.action[data-action="deafen"]');
+      await expect.poll(async () => (await lastAction(app))?.id, { timeout: 5_000 }).toBe('deafen');
+      const press = (await lastAction(app))!;
+      expect(press.want, 'звук встречи включён — нажатие просит выключить').toBe(true);
+      await expect(deafen).toHaveAttribute('data-pending', 'true');
+      await send(app, 'mini.ack', { seq: press.seq, result: 'ok' });
+      await expect(deafen).not.toHaveAttribute('data-pending', 'true', { timeout: 3_000 });
+      expect(await shown(app, 'cord-app://mini'), '«звук встречи» Cord не поднимает').toBe(true);
+      await send(app, 'mini.state', { ...base, count: 25, mic: false, deafened: true });
+      await expect(deafen).toHaveAttribute('data-off', 'true');
+      await shot(mini, 'expanded-deafened');
+      await send(app, 'mini.state', { ...base, count: 25, deafened: false });
+      await expect(deafen).toHaveAttribute('data-off', 'false');
     });
 
     await test.step('нажатие не теряется, если окно перерисовалось между «нажал» и «отпустил» (R137)', async () => {

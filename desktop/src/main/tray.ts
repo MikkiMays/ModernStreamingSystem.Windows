@@ -24,6 +24,8 @@ export interface TrayHost {
   openChat(): void;
   openSettings(): void;
   toggleMicrophone(): void;
+  /** «Звук встречи» (R156): выключить или включить звук всей встречи. */
+  toggleDeafen(): void;
   toggleNotifications(): void;
   quit(): void;
 }
@@ -52,6 +54,8 @@ export class Taskbar {
   private title = '';
   /** Непрочитанные в чате встречи — для «Чат · N» (из `mini.state`, у прежнего веба — из `badge`). */
   private unread = 0;
+  /** «Звук встречи» выключен (`mini.state.deafened`, R156); null — веб о нём не знает, пункта нет. */
+  private deafened: boolean | null = null;
   /** Что сейчас нарисовано в меню: то же состояние и язык — меню не пересобирается. */
   private drawn = '';
 
@@ -95,7 +99,7 @@ export class Taskbar {
   refreshTray(): void {
     if (!this.tray || this.tray.isDestroyed()) return;
     const text = this.text();
-    const state = { inCall: this.state.inCall, mic: this.state.mic, title: this.title, unread: this.unread, notifications: this.options().notifications };
+    const state = { inCall: this.state.inCall, mic: this.state.mic, title: this.title, unread: this.unread, notifications: this.options().notifications, deafened: this.deafened };
     // mini.state и call.state приходят часто — открытое меню не подменяется без причины.
     const drawn = JSON.stringify([state, text.statusIdle]);
     if (drawn === this.drawn) return;
@@ -106,6 +110,7 @@ export class Taskbar {
       new: () => this.host.newMeeting(),
       chat: () => this.host.openChat(),
       mic: () => this.host.toggleMicrophone(),
+      deafen: () => this.host.toggleDeafen(),
       notifications: () => this.host.toggleNotifications(),
       settings: () => this.host.openSettings(),
       quit: () => this.host.quit(),
@@ -137,12 +142,19 @@ export class Taskbar {
   applyCall(state: CallState, title = ''): void {
     this.state = state;
     this.title = state.inCall ? title : '';
+    if (!state.inCall) this.deafened = null;
     this.refreshTray();
   }
 
   /** Непрочитанные в чате встречи — «Чат · N» в меню трея. */
   setUnread(count: number): void {
     this.unread = count;
+    this.refreshTray();
+  }
+
+  /** «Звук встречи» встречи (R156); null — веб о нём не знает. */
+  setDeafened(deafened: boolean | null): void {
+    this.deafened = deafened;
     this.refreshTray();
   }
 

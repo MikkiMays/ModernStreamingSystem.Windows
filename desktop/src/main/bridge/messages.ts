@@ -77,6 +77,11 @@ export interface MiniState {
    * и по `mini.resync` с тем же номером. Веб до R137 его не шлёт.
    */
   seq?: number;
+  /**
+   * «Звук встречи» выключен (R156): кнопка с наушниками в мини-окне и «Звук встречи» в меню трея.
+   * Веб до R156 поля не шлёт — тогда ни кнопки, ни пункта нет.
+   */
+  deafened?: boolean;
 }
 
 /** Ответ встречи на нажатие в мини-окне (R137): `seq` — номер нажатия, `reason` — код (`link`, `busy`…). */
@@ -430,6 +435,8 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
           status: data.status === 'recovering' || data.status === 'connecting' ? data.status : 'connected',
           remaining: data.status === 'recovering' ? count(data.remaining) : 0,
           ...(sequence(data.seq) !== undefined ? { seq: sequence(data.seq) } : {}),
+          // «Звук встречи» (R156): только если веб его знает — иначе в мини-окне и трее его нет.
+          ...(typeof data.deafened === 'boolean' ? { deafened: data.deafened } : {}),
         },
       };
     }

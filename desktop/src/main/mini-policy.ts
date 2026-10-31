@@ -78,3 +78,37 @@ export function decideRebuild(history: readonly number[], now: number): { allowe
 export function displayNeedsRebuild(changed: readonly string[]): boolean {
   return changed.some((metric) => metric === 'bounds' || metric === 'scaleFactor' || metric === 'rotation');
 }
+
+/**
+ * Что делать с нажатием мини-окна (R93, R137) — и «Микрофона» / «Звука встречи» трея (R138, R156):
+ * - `main` — исполняет сама оболочка (развернуть, свернуть, открыть Cord);
+ * - `page` — исполняет встреча, не поднимая Cord: микрофон, «звук встречи», камера, выход и
+ *   «остановить показ»;
+ * - `page-focus` — окно Cord выходит вперёд, встреча открывает своё: участники, чат, настройки,
+ *   «начать показ» (окно выбора источника — в Cord);
+ * - `unknown` — такого нажатия нет: мини-окну сразу `mini.ack ignored`.
+ */
+export type MiniRoute = 'main' | 'page' | 'page-focus' | 'unknown';
+
+export function miniActionRoute(id: string, want: boolean | undefined, screen: boolean): MiniRoute {
+  switch (id) {
+    case 'open':
+    case 'collapse':
+    case 'expand':
+    case 'compact':
+      return 'main';
+    case 'mic':
+    case 'deafen':
+    case 'camera':
+    case 'leave':
+      return 'page';
+    case 'screen':
+      return (want ?? !screen) ? 'page-focus' : 'page';
+    case 'people':
+    case 'chat':
+    case 'settings':
+      return 'page-focus';
+    default:
+      return 'unknown';
+  }
+}

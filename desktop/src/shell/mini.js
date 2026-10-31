@@ -1,6 +1,7 @@
 // Мини-окно звонка (R93, DESIGN.md → Мини-оверлей звонка; n06/n07 — Телемост). Компактное — до трёх
 // плиток (показ экрана первым, затем тот, кто говорил последним) и пульт: микрофон, показ, «ещё»;
-// развёрнутое — своя плитка, всё управление звонком и красная «Выйти из встречи». Нажатия уходят в
+// развёрнутое — своя плитка, всё управление звонком («Звук встречи» с наушниками — между микрофоном и
+// камерой, R156) и красная «Выйти из встречи». Нажатия уходят в
 // main (`mini.action`), состояние встречи — `mini.state`, состав — `overlay.roster`, кто говорит —
 // по порту уровней прямо со страницы встречи (`overlay.levels`). Пока связь со звуком восстанавливается
 // (`state.status`), встреча не исполняет микрофон, камеру и показ — эти кнопки погашены, сверху полоса
@@ -33,7 +34,7 @@
   const DRAG_QUIET_MS = 600;
 
   let config = { expanded: false, language: 'ru', text: {} };
-  let state = { room: '', self: '', mic: false, camera: false, screen: false, unread: 0, count: 0, status: 'connected', remaining: 0 };
+  let state = { room: '', self: '', mic: false, camera: false, screen: false, unread: 0, count: 0, status: 'connected', remaining: 0, deafened: undefined };
   let people = [];
   const tiers = new Map();
   /** Когда человек говорил последний раз (ступень ≥ 2). */
@@ -45,10 +46,13 @@
   const live = () => state.status === 'connected';
   /** Это встреча исполняет только при связи — без неё нажатие не уходит, даже если кнопка не успела погаснуть. */
   const NEEDS_LINK = new Set(['mic', 'camera', 'screen']);
-  /** Что просить у встречи: включить или выключить — по тому, что видно сейчас. */
-  const WANT = { mic: () => !state.mic, camera: () => !state.camera, screen: () => !state.screen };
+  /**
+   * Что просить у встречи: включить или выключить — по тому, что видно сейчас. У «звука встречи»
+   * (R156) `want` — нужное «звук выключен»; связи он не ждёт: глушит и возвращает звук сама страница.
+   */
+  const WANT = { mic: () => !state.mic, deafen: () => !state.deafened, camera: () => !state.camera, screen: () => !state.screen };
   /** Это исполняет встреча, не поднимая Cord: кнопка ждёт её ответа. */
-  const AWAITED = new Set(['mic', 'camera', 'screen', 'leave']);
+  const AWAITED = new Set(['mic', 'deafen', 'camera', 'screen', 'leave']);
   /** Ждут ответа: id действия → номер нажатия и таймер. */
   const pending = new Map();
   let seq = 0;
@@ -266,7 +270,7 @@
 
   // Действия развёрнутого вида.
   const actionNodes = new Map();
-  for (const id of ['mic', 'camera', 'screen', 'people', 'chat', 'settings']) {
+  for (const id of ['mic', 'deafen', 'camera', 'screen', 'people', 'chat', 'settings']) {
     const element = document.createElement('button');
     element.type = 'button';
     element.className = 'action';
@@ -293,8 +297,10 @@
     node.extra.replaceChildren(element);
   }
 
-  function action(id, icon, label, extraKind, extraValue, on, disabled) {
+  function action(id, icon, label, extraKind, extraValue, on, disabled, hidden = false) {
     const node = actionNodes.get(id);
+    if (node.element.hidden !== hidden) node.element.hidden = hidden;
+    if (hidden) return;
     setIcon(node.element, icon, 20);
     setText(node.label, label);
     setExtra(node, extraKind, extraValue);
@@ -385,6 +391,13 @@
     const self = people.find((person) => person.id === state.self) || null;
     fillTile(own, self, text.you || '');
     action('mic', state.mic ? 'mic' : 'mic-off', text.microphone || '', 'small', state.mic ? text.on || '' : text.off || '', false, !live());
+    // «Звук встречи» (R156): наушники; выключен — перечёркнутые и красные, как у пульта встречи. Веб до R156
+    // о нём не знает (`deafened` не приходит) — кнопки нет.
+    const deafened = state.deafened === true;
+    action('deafen', deafened ? 'headphone-off' : 'headphones', text.sound || '', 'small', deafened ? text.off || '' : text.on || '', false, false, typeof state.deafened !== 'boolean');
+    const deafen = actionNodes.get('deafen').element;
+    if (deafen.dataset.off !== String(deafened)) deafen.dataset.off = String(deafened);
+    if (deafen.title !== (deafened ? text.undeafen || '' : text.deafen || '')) deafen.title = deafened ? text.undeafen || '' : text.deafen || '';
     action('camera', state.camera ? 'video' : 'video-off', text.camera || '', 'small', state.camera ? text.on || '' : text.off || '', false, !live());
     action('screen', 'monitor-up', text.screenShare || '', state.screen ? 'small' : '', state.screen ? text.screenStop || '' : '', state.screen, !live());
     action('people', 'users', text.people || '', state.count ? 'badge' : '', state.count ? count(state.count) : '');
