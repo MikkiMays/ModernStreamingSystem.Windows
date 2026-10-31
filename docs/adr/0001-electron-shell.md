@@ -49,6 +49,7 @@
 | 4 | Захват | `getDisplayMedia` → `setDisplayMediaRequestHandler` + своё окно выбора; звук приложения — WASAPI process loopback в `cord-native` |
 | 4 | Клавиши | Raw Input (`RIDEV_INPUTSINK`) в `cord-native`: keydown/keyup, мышь; `globalShortcut` — запасной путь |
 | 4 | Оверлей | Прозрачное окно поверх всех, клики проходят сквозь него, из захвата исключено; без инъекций |
+| 4 | Кодеки | Аппаратный AV1 для WebRTC (`WebRtcAV1HWEncode`) — ключом оболочки по белому списку видеокарт прошлого запуска (§4.7); сведения о GPU — `invoke('app.gpu')`, флаги `app.gpu`, `codec.av1hw` |
 | 5 | Обновления | Заставка при запуске (§5.1); electron-updater, generic-провайдер на `/downloads/windows/desktop/`; Ed25519-подпись манифеста + sha512 + Authenticode (когда будет сертификат); дельты по blockmap |
 | 6 | Установщик | NSIS из electron-builder, мастер со своими страницами; не Squirrel и не свой загрузчик (таблица §6) |
 | 7 | Переход | Те же DPAPI-файлы читаются как есть; переходного выпуска нет — Electron ставится с `/download` |
@@ -321,6 +322,18 @@ Rust + [napi-rs](https://napi.rs). N-API — сборка одна на все �
 - `net` — не делался: `network.changed` пока не нужен вебу (`navigator.onLine` в странице).
 
 Чистая логика (`keys`, `matcher`, `pcm`, `foreground`, `boost`) собирается и проверяется `cargo test` на любой платформе; Windows-часть — `src/win/*` за `cfg(windows)`, на остальных — заглушки с отказом. JS: `src/native/host.ts` (utility-процесс, `process.parentPort`, запросы с номерами, события, порт PCM; `CORD_NATIVE_FAKE=1` — подмена для дымового прогона без Windows), `src/main/native/client.ts` (запуск, `ready`, перезапуск через 2 с не чаще трёх раз за 10 минут). Флаги `ptt` и `capture.app-audio` объявляются только с загруженным модулем (`featuresFor(platform, native)`); без него веб показывает понятный отказ и не ломается.
+
+### 4.7 Кодеки: аппаратный AV1 для WebRTC и сведения о видеокарте (R152, 31.10.2026)
+
+**Почему ключ.** Кодек и слои выбирает веб (`web/src/media/codec-policy.ts`, `docs/codecs.md` главного репозитория): AV1 → H.265 → VP9 → H.264 в железе. Но Chromium на Windows держит [`kWebRtcAV1HWEncode`](https://chromium.googlesource.com/chromium/src/+/main/media/webrtc/webrtc_features.cc) выключенным (`FEATURE_DISABLED_BY_DEFAULT` под `IS_WIN`): `RTCVideoEncoderFactory` вычёркивает аппаратные профили AV1, и даже RTX 40 кодирует AV1 процессором. Chrome включает его через Finch, в Electron Finch нет — ключ ставит оболочка: `app.commandLine.appendSwitch('enable-features', …)` одной строкой с уже заданными фичами (`mergeFeatures`: второй `enable-features`, как и второй `force-fieldtrials`, перебил бы первый).
+
+**Где включаем — белый список** (`desktop/src/main/gpu.ts`, `av1Capable`): NVIDIA Ada и новее (PCI `0x2680`–`0x28FF`, `≥ 0x2B00`; Hopper и B100/B200 — нет), AMD RDNA3+ (Navi 3x/4x `0x7440`–`0x75FF`, APU Phoenix/Hawk Point/Strix/Krackan), Intel Arc Alchemist/Battlemage, Meteor/Arrow/Lunar/Panther Lake; иначе — по имени устройства. Iris Xe и RDNA2 AV1 только декодируют. Если Chromium перечислил профили кодирования и AV1 среди них нет — ключ не ставим.
+
+**Порядок.** Ключ читается до `ready`, `app.getGPUInfo` отвечает после. Поэтому решает видеокарта прошлого запуска: через 5 с после старта оболочка спрашивает `getGPUInfo('complete')` (не дольше 15 с, иначе `basic`) и кладёт устройства в `userData/gpu.json`; следующий запуск по нему ставит или не ставит ключ. Первый запуск на новой машине и запуск после смены видеокарты — без ключа; в журнале `desktop.log` строка «видеокарта: … AV1 в железе: включён / со следующего запуска / нет». Профили кодирования из сведений о GPU в Electron 44 ненадёжны: `gpu_info_enumerator.cc` кладёт их через `Set`, а не `Append` (electron#41829), и виден только последний — одиночный профиль читается как «не перечислено», а не как «умеет только это».
+
+**Выключатель.** `CORD_AV1_HW=0` в окружении (у человека, сильнее сборки) или `"av1HwEncode": false` в `build/update-keys.json` (`config.ts`, вся сборка). По умолчанию — включено.
+
+**Мост.** Флаг `app.gpu` — есть запрос `invoke('app.gpu')` → `{devices: [{vendorId, deviceId, name, driver, active}], encoders, av1hw: {enabled, allowed}}` (схема `appGpu` в `contracts/desktop-bridge.v2.schema.json`); флаг `codec.av1hw` — ключ включён в этом запуске. Веб берёт отсюда поставщиков (ловушка NVIDIA: H.264 constrained baseline Chromium отдаёт не NVENC, а OpenH264, crbug 1088650) и признак AV1. Старая оболочка без флага работает как раньше: веб спрашивает кодировщик сам (`encodingInfo`) и видеокарту по WebGL. Заработал ли AV1 в железе на самом деле, веб проверяет по `encoderImplementation`/`powerEfficientEncoder` и отступает по лестнице, если кодирует процессор.
 
 ## 5. Обновления — только с серверов Cord
 
