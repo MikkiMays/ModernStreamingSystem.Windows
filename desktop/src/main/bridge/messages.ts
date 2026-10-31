@@ -261,6 +261,12 @@ export function validSharedValue(key: string, value: unknown): boolean {
       return Array.isArray(value) && value.length <= 10 && value.every((url) => typeof url === 'string' && url.length <= 2000 && /^https?:\/\//i.test(url));
     case 'lastPlatform':
       return record(value, IDENT, (_, item) => typeof item === 'string' && /^[a-z][a-z-]{0,31}$/.test(item), 8);
+    case 'background':
+      // Фон в видео (R153): без фона, размытие (strength) или картинка (id встроенного фона или custom).
+      return (
+        record(value, ['kind', 'strength', 'id'], (name, item) => (name === 'kind' ? item === 'none' || item === 'blur' || item === 'image' : typeof item === 'string' && IDENT.test(item)), 2) &&
+        typeof (value as Record<string, unknown>).kind === 'string'
+      );
     case 'devices':
       // Устройства — по названию (`deviceId` у каждого origin свой): {camera?, microphone?, speaker?}.
       return record(value, ['camera', 'microphone', 'speaker'], (_, item) => typeof item === 'string' && item.length > 0 && item.length <= 200, 3);

@@ -182,6 +182,7 @@ describe('preferences.changed — общие настройки (R146)', () => {
     showPing: entry(true),
     cinemaLinks: entry(['https://www.youtube.com/watch?v=1', 'https://rutube.ru/video/2/']),
     lastPlatform: entry({ music: 'yandex', cinema: 'youtube' }),
+    background: entry({ kind: 'blur', strength: 'light' }),
     devices: entry({ microphone: 'Микрофон (Realtek(R) Audio)', camera: 'HD Webcam' }),
     yandexMusicToken: entry('y0_AgAAAAB1token'),
   };
@@ -221,6 +222,9 @@ describe('preferences.changed — общие настройки (R146)', () => {
       { cinemaLinks: entry(Array.from({ length: 11 }, (_, i) => `https://x.ru/${i}`)) },
       { lastPlatform: entry({ music: 'Yandex Music!' }) },
       { devices: entry({ microphone: 'default-id', webcam: 'x' }) },
+      { background: entry({ kind: 'video' }) },
+      { background: entry({ strength: 'light' }) },
+      { background: entry({ kind: 'image', url: 'https://evil.example/a.png' }) },
       { devices: entry({ microphone: '' }) },
       { avatar: entry('https://evil.example/a.png') },
       { yandexMusicToken: entry('токен с пробелом') },

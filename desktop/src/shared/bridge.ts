@@ -166,6 +166,7 @@ export const SHARED_PREFERENCES = [
   'showPing',
   'cinemaLinks',
   'lastPlatform',
+  'background', // фон в видео (R153): {kind: 'none' | 'blur' | 'image', strength?, id?}; своё фото — в IndexedDB своего origin
   'devices',
 ] as const;
 export type SharedPreference = (typeof SHARED_PREFERENCES)[number];
