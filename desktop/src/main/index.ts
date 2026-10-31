@@ -36,6 +36,7 @@ import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
+import { loadBars, serverStatus } from './server-status';
 import { SettingsStore } from './settings';
 import { bootstrapShared, SharedPreferences } from './shared-preferences';
 import { shellText, type ShellText } from './shell-text';
@@ -1172,8 +1173,8 @@ class Shell {
     const origin = ServerOrigin.tryParse(url);
     if (!origin || !this.allowedOrigins().some((known) => known.equals(origin)) || !this.main) return;
     if (this.call.inCall) {
-      const { response } = await dialog.showMessageBox(this.main.window, { type: 'question', buttons: ['Выйти из встречи', 'Остаться'], defaultId: 1, cancelId: 1, message: 'Сменить сервер?', detail: 'Текущая встреча закончится.' });
-      if (response !== 0) return;
+      const text = this.text();
+      if (!(await this.confirm(text.switchTitle, text.newDetail, text.leave))) return;
       await this.requestClose();
     }
     this.settings.update({ serverUrl: origin.url });
@@ -1602,10 +1603,19 @@ class Shell {
 
   private openServers(): void {
     if (!this.main) return;
-    this.servers ??= new ServersWindow(this.preloadDir, this.main.window, () => {
+    this.servers ??= new ServersWindow(this.preloadDir, this.main.window, this.text().serversTitle, () => {
       this.servers = null;
     });
     this.servers.focus();
+  }
+
+  /** Тексты окна «Серверы» (R143, R146) — на языке Cord; русский — запасной в самом окне. */
+  private serversText(): { language: Language; text: Record<string, string> } {
+    const text = this.text();
+    return {
+      language: this.language(),
+      text: { title: text.serversTitle, list: text.serversList, note: text.serversNote, close: text.close, ping: text.ping, unknown: loadBars(null, text).label },
+    };
   }
 
   private installShellCalls(): void {
@@ -1615,11 +1625,12 @@ class Shell {
       switch (method) {
         case 'servers.list':
           return this.catalogServers();
-        case 'servers.ping': {
-          const origin = ServerOrigin.tryParse(data.url);
-          if (!origin || !this.allowedOrigins().some((known) => known.equals(origin))) return null;
-          return ping(origin);
-        }
+        // Пинг и загрузка сервера каталога (R143): окно спрашивает раз в 10 с, пока открыто.
+        case 'servers.status':
+          return serverStatus(ServerOrigin.tryParse(data.url), this.allowedOrigins(), (url, init) => net.fetch(url, init), this.text());
+        // Тексты окна — на языке Cord, как меню трея (R103, Р-22): язык страницы, установщика, Windows.
+        case 'servers.text':
+          return this.serversText();
         case 'servers.choose':
           this.servers?.close();
           await this.chooseServer(String(data.url ?? ''));
@@ -1689,23 +1700,6 @@ class Shell {
       if (!event.senderFrame?.url.startsWith(`${SHELL_SCHEME}://`)) event.returnValue = null;
     });
   }
-}
-
-/** Медиана трёх `HEAD /api/v1/ping` (открытый маршрут ядра), в миллисекундах; null — не ответил. */
-async function ping(origin: ServerOrigin): Promise<number | null> {
-  const samples: number[] = [];
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const started = performance.now();
-    try {
-      const response = await net.fetch(new URL('/api/v1/ping', origin.url).toString(), { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-      if (response.ok) samples.push(performance.now() - started);
-    } catch {
-      /* не ответил */
-    }
-  }
-  if (samples.length === 0) return null;
-  samples.sort((a, b) => a - b);
-  return Math.round(samples[Math.floor(samples.length / 2)]!);
 }
 
 const shell = new Shell();

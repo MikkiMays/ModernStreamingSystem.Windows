@@ -2,7 +2,8 @@
  * Свои тексты оболочки на восьми языках Cord (X1): меню трея и его диалоги (R103), подсказка «Cord
  * работает в трее» (R57), кнопки на миниатюре и подписи значка поверх иконки (T53), виджет говорящих
  * в игре и карточка «Показать игру» (R63, R104), уведомления о старте игры и об эксклюзивном
- * полноэкранном режиме, мини-окно звонка (R93). Как и тексты
+ * полноэкранном режиме, мини-окно звонка (R93) и «Звук встречи» в нём и в трее (R156), окно «Серверы»
+ * с загрузкой серверов (T05, R143) — оно раньше было только по-русски. Как и тексты
  * установщика (`build/installer.nsh`, `LangString` на язык), — свой маленький каталог: эти строки
  * нужны, когда страницы ещё нет или окно спрятано. Общие слова — те же, что в каталоге веба
  * (`web/src/i18n/locales`, `GLOSSARY.md`): «Новая встреча», «Настройки», «Чат», «Микрофон».
@@ -84,6 +85,23 @@ export interface ShellText {
   deafen: string;
   undeafen: string;
   deafenedNote: string;
+  /** Окно «Серверы» (T05, R143): заголовок, имя списка, подвал (R146), пинг (`{n}` — мс). */
+  serversTitle: string;
+  serversList: string;
+  serversNote: string;
+  ping: string;
+  /** Загрузка сервера палочками (R143, Р-37): `{value}` — ступень словами. Слова — как `kit.load` веба. */
+  loadLabel: string;
+  loadLow: string;
+  loadMedium: string;
+  loadHigh: string;
+  loadVeryHigh: string;
+  loadFull: string;
+  loadMaintenance: string;
+  loadClosed: string;
+  loadUnknown: string;
+  /** Смена сервера во встрече — спросить (подробность — `newDetail`, кнопки — `leave` и `stay`). */
+  switchTitle: string;
 }
 
 const NBSP = ' ';
@@ -149,6 +167,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Выключить звук встречи',
     undeafen: 'Включить звук встречи',
     deafenedNote: 'звук встречи выключен',
+    serversTitle: 'Серверы',
+    serversList: 'Серверы Cord',
+    serversNote: 'Настройки общие для всех серверов. Комнаты, избранное и недавние у каждого сервера свои.',
+    ping: '{n} мс',
+    loadLabel: 'Загрузка сервера: {value}',
+    loadLow: 'низкая',
+    loadMedium: 'средняя',
+    loadHigh: 'высокая',
+    loadVeryHigh: 'очень высокая',
+    loadFull: 'мест нет',
+    loadMaintenance: 'обновляется',
+    loadClosed: 'закрыт для новых встреч',
+    loadUnknown: 'неизвестна',
+    switchTitle: 'Сменить сервер?',
   },
   en: {
     statusInCall: 'In a meeting',
@@ -210,6 +242,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Turn off meeting sound',
     undeafen: 'Turn on meeting sound',
     deafenedNote: 'meeting sound off',
+    serversTitle: 'Servers',
+    serversList: 'Cord servers',
+    serversNote: 'Settings are shared by all servers. Rooms, Favorites and recent meetings are separate on each server.',
+    ping: '{n} ms',
+    loadLabel: 'Server load: {value}',
+    loadLow: 'low',
+    loadMedium: 'medium',
+    loadHigh: 'high',
+    loadVeryHigh: 'very high',
+    loadFull: 'no room',
+    loadMaintenance: 'updating',
+    loadClosed: 'closed to new meetings',
+    loadUnknown: 'unknown',
+    switchTitle: 'Change server?',
   },
   de: {
     statusInCall: 'Im Meeting',
@@ -271,6 +317,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Meeting-Ton ausschalten',
     undeafen: 'Meeting-Ton einschalten',
     deafenedNote: 'Meeting-Ton aus',
+    serversTitle: 'Server',
+    serversList: 'Cord-Server',
+    serversNote: 'Die Einstellungen gelten für alle Server. Räume, Favoriten und letzte Meetings hat jeder Server für sich.',
+    ping: '{n} ms',
+    loadLabel: 'Serverauslastung: {value}',
+    loadLow: 'niedrig',
+    loadMedium: 'mittel',
+    loadHigh: 'hoch',
+    loadVeryHigh: 'sehr hoch',
+    loadFull: 'kein Platz',
+    loadMaintenance: 'wird aktualisiert',
+    loadClosed: 'für neue Meetings geschlossen',
+    loadUnknown: 'unbekannt',
+    switchTitle: 'Server wechseln?',
   },
   es: {
     statusInCall: 'En una reunión',
@@ -332,6 +392,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Silenciar la reunión',
     undeafen: 'Activar el sonido de la reunión',
     deafenedNote: 'sonido de la reunión desactivado',
+    serversTitle: 'Servidores',
+    serversList: 'Servidores de Cord',
+    serversNote: 'Los ajustes son comunes a todos los servidores. Las salas, los favoritos y las reuniones recientes son propios de cada servidor.',
+    ping: '{n} ms',
+    loadLabel: 'Carga del servidor: {value}',
+    loadLow: 'baja',
+    loadMedium: 'media',
+    loadHigh: 'alta',
+    loadVeryHigh: 'muy alta',
+    loadFull: 'sin plazas',
+    loadMaintenance: 'actualizándose',
+    loadClosed: 'cerrado a nuevas reuniones',
+    loadUnknown: 'desconocida',
+    switchTitle: '¿Cambiar de servidor?',
   },
   fr: {
     statusInCall: 'En réunion',
@@ -393,6 +467,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Couper le son de la réunion',
     undeafen: 'Activer le son de la réunion',
     deafenedNote: 'son de la réunion coupé',
+    serversTitle: 'Serveurs',
+    serversList: 'Serveurs Cord',
+    serversNote: 'Les paramètres sont communs à tous les serveurs. Les salles, les favoris et les réunions récentes sont propres à chaque serveur.',
+    ping: `{n}${NBSP}ms`,
+    loadLabel: `Charge du serveur${NBSP}: {value}`,
+    loadLow: 'faible',
+    loadMedium: 'moyenne',
+    loadHigh: 'élevée',
+    loadVeryHigh: 'très élevée',
+    loadFull: 'complet',
+    loadMaintenance: 'mise à jour',
+    loadClosed: 'fermé aux nouvelles réunions',
+    loadUnknown: 'inconnue',
+    switchTitle: `Changer de serveur${NBSP}?`,
   },
   it: {
     statusInCall: 'In riunione',
@@ -454,6 +542,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: "Disattiva l'audio della riunione",
     undeafen: "Attiva l'audio della riunione",
     deafenedNote: 'audio della riunione disattivato',
+    serversTitle: 'Server',
+    serversList: 'Server di Cord',
+    serversNote: 'Le impostazioni sono comuni a tutti i server. Stanze, preferiti e riunioni recenti sono separati per ogni server.',
+    ping: '{n} ms',
+    loadLabel: 'Carico del server: {value}',
+    loadLow: 'basso',
+    loadMedium: 'medio',
+    loadHigh: 'alto',
+    loadVeryHigh: 'molto alto',
+    loadFull: 'nessun posto',
+    loadMaintenance: 'in aggiornamento',
+    loadClosed: 'chiuso alle nuove riunioni',
+    loadUnknown: 'sconosciuto',
+    switchTitle: 'Cambiare server?',
   },
   'pt-BR': {
     statusInCall: 'Em uma reunião',
@@ -515,6 +617,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Desligar o som da reunião',
     undeafen: 'Ligar o som da reunião',
     deafenedNote: 'som da reunião desligado',
+    serversTitle: 'Servidores',
+    serversList: 'Servidores do Cord',
+    serversNote: 'As configurações valem para todos os servidores. Salas, favoritos e reuniões recentes são separados em cada servidor.',
+    ping: '{n} ms',
+    loadLabel: 'Carga do servidor: {value}',
+    loadLow: 'baixa',
+    loadMedium: 'média',
+    loadHigh: 'alta',
+    loadVeryHigh: 'muito alta',
+    loadFull: 'sem vagas',
+    loadMaintenance: 'atualizando',
+    loadClosed: 'fechado para novas reuniões',
+    loadUnknown: 'desconhecida',
+    switchTitle: 'Trocar de servidor?',
   },
   'zh-Hans': {
     statusInCall: '会议中',
@@ -576,6 +692,20 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: '关闭会议声音',
     undeafen: '开启会议声音',
     deafenedNote: '会议声音已关闭',
+    serversTitle: '服务器',
+    serversList: 'Cord 服务器',
+    serversNote: '设置在所有服务器上通用。房间、收藏和最近的会议在每台服务器上各自独立。',
+    ping: '{n} 毫秒',
+    loadLabel: '服务器负载：{value}',
+    loadLow: '低',
+    loadMedium: '中',
+    loadHigh: '高',
+    loadVeryHigh: '很高',
+    loadFull: '已满',
+    loadMaintenance: '正在更新',
+    loadClosed: '不接受新会议',
+    loadUnknown: '未知',
+    switchTitle: '更换服务器？',
   },
 };
 
