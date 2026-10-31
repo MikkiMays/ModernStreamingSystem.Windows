@@ -135,7 +135,8 @@ test('оверлей над игрой, «Показать игру» и мин�
     await shot(mini, 'r93-mini-compact');
     await mini.locator('#dock-more').click();
     await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'expanded', { timeout: 5_000 });
-    await expect(mini.locator('.action')).toHaveCount(6);
+    // «Звук встречи» (R156) есть в разметке всегда, но виден, только когда веб назвал его состояние.
+    await expect(mini.locator('.action:visible')).toHaveCount(6);
     await shot(mini, 'r93-mini-expanded');
     await mini.locator('.action').first().click();
     await expect.poll(() => main.evaluate(() => (window as unknown as { seen: { type: string; id?: string }[] }).seen.some((event) => event.type === 'mini.action' && event.id === 'mic')), { timeout: 5_000 }).toBe(true);
