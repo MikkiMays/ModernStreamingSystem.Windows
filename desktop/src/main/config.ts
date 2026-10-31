@@ -26,12 +26,19 @@ export interface BuildConfig {
   updateKeys: string[];
   /** Сервер для первого запуска, пока каталог не подписан ядром. */
   defaultServer: string;
+  /**
+   * Включать ли аппаратный AV1 для WebRTC (`WebRtcAV1HWEncode`, R152) на видеокартах из белого списка
+   * (`gpu.ts`). По умолчанию — да; `"av1HwEncode": false` в `update-keys.json` выключает в сборке,
+   * `CORD_AV1_HW=0` — у человека.
+   */
+  av1HwEncode: boolean;
 }
 
 const DEFAULTS: BuildConfig = {
   updateChannel: '',
   updateKeys: [],
   defaultServer: '',
+  av1HwEncode: true,
 };
 
 let cached: BuildConfig | null = null;
@@ -41,10 +48,11 @@ export function buildConfig(appPath: string): BuildConfig {
   const config = { ...DEFAULTS };
   const keys = join(appPath, 'dist', 'update-keys.json');
   if (existsSync(keys)) {
-    const parsed = JSON.parse(readFileSync(keys, 'utf8')) as { keys?: string[]; channel?: string; defaultServer?: string };
+    const parsed = JSON.parse(readFileSync(keys, 'utf8')) as { keys?: string[]; channel?: string; defaultServer?: string; av1HwEncode?: unknown };
     if (Array.isArray(parsed.keys)) config.updateKeys = parsed.keys.filter((key) => typeof key === 'string');
     if (typeof parsed.channel === 'string' && parsed.channel.startsWith('https://')) config.updateChannel = parsed.channel;
     if (typeof parsed.defaultServer === 'string') config.defaultServer = parsed.defaultServer;
+    if (parsed.av1HwEncode === false) config.av1HwEncode = false;
   }
   if (process.env.CORD_UPDATE_CHANNEL) config.updateChannel = process.env.CORD_UPDATE_CHANNEL;
   if (process.env.CORD_DEFAULT_SERVER) config.defaultServer = process.env.CORD_DEFAULT_SERVER;

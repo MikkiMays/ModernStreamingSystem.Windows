@@ -32,6 +32,8 @@ export const FEATURES = [
   'overlay.widget', // виджет говорящих в игре (R63): send('overlay.roster'), send('overlay.levels') — по порту мимо main, app.settings overlayCorner/Size/Names/Opacity/Toast, действие overlay.lock (Backquote)
   'mini', // мини-окно звонка (R93): send('mini.state'), событие mini.action {id}, app.settings mini; с 1.0.11 (R137) — mini.action {id, want?, seq?}, ответ send('mini.ack'), событие mini.resync
   'golive', // cord-native: «Показать игру» (R104) — событие golive {id, name}: начать показ окна игры
+  'app.gpu', // видеокарта для выбора кодека (R152): invoke('app.gpu') → {devices, encoders, av1hw: {enabled, allowed}}
+  'codec.av1hw', // в этом запуске включён аппаратный AV1 для WebRTC (`WebRtcAV1HWEncode`, белый список `gpu.ts`)
 ] as const;
 export type Feature = (typeof FEATURES)[number];
 
@@ -40,9 +42,14 @@ const WINDOWS_ONLY: ReadonlySet<Feature> = new Set<Feature>(['capture.system-aud
 /** Только с загруженным `cord-native` (utility-процесс жив и модуль на месте). */
 const NATIVE_ONLY: ReadonlySet<Feature> = new Set<Feature>(['ptt', 'capture.app-audio', 'games', 'golive']);
 
+/** Только когда ключ Chromium поставлен в этом запуске (`gpu.ts`). */
+const AV1_ONLY: ReadonlySet<Feature> = new Set<Feature>(['codec.av1hw']);
+
 /** Флаги этой машины: веб не показывает переключатель того, чего здесь нет. */
-export function featuresFor(platform: NodeJS.Platform, native = false): Feature[] {
-  return FEATURES.filter((feature) => (platform === 'win32' || !WINDOWS_ONLY.has(feature)) && (native || !NATIVE_ONLY.has(feature)));
+export function featuresFor(platform: NodeJS.Platform, native = false, av1hw = false): Feature[] {
+  return FEATURES.filter(
+    (feature) => (platform === 'win32' || !WINDOWS_ONLY.has(feature)) && (native || !NATIVE_ONLY.has(feature)) && (av1hw || !AV1_ONLY.has(feature)),
+  );
 }
 
 /** Элемент на странице сервера, через который preload отдаёт вебу дорожку звука захвата (`srcObject`). */
@@ -73,7 +80,7 @@ export const PAGE_MESSAGES = [
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
 
 /** Запросы страницы с ответом (`invoke`). */
-export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select', 'app.settings', 'games.list', 'games.set', 'games.forget', 'games.pick'] as const;
+export const PAGE_CALLS = ['session.renew', 'update.status', 'capture.sources', 'capture.select', 'app.settings', 'games.list', 'games.set', 'games.forget', 'games.pick', 'app.gpu'] as const;
 
 /**
  * Уровни голоса для виджета в игре и мини-окна (R63): страница шлёт их `send('overlay.levels', …)`, а

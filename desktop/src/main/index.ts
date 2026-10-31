@@ -15,6 +15,7 @@ import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
 import { featuresFor, IPC, TITLEBAR_HEIGHT, type Bootstrap } from '../shared/bridge';
 import { readGameCall, type MiniState, type Validated } from './bridge/messages';
+import { AV1_FEATURE, av1Allowed, av1Enabled, gpuView, mergeFeatures, readGpuCache, readGpuInfo, sameGpu, writeGpuCache, type GpuInfo } from './gpu';
 import { BridgeRouter } from './bridge/router';
 import { appSettingsOf, keepAwake, readAppSettingsPatch, readOffset, settingsPatchOf, type AppSettings } from './app-settings';
 import { boostTargets, planBoost } from './boost-plan';
@@ -80,6 +81,13 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 // на 45 % ценой ~1,5× полосы речи. Браузер выбрать число копий не даёт — только клиент Windows.
 // Полевые опыты — одной строкой через «/»: второй `force-fieldtrials` перебил бы первый.
 app.commandLine.appendSwitch('force-fieldtrials', 'WebRTC-Audio-Red-For-Opus/Enabled-2/');
+// Аппаратный AV1 для WebRTC (R152, `gpu.ts`): Chromium на Windows держит `WebRtcAV1HWEncode` выключенным,
+// а в Electron нет Finch, который включает его в Chrome. Ключ читается до `ready`, а сведения о видеокарте
+// есть только после — поэтому решает видеокарта прошлого запуска (`gpu.json`). Фичи, уже заданные в
+// командной строке, сохраняются: второй `enable-features` перебил бы первый.
+const av1Hw =
+  av1Enabled(buildConfig(app.getAppPath()).av1HwEncode, process.env.CORD_AV1_HW) && av1Allowed(readGpuCache(app.getPath('userData')));
+if (av1Hw) app.commandLine.appendSwitch('enable-features', mergeFeatures(app.commandLine.getSwitchValue('enable-features'), AV1_FEATURE));
 
 registerShellScheme();
 appUserModelId();
@@ -301,6 +309,8 @@ class Shell {
     this.loadCatalog();
     // Свежий каталог — в фоне, параллельно с заставкой: ожидание сети не должно держать запуск.
     void this.refreshCatalog();
+    // Видеокарта — тоже в фоне и позже: решение о ключе AV1 для следующего запуска (R152).
+    setTimeout(() => void this.gpu(), 5_000);
     await this.splashThenMain();
   }
 
@@ -549,7 +559,32 @@ class Shell {
   // ----- cord-native: флаги, клавиши, переднее окно -----
 
   private features(): string[] {
-    return featuresFor(process.platform, this.native.available);
+    return featuresFor(process.platform, this.native.available, av1Hw);
+  }
+
+  // ----- видеокарта (R152) -----
+
+  private gpuInfo: GpuInfo | null = readGpuCache(app.getPath('userData'));
+  private gpuProbe: Promise<GpuInfo | null> | null = null;
+
+  /**
+   * Видеокарта этого запуска: `getGPUInfo('complete')` (не дольше 15 с, иначе `basic`) — в кэш, по нему
+   * следующий запуск решит о ключе AV1. Один раз за запуск: сведения о GPU не меняются на ходу.
+   */
+  private gpu(): Promise<GpuInfo | null> {
+    this.gpuProbe ??= (async () => {
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
+      const raw = (await Promise.race([app.getGPUInfo('complete'), timeout]).catch(() => null)) ?? (await app.getGPUInfo('basic').catch(() => null));
+      const info = readGpuInfo(raw);
+      if (!info.devices.length) return this.gpuInfo;
+      if (!sameGpu(this.gpuInfo, info)) writeGpuCache(app.getPath('userData'), info);
+      const allowed = av1Allowed(info);
+      const devices = info.devices.map((d) => `${d.vendor} 0x${d.deviceId.toString(16)} ${d.name} ${d.driver}${d.active ? ' (активная)' : ''}`).join('; ');
+      log(`видеокарта: ${devices}; кодирование: ${info.encoders?.join(',') ?? 'не перечислено'}; AV1 в железе: ${av1Hw ? 'включён' : allowed ? 'со следующего запуска' : 'нет'}`);
+      this.gpuInfo = info;
+      return info;
+    })();
+    return this.gpuProbe;
   }
 
   private onNativeEvent(event: HostEvent): void {
@@ -1324,6 +1359,8 @@ class Shell {
       }
       case 'games.pick':
         return this.pickGame();
+      case 'app.gpu':
+        return gpuView(await this.gpu(), av1Hw);
       default:
         void payload;
         throw new Error('Недоступно.');
