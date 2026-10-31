@@ -11,6 +11,12 @@ import { isPageCall, readPageMessage, type Validated } from './messages';
 
 export interface BridgeHandlers {
   bootstrap(origin: ServerOrigin): Promise<Bootstrap>;
+  /**
+   * То, что меняется, пока документ открыт (тема, PING, общие настройки, R146): читается заново в
+   * момент выдачи. Иначе перезагрузка страницы получила бы bootstrap, подготовленный при открытии
+   * сервера, и preload вернул бы в хранилище старые значения поверх свежих.
+   */
+  live?(origin: ServerOrigin): Partial<Bootstrap>;
   message(message: Validated, sender: WebContents): void;
   call(method: string, payload: unknown, sender: WebContents): Promise<unknown>;
   /** Версия приложения — только для «О программы» в вебе. */
@@ -53,7 +59,8 @@ export class BridgeRouter {
       }
       const origin = this.current;
       // sendSync не умеет ждать — bootstrap готовится заранее (`prepareBootstrap`), здесь только отдаётся.
-      const bootstrap = this.prepared.get(origin.origin);
+      const prepared = this.prepared.get(origin.origin);
+      const bootstrap = prepared ? { ...prepared, ...(this.handlers.live?.(origin) ?? {}) } : null;
       event.returnValue = bootstrap ? { bootstrap, version: this.handlers.version(), features: this.handlers.features() } : null;
     });
     ipcMain.on(IPC.send, (event, type: unknown, payload: unknown) => {

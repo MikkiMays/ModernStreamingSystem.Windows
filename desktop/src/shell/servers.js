@@ -1,5 +1,8 @@
 // Окно серверов: только выбор из каталога Cord. Флаг — круглый SVG по коду страны (простые
-// полосные флаги для стран каталога; остальным — круг с кодом), пинг — медиана трёх запросов.
+// полосные флаги для стран каталога; остальным — круг с кодом), справа — загрузка сервера четырьмя
+// палочками одной высоты и пинг (медиана трёх запросов) — R143, Р-37. Пока окно открыто, пинг и
+// загрузка обновляются раз в 10 с (`servers.status`, запросы делает main). Тексты — на языке Cord
+// (`servers.text`, как меню трея); русские в разметке — запасные, пока ответ не пришёл.
 (() => {
   const FLAGS = {
     NL: ['#AE1C28', '#FFFFFF', '#21468B'],
@@ -15,6 +18,8 @@
     KZ: ['#00AFCA', '#00AFCA', '#00AFCA'],
     TR: ['#E30A17', '#E30A17', '#E30A17'],
   };
+  /** Как часто спрашивать пинг и загрузку, пока окно открыто. */
+  const REFRESH_MS = 10_000;
   const vertical = new Set(['FR', 'IT']);
   const flag = (country) => {
     const colors = FLAGS[country];
@@ -32,9 +37,64 @@
     return svg;
   };
   const list = document.getElementById('list');
-  const language = (navigator.language || 'ru').split('-')[0];
+  let language = 'ru';
+  /** Тексты окна; до ответа `servers.text` — русские из разметки. */
+  let text = { ping: '{n} мс', unknown: 'Загрузка сервера: неизвестна' };
+  /** Строки окна: адрес сервера → элементы пинга и палочек. */
+  const rows = [];
+
+  const applyText = () => {
+    document.documentElement.lang = language;
+    const title = document.getElementById('title');
+    if (text.title) {
+      title.textContent = text.title;
+      document.title = text.title;
+    }
+    if (text.list) list.setAttribute('aria-label', text.list);
+    if (text.note) document.getElementById('note').textContent = text.note;
+    if (text.close) document.getElementById('close').setAttribute('aria-label', text.close);
+  };
+
+  const makeBars = () => {
+    const bars = document.createElement('span');
+    bars.className = 'load';
+    bars.setAttribute('role', 'img');
+    for (let index = 0; index < 4; index++) bars.append(document.createElement('i'));
+    return bars;
+  };
+
+  /** Пинг и палочки строки — по ответу `servers.status`; нет ответа — «—» и пустые палочки. */
+  const show = (row, status) => {
+    const ms = status ? status.ping : null;
+    row.ping.textContent = ms === null || ms === undefined ? '—' : String(text.ping || '{n}').replace('{n}', String(ms));
+    row.ping.dataset.tone = ms === null || ms === undefined ? 'bad' : ms < 80 ? 'good' : ms < 200 ? 'fair' : 'bad';
+    const bars = status && status.bars ? status.bars : { filled: 0, tone: null, label: '' };
+    if (bars.tone) row.bars.dataset.tone = bars.tone;
+    else delete row.bars.dataset.tone;
+    [...row.bars.children].forEach((bar, index) => {
+      if (index < bars.filled) bar.dataset.on = 'true';
+      else delete bar.dataset.on;
+    });
+    // Нет ответа — палочки всё равно названы: «Загрузка сервера: неизвестна».
+    const label = bars.label || text.unknown;
+    row.bars.setAttribute('aria-label', label);
+    row.bars.title = label;
+  };
+
+  const refresh = (row) => {
+    if (row.asking) return;
+    row.asking = true;
+    window.cordShell
+      .call('servers.status', { url: row.url })
+      .then((status) => show(row, status), () => show(row, null))
+      .finally(() => {
+        row.asking = false;
+      });
+  };
+
   const render = (servers) => {
     list.replaceChildren();
+    rows.length = 0;
     for (const server of servers) {
       const item = document.createElement('li');
       item.setAttribute('role', 'option');
@@ -45,14 +105,19 @@
       badge.append(flag(server.country));
       const name = document.createElement('span');
       name.className = 'name';
-      name.textContent = server.name[language] || server.name.ru;
+      name.textContent = server.name[language] || server.name[language.split('-')[0]] || server.name.ru;
       const host = document.createElement('small');
       host.textContent = new URL(server.url).host;
       name.append(host);
+      const status = document.createElement('span');
+      status.className = 'status';
+      const bars = makeBars();
+      bars.setAttribute('aria-label', text.unknown);
       const ping = document.createElement('span');
       ping.className = 'ping';
       ping.textContent = '…';
-      item.append(badge, name, ping);
+      status.append(bars, ping);
+      item.append(badge, name, status);
       const choose = () => {
         if (server.current) return;
         window.cordShell.call('servers.choose', { url: server.url });
@@ -62,13 +127,27 @@
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); choose(); }
       });
       list.append(item);
-      window.cordShell.call('servers.ping', { url: server.url }).then((ms) => {
-        ping.textContent = ms === null ? '—' : `${ms} мс`;
-        ping.dataset.tone = ms === null ? 'bad' : ms < 80 ? 'good' : ms < 200 ? 'fair' : 'bad';
-      });
+      const row = { url: server.url, ping, bars, asking: false };
+      rows.push(row);
+      refresh(row);
     }
   };
-  window.cordShell.call('servers.list').then(render);
+
+  const texts = window.cordShell.call('servers.text').then(
+    (answer) => {
+      if (answer && typeof answer === 'object') {
+        if (typeof answer.language === 'string') language = answer.language;
+        if (answer.text && typeof answer.text === 'object') text = { ...text, ...answer.text };
+      }
+      applyText();
+    },
+    () => {},
+  );
+  // Имена серверов — на языке Cord: список рисуется, когда тексты уже пришли (или не пришли).
+  texts.finally(() => window.cordShell.call('servers.list').then(render));
+  setInterval(() => {
+    if (document.visibilityState !== 'hidden') rows.forEach(refresh);
+  }, REFRESH_MS);
   document.getElementById('close').addEventListener('click', () => window.cordShell.call('servers.close'));
   window.addEventListener('keydown', (event) => { if (event.key === 'Escape') window.cordShell.call('servers.close'); });
 })();

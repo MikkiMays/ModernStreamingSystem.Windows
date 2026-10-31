@@ -5,7 +5,8 @@
 <title>Серверы</title>
 <link rel="stylesheet" href="shell.css">
 <style>
-  /* Серверы (T05): флаг страны в круге слева, имя, пинг справа; выбранный — фон и полоска у левого края. Адреса руками нет. */
+  /* Серверы (T05): флаг страны в круге слева, имя, справа загрузка палочками и пинг (R143); выбранный — фон и полоска у левого края. Адреса руками нет.
+     Тексты — на языке Cord (`servers.text`); здесь — русский запасной, пока ответ не пришёл. */
   body { background: #15181f; display: grid; grid-template-rows: auto 1fr auto; }
   header { height: 44px; display: flex; align-items: center; padding: 0 16px; font-weight: 600; font-size: 14px; }
   header .spacer { flex: 1; }
@@ -20,16 +21,23 @@
   .flag svg { width: 100%; height: 100%; }
   .name { display: grid; }
   .name small { color: var(--cord-muted); }
+  .status { display: flex; align-items: center; gap: 8px; }
   .ping { color: var(--cord-muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
   .ping[data-tone="good"] { color: #3ddc84; }
   .ping[data-tone="fair"] { color: #f5c542; }
+  /* Загрузка (R143, Р-37) — как LoadBars веба: четыре палочки 3×12 одной высоты, зазор 2; цвета — значения токенов тёмной темы веба. */
+  .load { display: inline-flex; align-items: center; gap: 2px; }
+  .load i { width: 3px; height: 12px; border-radius: 999px; background: color-mix(in oklab, var(--cord-muted) 35%, transparent); }
+  .load[data-tone="success"] i[data-on] { background: #4fd48a; } /* --success тёмной темы (--palette-green-300) */
+  .load[data-tone="warning"] i[data-on] { background: #f2c14e; } /* --warning (--palette-amber-300) */
+  .load[data-tone="danger"] i[data-on] { background: #ff8a8f; } /* --danger (--palette-red-300) */
   footer { padding: 8px 16px 14px; color: var(--cord-muted); font-size: 12px; }
 </style>
 </head>
 <body>
-  <header class="drag">Серверы<span class="spacer"></span><button class="close no-drag" id="close" type="button" aria-label="Закрыть">×</button></header>
+  <header class="drag"><span id="title">Серверы</span><span class="spacer"></span><button class="close no-drag" id="close" type="button" aria-label="Закрыть">×</button></header>
   <ul id="list" role="listbox" aria-label="Серверы Cord"></ul>
-  <footer>Список серверов даёт Cord. Смена сервера закрывает текущую встречу.</footer>
+  <footer id="note">Настройки общие для всех серверов. Комнаты, избранное и недавние у каждого сервера свои.</footer>
   <script src="servers.js"></script>
 </body>
 </html>

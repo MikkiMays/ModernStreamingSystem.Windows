@@ -1,8 +1,9 @@
 /**
  * Меню трея как у Телемоста (R103, референс n10, DESIGN.md → Трей): сверху — состояние
  * (неактивный пункт), во встрече — «Вернуться во встречу» первым, «Новая встреча» всегда, во встрече —
- * «Чат · N» с непрочитанными (R87) и «Микрофон» галочкой, «Уведомления» галочкой, «Настройки»,
- * внизу — «Выйти из Cord». Подсказка значка — то же состояние, с микрофоном.
+ * «Чат · N» с непрочитанными (R87), «Микрофон» и «Звук встречи» (R156) галочками, «Уведомления»
+ * галочкой, «Настройки», внизу — «Выйти из Cord». Подсказка значка — то же состояние, с микрофоном и
+ * выключенным звуком встречи.
  *
  * Чистая часть: состав и тексты по состоянию — проверяются тестами; `tray.ts` превращает пункты в
  * `Menu` Electron и вешает действия по `id`.
@@ -18,9 +19,14 @@ export interface TrayState {
   unread: number;
   /** Переключатель «Уведомления» (`settings.notifications`). */
   notifications: boolean;
+  /**
+   * «Звук встречи» выключен (R156, `mini.state.deafened`); null — веб о нём не знает (до R156), и
+   * пункта нет. Галочка — «звук встречи включён», как у «Микрофона».
+   */
+  deafened?: boolean | null;
 }
 
-export type TrayItemId = 'status' | 'return' | 'new' | 'chat' | 'mic' | 'notifications' | 'settings' | 'quit';
+export type TrayItemId = 'status' | 'return' | 'new' | 'chat' | 'mic' | 'deafen' | 'notifications' | 'settings' | 'quit';
 export type TrayItem = { type: 'separator' } | { type?: undefined; id: TrayItemId; label: string; enabled?: false; checked?: boolean };
 
 /** Сколько названия встречи помещается в строку состояния. */
@@ -51,7 +57,9 @@ export function trayMenu(state: TrayState, text: ShellText): TrayItem[] {
   items.push({ id: 'new', label: text.newMeeting }, separator);
   if (state.inCall) {
     items.push({ id: 'chat', label: state.unread > 0 ? `${text.chat} · ${Math.min(state.unread, 999)}` : text.chat });
-    items.push({ id: 'mic', label: text.microphone, checked: state.mic }, separator);
+    items.push({ id: 'mic', label: text.microphone, checked: state.mic });
+    if (typeof state.deafened === 'boolean') items.push({ id: 'deafen', label: text.sound, checked: !state.deafened });
+    items.push(separator);
   }
   items.push({ id: 'notifications', label: text.notifications, checked: state.notifications }, { id: 'settings', label: text.settings }, separator, { id: 'quit', label: text.quit });
   return items;
@@ -60,5 +68,6 @@ export function trayMenu(state: TrayState, text: ShellText): TrayItem[] {
 export function trayTooltip(state: TrayState, text: ShellText): string {
   const parts = ['Cord', status(state, text)];
   if (state.inCall && !state.mic) parts.push(text.micOffNote);
+  if (state.inCall && state.deafened === true) parts.push(text.deafenedNote);
   return clip(parts.join(' · '), TOOLTIP_MAX);
 }

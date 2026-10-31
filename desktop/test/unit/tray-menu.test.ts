@@ -71,6 +71,41 @@ describe('trayMenu — состав по состоянию (R103)', () => {
   });
 });
 
+describe('«Звук встречи» в меню трея (R156)', () => {
+  it('веб знает «звук встречи» — галочка рядом с «Микрофоном»: стоит, пока звук встречи включён', () => {
+    expect(lines(trayMenu({ ...call, deafened: false }, ru))).toEqual([
+      '● Во встрече · Наша встреча (выкл.)',
+      '—',
+      'Вернуться во встречу',
+      'Новая встреча',
+      '—',
+      'Чат · 3',
+      '[x] Микрофон',
+      '[x] Звук встречи',
+      '—',
+      '[x] Уведомления',
+      'Настройки',
+      '—',
+      'Выйти из Cord',
+    ]);
+    expect(lines(trayMenu({ ...call, mic: false, deafened: true }, ru))).toEqual(expect.arrayContaining(['[ ] Микрофон', '[ ] Звук встречи']));
+  });
+
+  it('веб до R156 (deafened не пришёл) и вне встречи — пункта нет; у пункта своё действие', () => {
+    expect(lines(trayMenu({ ...call, deafened: null }, ru))).not.toContain('[x] Звук встречи');
+    expect(lines(trayMenu(call, ru)).some((line) => line.includes('Звук встречи'))).toBe(false);
+    expect(lines(trayMenu({ ...idle, deafened: true }, ru)).some((line) => line.includes('Звук встречи'))).toBe(false);
+    const ids = trayMenu({ ...call, deafened: false }, ru).flatMap((item) => (item.type === 'separator' ? [] : [item.id]));
+    expect(ids).toEqual(['status', 'return', 'new', 'chat', 'mic', 'deafen', 'notifications', 'settings', 'quit']);
+  });
+
+  it('подсказка значка говорит, что звук встречи выключен; подпись — на языке Cord', () => {
+    expect(trayTooltip({ ...call, mic: false, deafened: true }, ru)).toBe('Cord · Во встрече · Наша встреча · микрофон выключен · звук встречи выключен');
+    expect(lines(trayMenu({ ...call, deafened: false }, shellText('en')))).toContain('[x] Meeting sound');
+    expect(lines(trayMenu({ ...call, deafened: false }, shellText('de')))).toContain('[x] Meeting-Ton');
+  });
+});
+
 describe('trayTooltip — подсказка значка = состояние', () => {
   it('вне встречи и во встрече; микрофон выключен — сказано', () => {
     expect(trayTooltip(idle, ru)).toBe('Cord · Не во встрече');

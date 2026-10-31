@@ -15,6 +15,7 @@ import type { KeyObject } from 'node:crypto';
 import { join } from 'node:path';
 import { featuresFor, IPC, TITLEBAR_HEIGHT, type Bootstrap } from '../shared/bridge';
 import { readGameCall, type MiniState, type Validated } from './bridge/messages';
+import { AV1_FEATURE, av1Allowed, av1Enabled, gpuView, mergeFeatures, readGpuCache, readGpuInfo, sameGpu, writeGpuCache, type GpuInfo } from './gpu';
 import { BridgeRouter } from './bridge/router';
 import { appSettingsOf, keepAwake, readAppSettingsPatch, readOffset, settingsPatchOf, type AppSettings } from './app-settings';
 import { boostTargets, planBoost } from './boost-plan';
@@ -30,12 +31,14 @@ import { readInstallerLanguage, shellLanguage, type Language } from './language'
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
-import { decideMini, displayNeedsRebuild, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
+import { decideMini, displayNeedsRebuild, miniActionRoute, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
+import { loadBars, serverStatus } from './server-status';
 import { SettingsStore } from './settings';
+import { bootstrapShared, SharedPreferences } from './shared-preferences';
 import { shellText, type ShellText } from './shell-text';
 import { Taskbar, type CallState } from './tray';
 import { canInterrupt, nextCheckMs, BACKGROUND_BUDGET_MS, type UpdateVerdict } from './update/splash-flow';
@@ -80,6 +83,13 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 // на 45 % ценой ~1,5× полосы речи. Браузер выбрать число копий не даёт — только клиент Windows.
 // Полевые опыты — одной строкой через «/»: второй `force-fieldtrials` перебил бы первый.
 app.commandLine.appendSwitch('force-fieldtrials', 'WebRTC-Audio-Red-For-Opus/Enabled-2/');
+// Аппаратный AV1 для WebRTC (R152, `gpu.ts`): Chromium на Windows держит `WebRtcAV1HWEncode` выключенным,
+// а в Electron нет Finch, который включает его в Chrome. Ключ читается до `ready`, а сведения о видеокарте
+// есть только после — поэтому решает видеокарта прошлого запуска (`gpu.json`). Фичи, уже заданные в
+// командной строке, сохраняются: второй `enable-features` перебил бы первый.
+const av1Hw =
+  av1Enabled(buildConfig(app.getAppPath()).av1HwEncode, process.env.CORD_AV1_HW) && av1Allowed(readGpuCache(app.getPath('userData')));
+if (av1Hw) app.commandLine.appendSwitch('enable-features', mergeFeatures(app.commandLine.getSwitchValue('enable-features'), AV1_FEATURE));
 
 registerShellScheme();
 appUserModelId();
@@ -126,8 +136,11 @@ class Shell {
   private readonly preloadDir = join(app.getAppPath(), 'dist', 'preload');
   private readonly config = buildConfig(app.getAppPath());
   private readonly settings = new SettingsStore(app.getPath('userData'), safeStorage);
+  /** Общие для всех серверов настройки и токен Яндекс Музыки (R146, R157, `shared-preferences.ts`). */
+  private readonly shared = new SharedPreferences(app.getPath('userData'), safeStorage, Date.now, log);
   private readonly router = new BridgeRouter({
     bootstrap: (origin) => this.bootstrap(origin),
+    live: (origin) => this.liveBootstrap(origin),
     message: (message, sender) => this.onMessage(message, sender),
     call: (method, payload) => this.onCall(method, payload),
     version: () => app.getVersion(),
@@ -180,6 +193,8 @@ class Shell {
       // «Микрофон» трея — нажатие мини-окна с нужным состоянием (R137, R138): кнопок на миниатюре и их
       // сообщения `thumbar` больше нет; веб до R137 исполняет его как «переключить».
       toggleMicrophone: () => void this.router.post('mini.action', { id: 'mic', want: !this.call.mic }),
+      // «Звук встречи» трея (R156) — тоже нажатие мини-окна: want — нужное «выключен ли звук встречи».
+      toggleDeafen: () => void this.router.post('mini.action', { id: 'deafen', want: !this.miniState?.deafened }),
       toggleNotifications: () => this.applyAppSettings({ notifications: !this.settings.get().notifications }, true),
       quit: () => void this.trayQuit(),
     },
@@ -301,6 +316,8 @@ class Shell {
     this.loadCatalog();
     // Свежий каталог — в фоне, параллельно с заставкой: ожидание сети не должно держать запуск.
     void this.refreshCatalog();
+    // Видеокарта — тоже в фоне и позже: решение о ключе AV1 для следующего запуска (R152).
+    setTimeout(() => void this.gpu(), 5_000);
     await this.splashThenMain();
   }
 
@@ -549,7 +566,32 @@ class Shell {
   // ----- cord-native: флаги, клавиши, переднее окно -----
 
   private features(): string[] {
-    return featuresFor(process.platform, this.native.available);
+    return featuresFor(process.platform, this.native.available, av1Hw);
+  }
+
+  // ----- видеокарта (R152) -----
+
+  private gpuInfo: GpuInfo | null = readGpuCache(app.getPath('userData'));
+  private gpuProbe: Promise<GpuInfo | null> | null = null;
+
+  /**
+   * Видеокарта этого запуска: `getGPUInfo('complete')` (не дольше 15 с, иначе `basic`) — в кэш, по нему
+   * следующий запуск решит о ключе AV1. Один раз за запуск: сведения о GPU не меняются на ходу.
+   */
+  private gpu(): Promise<GpuInfo | null> {
+    this.gpuProbe ??= (async () => {
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 15_000));
+      const raw = (await Promise.race([app.getGPUInfo('complete'), timeout]).catch(() => null)) ?? (await app.getGPUInfo('basic').catch(() => null));
+      const info = readGpuInfo(raw);
+      if (!info.devices.length) return this.gpuInfo;
+      if (!sameGpu(this.gpuInfo, info)) writeGpuCache(app.getPath('userData'), info);
+      const allowed = av1Allowed(info);
+      const devices = info.devices.map((d) => `${d.vendor} 0x${d.deviceId.toString(16)} ${d.name} ${d.driver}${d.active ? ' (активная)' : ''}`).join('; ');
+      log(`видеокарта: ${devices}; кодирование: ${info.encoders?.join(',') ?? 'не перечислено'}; AV1 в железе: ${av1Hw ? 'включён' : allowed ? 'со следующего запуска' : 'нет'}`);
+      this.gpuInfo = info;
+      return info;
+    })();
+    return this.gpuProbe;
   }
 
   private onNativeEvent(event: HostEvent): void {
@@ -860,7 +902,8 @@ class Shell {
       language: this.language(),
       text: {
         label: text.miniLabel, collapse: text.miniCollapse, open: text.miniOpen, more: text.miniMore, compact: text.miniCompact, on: text.stateOn, off: text.stateOff,
-        microphone: text.microphone, micMute: text.micMute, micUnmute: text.micUnmute, camera: text.camera, screenShare: text.screenShare, screenStop: text.screenStop,
+        microphone: text.microphone, micMute: text.micMute, micUnmute: text.micUnmute, sound: text.sound, deafen: text.deafen, undeafen: text.undeafen,
+        camera: text.camera, screenShare: text.screenShare, screenStop: text.screenStop,
         youShare: text.youShare, stopShare: text.stopShare, people: text.people, chat: text.chat, soundSettings: text.soundSettings, leave: text.leave, you: text.you,
         recovering: text.miniRecovering, connecting: text.miniConnecting, seconds: text.miniSeconds,
       },
@@ -868,8 +911,9 @@ class Shell {
   }
 
   /**
-   * Нажатие в мини-окне. Микрофон, камера и выход исполняет веб, не поднимая Cord; участники, чат,
-   * настройки и начало показа (окно выбора) — в окне Cord, оно выходит вперёд.
+   * Нажатие в мини-окне (`miniActionRoute`). Микрофон, «звук встречи» (R156), камера и выход исполняет
+   * веб, не поднимая Cord; участники, чат, настройки и начало показа (окно выбора) — в окне Cord, оно
+   * выходит вперёд.
    *
    * С R137 нажатие несёт нужное состояние (`want`: включить или выключить, а не «переключить» — два
    * быстрых нажатия до нового состояния не отменяют друг друга) и номер (`seq`). На номер мини-окну
@@ -884,41 +928,26 @@ class Shell {
       const delivered = this.router.post('mini.action', { id, ...(want !== undefined ? { want } : {}), ...(seq !== undefined ? { seq } : {}) });
       if (!delivered) ack('ignored', 'page');
     };
+    const route = miniActionRoute(id, want, this.call.screen);
+    if (route === 'unknown') return ack('ignored', 'unknown');
+    if (route === 'page' || route === 'page-focus') {
+      if (route === 'page-focus') this.focus();
+      toPage();
+      return;
+    }
     switch (id) {
       case 'open':
         this.focus();
-        ack('ok');
-        return;
+        break;
       case 'collapse':
         this.miniDismissed = true;
         this.updateMini();
-        ack('ok');
-        return;
-      case 'expand':
-      case 'compact':
+        break;
+      default:
         this.settings.update({ mini: { ...this.settings.get().mini, expanded: id === 'expand' } });
         this.mini.send('mini.config', this.miniConfig());
-        ack('ok');
-        return;
-      case 'mic':
-      case 'camera':
-      case 'leave':
-        toPage();
-        return;
-      case 'screen':
-        // Начать показ — окно выбора в Cord; остановить — без него.
-        if (want ?? !this.call.screen) this.focus();
-        toPage();
-        return;
-      case 'people':
-      case 'chat':
-      case 'settings':
-        this.focus();
-        toPage();
-        return;
-      default:
-        ack('ignored', 'unknown');
     }
+    ack('ok');
   }
 
   /**
@@ -1144,8 +1173,8 @@ class Shell {
     const origin = ServerOrigin.tryParse(url);
     if (!origin || !this.allowedOrigins().some((known) => known.equals(origin)) || !this.main) return;
     if (this.call.inCall) {
-      const { response } = await dialog.showMessageBox(this.main.window, { type: 'question', buttons: ['Выйти из встречи', 'Остаться'], defaultId: 1, cancelId: 1, message: 'Сменить сервер?', detail: 'Текущая встреча закончится.' });
-      if (response !== 0) return;
+      const text = this.text();
+      if (!(await this.confirm(text.switchTitle, text.newDetail, text.leave))) return;
       await this.requestClose();
     }
     this.settings.update({ serverUrl: origin.url });
@@ -1162,13 +1191,47 @@ class Shell {
     const entry = saved.servers.find((server) => server.url === origin.url);
     return {
       profile: await this.settings.profileFor(origin),
-      theme: saved.theme,
       language: saved.language,
-      showPing: saved.showPing,
-      notificationSounds: saved.notificationSounds,
       autoConnect: entry?.autoConnect ?? saved.autoConnect,
       titlebarHeight: TITLEBAR_HEIGHT,
+      ...this.liveBootstrap(origin),
     };
+  }
+
+  /**
+   * Что меняется, пока документ открыт: тема, PING и сигналы, общие настройки и токен (R146). Router
+   * читает это заново при каждой выдаче bootstrap — перезагрузка страницы не возвращает старое.
+   */
+  private liveBootstrap(origin: ServerOrigin): Pick<Bootstrap, 'theme' | 'showPing' | 'notificationSounds' | 'shared' | 'yandexMusicToken'> {
+    const saved = this.settings.get();
+    return { theme: saved.theme, showPing: saved.showPing, notificationSounds: saved.notificationSounds, ...bootstrapShared(this.shared, origin, this.allowedOrigins()) };
+  }
+
+  /**
+   * Правка общих настроек со страницы (R146): «последний пишущий» по ключу. PING и сигналы оболочка
+   * помнит и сама (`settings.json`, для прежнего веба). Где у хранилища значение новее — странице
+   * уходит победившее (`preferences.changed {shared}`), и она показывает правду, а не своё.
+   */
+  private applyShared(message: Extract<Validated, { type: 'preferences.changed' }>): void {
+    const own = { ...(message.showPing !== undefined ? { showPing: message.showPing } : {}), ...(message.notificationSounds !== undefined ? { notificationSounds: message.notificationSounds } : {}) };
+    if (!message.shared) {
+      // Прежний веб (без prefs.shared) правит только PING и сигналы — пусть и общее знает о них.
+      if (!Object.keys(own).length) return;
+      this.settings.update(own);
+      const at = Date.now();
+      this.shared.apply(Object.fromEntries(Object.entries(own).map(([key, value]) => [key, { value, at }])));
+      return;
+    }
+    const result = this.shared.apply(message.shared, message.seed === true);
+    const flags: Partial<Pick<ReturnType<SettingsStore['get']>, 'showPing' | 'notificationSounds'>> = { ...own };
+    for (const key of ['showPing', 'notificationSounds'] as const) {
+      const entry = this.shared.entry(key);
+      if (result.applied.includes(key) && entry && typeof entry.value === 'boolean') flags[key] = entry.value;
+    }
+    if (Object.keys(flags).length) this.settings.update(flags);
+    const kept = Object.fromEntries(Object.entries(result.kept).map(([key, entry]) => [key, entry.value]));
+    if (Object.keys(kept).length) this.router.post('preferences.changed', { shared: kept });
+    if (result.applied.length) log(`общие настройки: ${message.seed ? 'перенесены' : 'записаны'} ${result.applied.join(', ')}`);
   }
 
   private onMessage(message: Validated, sender: WebContents): void {
@@ -1209,7 +1272,7 @@ class Shell {
       case 'favorites.changed':
         return;
       case 'preferences.changed':
-        this.settings.update({ ...(message.showPing !== undefined ? { showPing: message.showPing } : {}), ...(message.notificationSounds !== undefined ? { notificationSounds: message.notificationSounds } : {}) });
+        this.applyShared(message);
         return;
       case 'server.autoconnect': {
         const origin = this.router.origin;
@@ -1246,8 +1309,10 @@ class Shell {
         this.miniState = message.state;
         if (first) this.mini.send('mini.config', this.miniConfig());
         this.mini.send('mini.state', { ...message.state });
-        // «Чат · N» в меню трея — по непрочитанным встречи (значка поверх иконки больше нет, R138).
+        // «Чат · N» в меню трея — по непрочитанным встречи (значка поверх иконки больше нет, R138);
+        // «Звук встречи» — если веб его знает (R156).
         this.taskbar.setUnread(message.state.unread);
+        this.taskbar.setDeafened(message.state.deafened ?? null);
         if (first) this.updateMini();
         return;
       }
@@ -1324,6 +1389,8 @@ class Shell {
       }
       case 'games.pick':
         return this.pickGame();
+      case 'app.gpu':
+        return gpuView(await this.gpu(), av1Hw);
       default:
         void payload;
         throw new Error('Недоступно.');
@@ -1536,10 +1603,19 @@ class Shell {
 
   private openServers(): void {
     if (!this.main) return;
-    this.servers ??= new ServersWindow(this.preloadDir, this.main.window, () => {
+    this.servers ??= new ServersWindow(this.preloadDir, this.main.window, this.text().serversTitle, () => {
       this.servers = null;
     });
     this.servers.focus();
+  }
+
+  /** Тексты окна «Серверы» (R143, R146) — на языке Cord; русский — запасной в самом окне. */
+  private serversText(): { language: Language; text: Record<string, string> } {
+    const text = this.text();
+    return {
+      language: this.language(),
+      text: { title: text.serversTitle, list: text.serversList, note: text.serversNote, close: text.close, ping: text.ping, unknown: loadBars(null, text).label },
+    };
   }
 
   private installShellCalls(): void {
@@ -1549,11 +1625,12 @@ class Shell {
       switch (method) {
         case 'servers.list':
           return this.catalogServers();
-        case 'servers.ping': {
-          const origin = ServerOrigin.tryParse(data.url);
-          if (!origin || !this.allowedOrigins().some((known) => known.equals(origin))) return null;
-          return ping(origin);
-        }
+        // Пинг и загрузка сервера каталога (R143): окно спрашивает раз в 10 с, пока открыто.
+        case 'servers.status':
+          return serverStatus(ServerOrigin.tryParse(data.url), this.allowedOrigins(), (url, init) => net.fetch(url, init), this.text());
+        // Тексты окна — на языке Cord, как меню трея (R103, Р-22): язык страницы, установщика, Windows.
+        case 'servers.text':
+          return this.serversText();
         case 'servers.choose':
           this.servers?.close();
           await this.chooseServer(String(data.url ?? ''));
@@ -1623,23 +1700,6 @@ class Shell {
       if (!event.senderFrame?.url.startsWith(`${SHELL_SCHEME}://`)) event.returnValue = null;
     });
   }
-}
-
-/** Медиана трёх `HEAD /api/v1/ping` (открытый маршрут ядра), в миллисекундах; null — не ответил. */
-async function ping(origin: ServerOrigin): Promise<number | null> {
-  const samples: number[] = [];
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const started = performance.now();
-    try {
-      const response = await net.fetch(new URL('/api/v1/ping', origin.url).toString(), { method: 'HEAD', signal: AbortSignal.timeout(3000) });
-      if (response.ok) samples.push(performance.now() - started);
-    } catch {
-      /* не ответил */
-    }
-  }
-  if (samples.length === 0) return null;
-  samples.sort((a, b) => a - b);
-  return Math.round(samples[Math.floor(samples.length / 2)]!);
 }
 
 const shell = new Shell();

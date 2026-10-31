@@ -52,7 +52,12 @@ describe('звук через cord-native (process loopback)', () => {
 
 describe('флаги возможностей по платформе и модулю', () => {
   it('Windows с cord-native — всё; без модуля нет ptt и звука приложения; на остальных нет и API панели задач', () => {
-    expect(featuresFor('win32', true)).toEqual([...FEATURES]);
+    expect(featuresFor('win32', true, true)).toEqual([...FEATURES]);
+    // Аппаратный AV1 (R152) объявляется, только когда ключ Chromium поставлен в этом запуске; видеокарту
+    // страница спрашивает всегда.
+    expect(featuresFor('win32', true)).not.toContain('codec.av1hw');
+    expect(featuresFor('win32', true)).toContain('app.gpu');
+    expect(featuresFor('linux', false, true)).toContain('codec.av1hw');
     const noNative = featuresFor('win32');
     expect(noNative).not.toContain('ptt');
     expect(noNative).not.toContain('capture.app-audio');
