@@ -46,13 +46,13 @@ describe('mergeBootstrap — preload страницы сервера', () => {
     const storage = new Memory();
     storage.setItem('cord:preferences:v1', JSON.stringify({ outputVolume: 20, layout: 'grid', watchVolume: 33, devices: { microphone: 'local-id' } }));
     storage.setItem('cord:name', 'Старое имя');
-    mergeBootstrap(storage, { ...base, shared: { outputVolume: 80, layout: 'speaker', name: 'Ника', deafened: true, language: 'de' } }, 'https://cordcam.ru');
+    mergeBootstrap(storage, { ...base, shared: { outputVolume: 80, layout: 'speaker', name: 'Ника', pokerHints: true, language: 'de' } }, 'https://cordcam.ru');
     expect(storage.json('cord:preferences:v1')).toEqual({
       outputVolume: 80,
       layout: 'speaker',
       watchVolume: 33,
       name: 'Ника',
-      deafened: true,
+      pokerHints: true,
       language: 'de',
       devices: { microphone: 'local-id' },
       showPing: false,
