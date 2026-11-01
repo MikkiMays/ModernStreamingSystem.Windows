@@ -153,7 +153,8 @@ export const SHARED_PREFERENCES = [
   'micHotkeyMode',
   'overlayHotkey',
   'overlayLockHotkey',
-  'deafened',
+  // «Звук встречи» (`deafened`) больше не общий: он у встречи и при входе всегда включён (R161,
+  // веб 1.1.2) — общим осталось только его сочетание.
   'deafenHotkey',
   'layout',
   'watchVolume',

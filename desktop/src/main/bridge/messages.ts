@@ -233,7 +233,6 @@ export function validSharedValue(key: string, value: unknown): boolean {
     case 'watchVolume':
       return integerIn(value, 0, 100);
     case 'notificationSounds':
-    case 'deafened':
     case 'pokerHints':
     case 'pokerFeed':
     case 'showPing':
