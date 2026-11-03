@@ -4,7 +4,7 @@
  * этого пользователя Windows). Совместимости с файлами WinUI нет (решение В-2).
  *
  * `settingsRev` — ревизия умолчаний: файл старше — проходит `migrateSettings` при чтении
- * (ревизия 2 — оверлей включён по умолчанию, R61).
+ * (ревизия 2 — оверлей включён по умолчанию, R61; ревизия 3 — мини-окно звонка выключено по умолчанию, R188).
  */
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -56,7 +56,7 @@ export interface Settings {
   ignoredGames: string[];
   /** Виджет говорящих в игре (R63): угол, смещение, размер, имена, прозрачность, всплывашка при старте игры. */
   overlay: OverlayWidget;
-  /** Мини-окно звонка (R93): включено ли, где стоит (DIP), развёрнуто ли. */
+  /** Мини-окно звонка (R93): включено ли (по умолчанию нет, R188), где стоит (DIP), развёрнуто ли. */
   mini: MiniSettings;
   sidebarWidth: number;
   window: { width: number; height: number; x?: number; y?: number; maximized: boolean } | null;
@@ -64,8 +64,8 @@ export interface Settings {
   expectedVersion: string | null;
 }
 
-/** Ревизия 2 (1.0.4): оверлей в играх включён по умолчанию (R61). */
-export const SETTINGS_REV = 2;
+/** Ревизия 2 (1.0.4): оверлей в играх включён по умолчанию (R61). Ревизия 3: мини-окно звонка выключено (R188). */
+export const SETTINGS_REV = 3;
 
 const DEFAULTS: Settings = {
   settingsRev: SETTINGS_REV,
@@ -89,7 +89,7 @@ const DEFAULTS: Settings = {
   games: [],
   ignoredGames: [],
   overlay: { ...OVERLAY_WIDGET_DEFAULTS, offset: { ...OVERLAY_WIDGET_DEFAULTS.offset } },
-  mini: { enabled: true, expanded: false },
+  mini: { enabled: false, expanded: false },
   sidebarWidth: 280,
   window: null,
   expectedVersion: null,
@@ -97,7 +97,10 @@ const DEFAULTS: Settings = {
 
 export interface MiniSettings {
   enabled: boolean;
-  /** Левый верхний угол окна в DIP; нет — снизу справа рабочей области основного дисплея. */
+  /**
+   * Левый верхний угол окна в DIP — где его поставил человек; окно стоит здесь, сдвинутое целиком в
+   * рабочую область своего экрана (`placeMini`). Нет — снизу справа рабочей области основного дисплея.
+   */
   x?: number;
   y?: number;
   expanded: boolean;
@@ -174,11 +177,15 @@ export class SettingsStore {
  * Файл старой ревизии → нынешние умолчания. До ревизии 2 `update()` писал в файл явное
  * `overlayEnabled: false` каждому, кто переключатель не трогал, — поэтому при переходе оверлей
  * включается всем: решение владельца «по умолчанию включён» (R61), а не «сохранить выбор, которого не было».
+ * Так же до ревизии 3 в файле у каждого, кто сохранил хоть одну настройку, лежало `mini.enabled: true` —
+ * умолчание, а не выбор: мини-окно выключается всем один раз (R188, владелец 03.11.2026: «по дефолту в
+ * десктопе выключать мини окно»); место и развёрнутость остаются.
  */
 export function migrateSettings(saved: Partial<Settings>): Partial<Settings> {
   const rev = saved.settingsRev ?? 1;
   const next = { ...saved };
   if (rev < 2) next.overlayEnabled = true;
+  if (rev < 3 && next.mini) next.mini = { ...next.mini, enabled: false };
   next.settingsRev = SETTINGS_REV;
   return next;
 }
@@ -222,7 +229,7 @@ function sanitize(raw: unknown): Partial<Settings> {
     const coordinate = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < 100_000 ? Math.round(value) : undefined);
     const x = coordinate(mini.x);
     const y = coordinate(mini.y);
-    result.mini = { enabled: mini.enabled !== false, expanded: mini.expanded === true, ...(x !== undefined && y !== undefined ? { x, y } : {}) };
+    result.mini = { enabled: mini.enabled === true, expanded: mini.expanded === true, ...(x !== undefined && y !== undefined ? { x, y } : {}) };
   }
   if (Array.isArray(data.hotkeys)) result.hotkeys = data.hotkeys.filter(validBinding).slice(0, 8) as HotkeyBinding[];
   if (data.window && typeof data.window === 'object') {
