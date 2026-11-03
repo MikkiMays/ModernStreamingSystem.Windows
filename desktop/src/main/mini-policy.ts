@@ -30,6 +30,28 @@ export interface MiniInput {
 /** Задержка появления после того, как главное окно ушло с глаз. */
 export const MINI_DELAY_MS = 400;
 
+/**
+ * Показ окна, страница которого ещё грузится (R188). Загрузилась — main повторяет ей состояние и ждёт
+ * «нарисовано» (`mini.reveal` → размер и `mini.rendered`) не дольше `renderMs`: окно появляется сразу с
+ * плитками и нужной высоты, а не пустой карточкой. Не загрузилась за `loadMs` (процесс страницы
+ * завис после сна или сброса GPU) — окно сломано и пересоздаётся: `unresponsive` у спрятанного окна
+ * не бывает, а сторож кадров смотрит только на видимое.
+ */
+export const MINI_SHOW = { loadMs: 5000, renderMs: 500 } as const;
+
+/**
+ * Заготовка мини-окна (R188): `prepare` — создать спрятанным, если его нет; `wait` — не создавать, но и
+ * не убирать; `release` — окна нет вовсе. Окно нужно сейчас или Cord впереди (человек вернулся в
+ * Cord — следующий показ скоро и должен быть без задержки) — заготовить. Окно ушло ради игры, окна во
+ * весь экран или «—», а Cord не впереди — новое не создаётся: процесс страницы не стартует в момент
+ * запуска игры; понадобится — создастся при показе. Вне встречи, без главного окна, с выключенным
+ * переключателем и при выходе из Cord окна нет.
+ */
+export function spareMini(input: { inCall: boolean; enabled: boolean; main: boolean; quitting: boolean; wanted: boolean; cordInFront: boolean }): 'prepare' | 'wait' | 'release' {
+  if (!input.inCall || !input.enabled || !input.main || input.quitting) return 'release';
+  return input.wanted || input.cordInFront ? 'prepare' : 'wait';
+}
+
 export function decideMini(input: MiniInput): boolean {
   const { main, foreground } = input;
   if (!input.inCall || !input.enabled || input.dismissed || !main?.exists) return false;
@@ -83,10 +105,13 @@ export const MINI_RENEW = { delayMs: 1500 } as const;
 
 /**
  * Монитор сменился (`display-metrics-changed`): размер, масштаб и поворот меняют поверхность окна —
- * пересоздать; одна рабочая область (выехала панель задач) — нет, окно просто остаётся на экране.
+ * пересоздать (`renew`); одна рабочая область (панель задач выехала, переехала, стала шире) — окно не
+ * пересоздаётся, а снова встаёт целиком в рабочую область (`place`, R188): иначе развёрнутое у нижнего
+ * края оказалось бы под панелью задач.
  */
-export function displayNeedsRebuild(changed: readonly string[]): boolean {
-  return changed.some((metric) => metric === 'bounds' || metric === 'scaleFactor' || metric === 'rotation');
+export function displayChange(changed: readonly string[]): 'renew' | 'place' | null {
+  if (changed.some((metric) => metric === 'bounds' || metric === 'scaleFactor' || metric === 'rotation')) return 'renew';
+  return changed.includes('workArea') ? 'place' : null;
 }
 
 /** Прямоугольник в DIP: рабочая область экрана или окно. */

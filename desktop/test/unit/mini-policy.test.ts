@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   decideMini,
   decideRebuild,
-  displayNeedsRebuild,
+  displayChange,
   dragPosition,
   miniActionRoute,
   MINI_MARGIN,
@@ -11,6 +11,7 @@ import {
   nearestArea,
   placeMini,
   readGrab,
+  spareMini,
   watchStep,
   type MiniInput,
 } from '../../src/main/mini-policy';
@@ -106,11 +107,14 @@ describe('лимит пересозданий (R137): не больше 3 за 5
 
 describe('смена мониторов (R137): что пересоздаёт окно', () => {
   it('размер, масштаб и поворот — пересоздать; только рабочая область (панель задач) — нет', () => {
-    expect(displayNeedsRebuild(['scaleFactor'])).toBe(true);
-    expect(displayNeedsRebuild(['bounds', 'workArea'])).toBe(true);
-    expect(displayNeedsRebuild(['rotation'])).toBe(true);
-    expect(displayNeedsRebuild(['workArea'])).toBe(false);
-    expect(displayNeedsRebuild([])).toBe(false);
+    expect(displayChange(['scaleFactor'])).toBe('renew');
+    expect(displayChange(['bounds', 'workArea'])).toBe('renew');
+    expect(displayChange(['rotation'])).toBe('renew');
+    expect(displayChange([])).toBeNull();
+  });
+
+  it('только рабочая область (панель задач переехала или стала шире) — не пересоздать, а снова поставить окно целиком в неё (R188)', () => {
+    expect(displayChange(['workArea'])).toBe('place');
   });
 });
 
@@ -208,5 +212,28 @@ describe('перетаскивание (R188): точка, за которую �
     expect(dragPosition({ x: 1000, y: 500 }, grab)).toEqual(dragPosition({ x: 1000, y: 500 }, grab));
     expect(dragPosition({ x: -700, y: 300 }, grab), 'экран слева').toEqual({ x: -740, y: 286 });
     expect(dragPosition({ x: 100.6, y: 50.4 }, { x: 0.2, y: 0 })).toEqual({ x: 100, y: 50 });
+  });
+});
+
+describe('заготовка мини-окна (R188): новое окно — когда Cord впереди или окно нужно сейчас', () => {
+  const base = { inCall: true, enabled: true, main: true, quitting: false, wanted: false, cordInFront: true };
+
+  it('человек вернулся в Cord — заготовить: следующий показ без задержки', () => {
+    expect(spareMini(base)).toBe('prepare');
+  });
+
+  it('окно нужно сейчас — создать, даже если Cord не впереди', () => {
+    expect(spareMini({ ...base, cordInFront: false, wanted: true })).toBe('prepare');
+  });
+
+  it('окно ушло ради игры, окна во весь экран или «—», а Cord не впереди — новое не создаётся, но и не убирается', () => {
+    expect(spareMini({ ...base, cordInFront: false })).toBe('wait');
+  });
+
+  it('вне встречи, выключено, нет главного окна, выход — окна нет вовсе', () => {
+    expect(spareMini({ ...base, inCall: false })).toBe('release');
+    expect(spareMini({ ...base, enabled: false, wanted: true })).toBe('release');
+    expect(spareMini({ ...base, main: false })).toBe('release');
+    expect(spareMini({ ...base, quitting: true, wanted: true })).toBe('release');
   });
 });

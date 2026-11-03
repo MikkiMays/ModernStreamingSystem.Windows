@@ -19,7 +19,9 @@
  * случай владельца настоящей мышью — подвинул, развернул, вернулся в Cord, снова спрятал — несколько
  * кругов: окно каждый раз новое, едет за курсором, целиком на экране, кнопки отвечают; перетаскивание,
  * оборванное прятанием, следующему показу не мешает; пробуждение (сон и разблокировка) — одно
- * пересоздание, лимит у пересозданий из-за системы свой.
+ * пересоздание, лимит у пересозданий из-за системы свой; событие системы перед самым показом — показ
+ * нового окна без пересоздания следом; сменилась только рабочая область — окно снова целиком в ней;
+ * ушло ради окна во весь экран — новое не заготавливается, а без заготовки появляется уже нарисованным.
  * Снимки — в `test-results/shots/mini-ui-*.png`.
  */
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -461,6 +463,18 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await expect.poll(async () => JSON.stringify(await size()), { timeout: 5_000 }).toBe(JSON.stringify(await frame()));
       console.log('размер развёрнутого', await size());
       await osClick(app, mini, '#compact');
+      await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact', { timeout: 5_000 });
+      await expect.poll(async () => JSON.stringify(await size()), { timeout: 5_000 }).toBe(JSON.stringify(await frame()));
+    });
+
+    await test.step('сменилась только рабочая область (панель задач) — окно снова целиком в ней, на своём месте, без пересоздания (R188)', async () => {
+      const before = await position(app);
+      await miniWindow(app, 'const [x] = w.getPosition(); w.setPosition(x, 20000)');
+      expect(await inWorkArea(app)).not.toBe('целиком');
+      await app.evaluate(({ screen }) => void screen.emit('display-metrics-changed', {}, {}, ['workArea']));
+      await expect.poll(() => inWorkArea(app), { timeout: 3_000 }).toBe('целиком');
+      expect(await position(app), 'на месте человека').toEqual(before);
+      expect(mini.isClosed(), 'то же окно').toBe(false);
     });
 
     await test.step('«—» прячет мини-окно до возврата в Cord', async () => {
@@ -566,6 +580,26 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       expect(await shown(app, 'cord-app://mini')).toBe(false);
     });
 
+    await test.step('окно ушло ради окна во весь экран — новое не заготавливается, пока Cord не впереди; без заготовки окно появляется уже нарисованным (R188)', async () => {
+      await front(app, other);
+      mini = await visibleMini(app);
+      await front(app, { ...other, hwnd: 9, fullscreen: true, exe: 'video.exe', title: 'Видео' });
+      await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 5_000 }).toBe(false);
+      await expect.poll(() => miniCount(app), { timeout: 5_000, message: 'показанное убрано, а процесс новой страницы не запущен' }).toBe(0);
+      await wait(800);
+      expect(await miniCount(app), 'и не запускается, пока впереди окно во весь экран').toBe(0);
+      // Окно во весь экран ушло — мини-окно создаётся при показе и появляется сразу с плитками и нужной высоты.
+      await front(app, other);
+      mini = await visibleMini(app);
+      const [size, frame, tiles] = await Promise.all([
+        miniWindow<number[]>(app, 'return w.getContentSize()'),
+        mini.evaluate(() => [document.getElementById('frame')!.offsetWidth, document.getElementById('frame')!.offsetHeight]),
+        mini.locator('#tiles .tile').count(),
+      ]);
+      expect(size, 'появилось сразу нужной высоты').toEqual(frame);
+      expect(tiles, 'и сразу с плитками').toBe(3);
+    });
+
     await test.step('сторож: мини-окно перестало рисовать кадры — пересоздано с тем же состоянием (R137)', async () => {
       await front(app, other);
       mini = await visibleMini(app);
@@ -580,6 +614,17 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await forget(app);
       await osClick(app, mini, '#dock-mic');
       await expect.poll(() => seen(app), { timeout: 5_000 }).toEqual(['mic']);
+    });
+
+    await test.step('событие системы, пока Cord впереди, и сразу показ: показывается новое окно, а не прежняя заготовка, и его не пересоздают следом (R188)', async () => {
+      await back(app);
+      await expect.poll(() => miniCount(app), { timeout: 5_000, message: 'заготовка есть' }).toBe(1);
+      await app.evaluate(({ app }) => void app.emit('child-process-gone', {}, { type: 'GPU', reason: 'crashed', exitCode: 1 }));
+      mini = await away(app);
+      await expect.poll(() => log.join(''), { timeout: 6_000 }).toMatch(/мини-окно: процесс GPU[^\n]*окно уже новое/);
+      await wait(500);
+      expect(mini.isClosed(), 'показанное окно не пересоздано: не «появилось, пропало, появилось»').toBe(false);
+      expect(await shown(app, 'cord-app://mini')).toBe(true);
     });
 
     await test.step('пробуждение: сон и разблокировка — одно новое окно; у пересозданий из-за системы свой лимит 3 за 5 минут (R137, R188)', async () => {

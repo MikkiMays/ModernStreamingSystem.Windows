@@ -31,7 +31,7 @@ import { readInstallerLanguage, shellLanguage, type Language } from './language'
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
-import { decideMini, displayNeedsRebuild, miniActionRoute, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
+import { decideMini, displayChange, miniActionRoute, MINI_DELAY_MS, MINI_WATCH, spareMini } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
@@ -870,9 +870,10 @@ class Shell {
 
   /**
    * Видно ли мини-окно; появление — через 400 мс, уход — сразу. Показанное окно при уходе убирается
-   * совсем, а новое заготавливается спрятанным, пока идёт встреча и переключатель включён (R188): к
-   * следующему показу оно чистое и уже загружено. Вне встречи, без главного окна или с выключенным
-   * переключателем мини-окна нет вовсе.
+   * совсем, а новое заготавливается спрятанным, когда впереди Cord или окно нужно сейчас (R188,
+   * `spareMini`): к следующему показу оно чистое и уже загружено; ушло ради игры или окна во весь
+   * экран — новое не создаётся, пока Cord не впереди. Вне встречи, без главного окна, с выключенным
+   * переключателем или при выходе мини-окна нет вовсе.
    */
   private updateMini(): void {
     const saved = this.settings.get();
@@ -882,8 +883,17 @@ class Shell {
       this.miniTimer = null;
       this.mini.setVisible(false, saved.mini, saved.mini.expanded);
     }
-    if (this.call.inCall && saved.mini.enabled && this.main && !this.main.window.isDestroyed() && !this.quitting) this.mini.prepare(saved.mini, saved.mini.expanded);
-    else this.mini.release();
+    const main = this.main && !this.main.window.isDestroyed() ? this.main : null;
+    const spare = spareMini({
+      inCall: this.call.inCall,
+      enabled: saved.mini.enabled,
+      main: !!main,
+      quitting: this.quitting,
+      wanted,
+      cordInFront: !!main?.state().focused || !!this.foreground?.cord,
+    });
+    if (spare === 'prepare') this.mini.prepare(saved.mini, saved.mini.expanded);
+    else if (spare === 'release') this.mini.release();
     if (!wanted || this.mini.visible || this.miniTimer) return;
     this.miniTimer = setTimeout(() => {
       this.miniTimer = null;
@@ -985,7 +995,10 @@ class Shell {
     screen.on('display-added', () => this.mini.renew('монитор подключён'));
     screen.on('display-removed', () => this.mini.renew('монитор отключён'));
     screen.on('display-metrics-changed', (_, _display, changed) => {
-      if (displayNeedsRebuild(changed)) this.mini.renew(`монитор изменился (${changed.join(', ')})`);
+      const change = displayChange(changed);
+      if (change === 'renew') this.mini.renew(`монитор изменился (${changed.join(', ')})`);
+      // Панель задач переехала или стала шире: окно снова целиком в рабочей области (R188).
+      else if (change === 'place') this.mini.fit();
     });
   }
 
@@ -1676,6 +1689,11 @@ class Shell {
         case 'mini.pong':
           if (event.sender.id !== this.mini.contents?.id) return null;
           if (typeof data.seq === 'number') this.mini.pong(data.seq);
+          return true;
+        // Страница нарисовала повторённое состояние — окно, ждавшее загрузки, можно показать (R188).
+        case 'mini.rendered':
+          if (event.sender.id !== this.mini.contents?.id) return null;
+          if (typeof data.seq === 'number') this.mini.rendered(data.seq);
           return true;
         case 'mini.resync':
           // Кнопка не дождалась ответа встречи: мини-окну — всё, что знает main, странице — прислать заново.

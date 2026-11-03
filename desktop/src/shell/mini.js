@@ -16,7 +16,9 @@
 //   пройдут 4 с — тогда main просит у встречи всё заново (`mini.resync`);
 // - перетаскивание за полосу — своим кодом (`mini.drag`), без `app-region: drag`: страница говорит, за какую
 //   точку взяли, и что мышь сдвинулась или отпущена, а окно main ставит по настоящему курсору (R188);
-// - на вопрос сторожа main (`mini.ping`) страница отвечает из `requestAnimationFrame`: окно рисует.
+// - на вопрос сторожа main (`mini.ping`) страница отвечает из `requestAnimationFrame`: окно рисует;
+// - окно, которое ждало загрузки страницы, main показывает по её «нарисовано» (`mini.reveal` → размер и
+//   `mini.rendered`, R188): сразу с плитками и нужной высоты.
 (() => {
   const $ = (id) => document.getElementById(id);
   const mini = $('mini');
@@ -461,7 +463,16 @@
 
   // Размер окна — по карточке: main подстраивает окно.
   const frame = $('frame');
-  new ResizeObserver(() => call('mini.size', { width: frame.offsetWidth, height: frame.offsetHeight })).observe(frame);
+  const reportSize = () => call('mini.size', { width: frame.offsetWidth, height: frame.offsetHeight });
+  new ResizeObserver(reportSize).observe(frame);
+  // Окно ждёт показа, пока страница не нарисует повторённое состояние (R188): сообщения main приходят по
+  // порядку, так что к этому вопросу всё повторённое уже в узлах. Размер — сразу (чтение размера сам
+  // пересчитывает раскладку), не дожидаясь кадра: спрятанное окно кадров может и не рисовать.
+  window.cordShell.on('mini.reveal', (data) => {
+    const seq = data && typeof data.seq === 'number' ? data.seq : 0;
+    reportSize();
+    call('mini.rendered', { seq });
+  });
 
   window.cordShell.on('mini.config', (next) => {
     if (!next || typeof next !== 'object') return;

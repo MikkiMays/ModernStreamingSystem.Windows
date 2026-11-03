@@ -25,8 +25,10 @@
  *
  * Каждый показ — новое окно (R188, владелец 03.11.2026: «подвигал, расширил, потом вернулся в корд и
  * снова скрыл — перестаёт двигаться и никакого взаимодействия»). Окно, которое уже показывалось, при
- * прятании уничтожается, а новое хозяин сразу заготавливает спрятанным, пока впереди Cord: к следующему
- * показу оно загружено, с портом уровней и снимком состояния, и появляется без мигания. Так ничто из
+ * прятании уничтожается, а новое хозяин заготавливает спрятанным, когда впереди Cord (`spareMini`): к
+ * следующему показу оно загружено, с портом уровней и снимком состояния, и появляется без мигания.
+ * Заготовки нет — окно создаётся при показе и появляется, когда страница загрузилась и нарисовала
+ * состояние (`MINI_SHOW`); не загрузилась за 5 с — пересоздаётся. Так ничто из
  * прежнего показа — захват мыши, недоделанное перетаскивание, место в порядке окон, поверхность после
  * смены размера, масштаба или монитора — не переживает прятания. Сторож кадров видит только окно, которое
  * не рисует; окно, которое рисует, но не получает мышь, он не видит — его и не остаётся. Порядок поверх
@@ -42,7 +44,7 @@
 import { BrowserWindow, screen, type WebContents } from 'electron';
 import { join } from 'node:path';
 import { IPC } from '../../shared/bridge';
-import { decideRebuild, dragPosition, MINI_RENEW, MINI_WATCH, placeMini, readGrab, watchStep } from '../mini-policy';
+import { decideRebuild, dragPosition, MINI_RENEW, MINI_SHOW, MINI_WATCH, placeMini, readGrab, watchStep } from '../mini-policy';
 import { shellUrl } from '../protocol';
 
 /** Ширина окна: 220 (компактное) или 260 (развёрнутое) — карточка во всё окно, поля под тень нет. */
@@ -95,14 +97,20 @@ export class MiniWindow {
   private used = false;
   /** Страница окна загрузилась: окно показывается уже с содержимым. */
   private ready = false;
-  /** Показ ждёт загрузки страницы. */
+  /** Показ ждёт загрузки страницы (не дольше `MINI_SHOW.loadMs`) и её «нарисовано» (не дольше `renderMs`). */
   private pending = false;
+  private loadTimer: ReturnType<typeof setTimeout> | null = null;
+  private renderTimer: ReturnType<typeof setTimeout> | null = null;
+  private renderSeq = 0;
   /** Куда окно поставил человек (DIP); стоит оно там, но целиком в рабочей области (`placeMini`). */
   private anchor: Position = {};
   /** Высота по содержимому для каждой ширины (компактное, развёрнутое): новое окно — сразу нужного размера. */
   private readonly heights = new Map<number, number>();
   /** Номер окна в адресе (`?n=`): окна разных показов различимы в журнале и в проверках. */
   private serial = 0;
+  /** Номер живого окна; номер последнего окна на момент последнего события системы (`renew`). */
+  private liveSerial = 0;
+  private renewSerial = 0;
 
   constructor(
     private readonly preloadDir: string,
@@ -149,7 +157,9 @@ export class MiniWindow {
     this.used = false;
     this.ready = false;
     this.pending = false;
+    this.clearShow();
     this.drag = null;
+    this.liveSerial = ++this.serial;
     this.state['mini.config'] = this.host.config();
     window.setAlwaysOnTop(true, 'floating');
     window.setContentProtection(true);
@@ -157,11 +167,16 @@ export class MiniWindow {
     const finish = (loaded: boolean) => {
       if (window.isDestroyed() || this.window !== window) return;
       this.ready = true;
+      if (this.loadTimer) clearTimeout(this.loadTimer);
+      this.loadTimer = null;
       if (loaded) {
         this.host.loaded(window.webContents);
         this.replay(window.webContents);
       }
-      if (this.pending) this.reveal();
+      if (!this.pending) return;
+      // Показ ждал загрузки: окно появится, когда страница нарисует повторённое состояние.
+      if (loaded) this.awaitRender();
+      else this.reveal();
     };
     window.webContents.on('did-finish-load', () => finish(true));
     // Страница не загрузилась — окно всё равно показывается, когда нужно: сторож кадров увидит, что оно
@@ -183,7 +198,7 @@ export class MiniWindow {
     window.on('hide', () => {
       if (this.window === window) this.unwatch();
     });
-    void window.loadURL(`${shellUrl('mini', 'mini')}?n=${++this.serial}`);
+    void window.loadURL(`${shellUrl('mini', 'mini')}?n=${this.liveSerial}`);
     window.on('closed', () => {
       if (this.window !== window) return;
       this.window = null;
@@ -220,6 +235,7 @@ export class MiniWindow {
   setVisible(visible: boolean, position: Position, expanded: boolean): void {
     if (!visible) {
       this.pending = false;
+      this.clearShow();
       this.drag = null;
       const window = this.live;
       // Показанное окно не ждёт следующего показа спрятанным, а уходит совсем (R188): новое, чистое,
@@ -230,20 +246,57 @@ export class MiniWindow {
     if (this.blocked) return;
     this.setAnchor(position);
     let window = this.live;
-    // Показанное окно спрятали не мы (Windows, «Свернуть все»): показывается всё равно новое.
-    if (window && this.used && !window.isVisible()) {
+    // Новое окно вместо прежнего: показанное, которое спрятали не мы (Windows, «Свернуть все»), и
+    // заготовка, созданная до события системы, которое ещё ждёт `renew`, — иначе показанное окно тут же
+    // пересоздалось бы («появилось, пропало, появилось») и потратило лимит.
+    if (window && !window.isVisible() && (this.used || (this.renewReasons.length > 0 && this.liveSerial <= this.renewSerial))) {
       this.drop(window);
       window = null;
     }
     window ??= this.window = this.create(position, expanded);
-    if (window.isVisible()) return;
-    // Страница ещё грузится — окно покажет `did-finish-load`: без пустой карточки и прыжка размера.
+    if (window.isVisible() || this.pending) return;
     this.pending = true;
-    if (this.ready) this.reveal();
+    // Заготовка загружена и всё это время получала состояние — показать сразу.
+    if (this.ready) return this.reveal();
+    // Страница ещё грузится — окно покажет она сама (`did-finish-load` → «нарисовано»): без пустой
+    // карточки и прыжка размера. Не загрузилась за `loadMs` — процесс страницы завис: пересоздать.
+    const loading = window;
+    this.loadTimer = setTimeout(() => {
+      this.loadTimer = null;
+      if (this.pending && !this.ready && this.window === loading) this.rebuild(`страница не загрузилась за ${MINI_SHOW.loadMs / 1000} с`, true);
+    }, MINI_SHOW.loadMs);
+  }
+
+  /**
+   * Состояние повторено странице, которая только что загрузилась: показать окно, когда она его нарисует
+   * и назовёт свой размер (`mini.reveal` → `mini.size`, `mini.rendered` — сообщения идут по порядку), но
+   * не позже `MINI_SHOW.renderMs`: молчит — показать как есть, дальше смотрит сторож кадров.
+   */
+  private awaitRender(): void {
+    const seq = ++this.renderSeq;
+    if (this.renderTimer) clearTimeout(this.renderTimer);
+    this.renderTimer = setTimeout(() => {
+      this.renderTimer = null;
+      if (this.pending && this.renderSeq === seq) this.reveal();
+    }, MINI_SHOW.renderMs);
+    this.event('mini.reveal', { seq });
+  }
+
+  /** Страница нарисовала повторённое состояние (`mini.rendered`). */
+  rendered(seq: number): void {
+    if (this.pending && this.ready && seq === this.renderSeq) this.reveal();
+  }
+
+  private clearShow(): void {
+    if (this.loadTimer) clearTimeout(this.loadTimer);
+    if (this.renderTimer) clearTimeout(this.renderTimer);
+    this.loadTimer = null;
+    this.renderTimer = null;
   }
 
   private reveal(): void {
     this.pending = false;
+    this.clearShow();
     const window = this.live;
     if (!window || window.isVisible()) return;
     const [width = 0, height = 0] = window.getSize();
@@ -293,6 +346,19 @@ export class MiniWindow {
 
   private replay(contents: WebContents): void {
     for (const [event, payload] of Object.entries(this.state)) contents.send(IPC.shellEvent, event, payload);
+  }
+
+  /**
+   * Рабочая область экрана сменилась без смены монитора (панель задач переехала, стала шире): окно снова
+   * целиком в ней — у своего места (R188).
+   */
+  fit(): void {
+    const window = this.live;
+    if (!window || this.drag) return;
+    const [width = 0, height = 0] = window.getSize();
+    const [x = 0, y = 0] = window.getPosition();
+    const place = this.place(width, height);
+    if (place.x !== x || place.y !== y) window.setPosition(place.x, place.y);
   }
 
   /** Место окна этого размера: у `anchor`, целиком в рабочей области (`placeMini`). */
@@ -364,6 +430,8 @@ export class MiniWindow {
    */
   renew(reason: string): void {
     if (!this.renewReasons.includes(reason)) this.renewReasons.push(reason);
+    // Окнам, созданным после этого события, оно уже не страшно.
+    this.renewSerial = this.serial;
     if (this.renewTimer) clearTimeout(this.renewTimer);
     this.renewTimer = setTimeout(() => this.renewNow(), MINI_RENEW.delayMs);
   }
@@ -375,6 +443,10 @@ export class MiniWindow {
     this.renewReasons = [];
     const window = this.live;
     if (!reason || !window) return;
+    if (this.liveSerial > this.renewSerial) {
+      this.host.log(`мини-окно: ${reason} — окно уже новое`);
+      return;
+    }
     if (!window.isVisible()) {
       // Спрятанное окно никто не видит: заменить новым без лимита.
       this.host.log(`мини-окно: ${reason} — заменено новым`);
@@ -422,6 +494,7 @@ export class MiniWindow {
   private drop(window: BrowserWindow): void {
     if (this.window === window) this.window = null;
     this.unwatch();
+    this.clearShow();
     this.drag = null;
     this.pending = false;
     this.used = false;
@@ -467,6 +540,7 @@ export class MiniWindow {
 
   destroy(): void {
     this.unwatch();
+    this.clearShow();
     if (this.blockTimer) clearTimeout(this.blockTimer);
     if (this.renewTimer) clearTimeout(this.renewTimer);
     this.blockTimer = null;
