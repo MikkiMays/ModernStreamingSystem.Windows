@@ -288,6 +288,8 @@ class Shell {
     // «Выйти» из трея, Cmd/Alt+F4 в заставке, завершение сеанса: дальше окно закрывается, а не прячется.
     app.on('before-quit', () => {
       this.quitting = true;
+      // Выход — мини-окна больше нет: ни показанного, пока страница выходит из встречи, ни нового.
+      this.updateMini();
     });
     this.adoptInstallerLanguage();
     this.games = { games: this.settings.get().games, ignored: this.settings.get().ignoredGames };
@@ -849,7 +851,7 @@ class Shell {
 
   /** Нужно ли сейчас мини-окно (`mini-policy.ts`). */
   private miniWanted(): boolean {
-    const main = this.main && !this.main.window.isDestroyed() ? this.main : null;
+    const main = this.main && !this.main.window.isDestroyed() && !this.quitting ? this.main : null;
     const state = main ? main.state() : null;
     if (state?.focused) this.miniDismissed = false;
     const foreground = this.foreground;

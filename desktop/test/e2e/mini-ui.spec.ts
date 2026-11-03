@@ -383,6 +383,7 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await osDrag(app, mini, '#bar', -60, -50, { x: 40 });
       await expect.poll(async () => near(await position(app), [x0 - 60, y0 - 50]), { timeout: 5_000 }).toBe(true);
       const [x1 = 0, y1 = 0] = await position(app);
+      console.log(`перетаскивание настоящей мышью: ${x0},${y0} → ${x1},${y1}`);
       const userData = await app.evaluate(({ app }) => app.getPath('userData'));
       await expect.poll(() => JSON.parse(readFileSync(join(userData, 'settings.json'), 'utf8')).mini, { timeout: 5_000 }).toMatchObject({ x: x1, y: y1 });
       expect(await mini.locator('#mini').getAttribute('data-mode'), 'перетаскивание — не щелчок и не двойной щелчок').toBe('compact');
@@ -425,6 +426,7 @@ test('мини-окно: вид, каждая кнопка, связь, паде
         await osClick(app, mini, '#compact');
         await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact', { timeout: 5_000 });
         await expect.poll(() => inWorkArea(app), { timeout: 5_000 }).toBe('целиком');
+        console.log(`круг ${round} (${how}): окно ${before.url()} → ${mini.url()}, место ${(await position(app)).join(',')}`);
       }
       const windows = await miniCount(app);
       expect(windows, 'одно окно, прежние не висят').toBe(1);
