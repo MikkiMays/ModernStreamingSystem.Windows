@@ -229,7 +229,13 @@ export class MiniWindow {
     }
     if (this.blocked) return;
     this.setAnchor(position);
-    const window = this.live ?? (this.window = this.create(position, expanded));
+    let window = this.live;
+    // Показанное окно спрятали не мы (Windows, «Свернуть все»): показывается всё равно новое.
+    if (window && this.used && !window.isVisible()) {
+      this.drop(window);
+      window = null;
+    }
+    window ??= this.window = this.create(position, expanded);
     if (window.isVisible()) return;
     // Страница ещё грузится — окно покажет `did-finish-load`: без пустой карточки и прыжка размера.
     this.pending = true;
