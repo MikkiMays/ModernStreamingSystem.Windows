@@ -22,6 +22,17 @@ async function windowWithUrl(app: ElectronApplication, prefix: string, timeout =
     await new Promise((r) => setTimeout(r, 250));
   }
 }
+/** Страница видимого мини-окна (R188: каждый показ — новое окно со своим `?n=` в адресе). */
+async function visibleMini(app: ElectronApplication, timeout = 30_000): Promise<Page> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const url = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.getURL().startsWith('cord-app://mini/') && w.isVisible())?.webContents.getURL() ?? null);
+    const found = url ? app.windows().find((page) => !page.isClosed() && page.url() === url) : undefined;
+    if (found) return found;
+    if (Date.now() > deadline) throw new Error('видимого мини-окна нет');
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
 const shown = (app: ElectronApplication, prefix: string) =>
   app.evaluate(({ BrowserWindow }, prefix) => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.webContents.getURL().startsWith(prefix) && w.isVisible()), prefix);
 const front = (app: ElectronApplication, value: unknown) =>
@@ -47,6 +58,8 @@ test('мини-окно на настоящей встрече', async () => {
     const errors: string[] = [];
     main.on('pageerror', (e) => errors.push(e.message));
     await main.waitForLoadState('networkidle').catch(() => {});
+    // Мини-окно по умолчанию выключено (R188).
+    await main.evaluate(() => (window as unknown as { cordDesktop: { invoke(method: string, payload: object): Promise<unknown> } }).cordDesktop.invoke('app.settings', { mini: true }));
     await main.getByRole('button', { name: 'Skip' }).click({ timeout: 3000 }).catch(() => {});
     await main.getByRole('button', { name: /New meeting/i }).first().click();
     await main.getByPlaceholder('What should we call you?').fill('host');
@@ -80,8 +93,7 @@ test('мини-окно на настоящей встрече', async () => {
     await main.waitForTimeout(8000);
     await front(app, other);
     await mainDo(app, 'hide');
-    const mini = await windowWithUrl(app, 'cord-app://mini/mini.html', 30_000);
-    await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
+    let mini = await visibleMini(app);
     await mini.waitForTimeout(3000);
     const tiles = await mini.locator('#tiles .tile').evaluateAll((els) => els.map((e) => `${(e as HTMLElement).dataset.id || ''}:${e.textContent?.trim().slice(0, 12)}:tier${(e as HTMLElement).dataset.tier}`));
     console.log('mini tiles', tiles.join(' | '));
@@ -115,9 +127,10 @@ test('мини-окно на настоящей встрече', async () => {
       throw error;
     }
     console.log('mic', before, '→', await mini.locator('#dock-mic').getAttribute('aria-pressed'));
-    for (let i = 0; i < 15; i++) { await mainDo(app, i % 2 ? 'hide' : 'focus'); await front(app, i % 2 ? other : { ...other, cord: true, exe: 'Cord.exe' }); await mini.waitForTimeout(300); }
+    for (let i = 0; i < 15; i++) { await mainDo(app, i % 2 ? 'hide' : 'focus'); await front(app, i % 2 ? other : { ...other, cord: true, exe: 'Cord.exe' }); await main.waitForTimeout(300); }
     await front(app, other); await mainDo(app, 'hide');
-    await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
+    // Каждый показ — новое окно (R188).
+    mini = await visibleMini(app);
     const b2 = await mini.locator('#dock-mic').getAttribute('aria-pressed');
     await osClick(app, mini, '#dock-mic');
     await expect.poll(() => mini.locator('#dock-mic').getAttribute('aria-pressed'), { timeout: 8000 }).not.toBe(b2);

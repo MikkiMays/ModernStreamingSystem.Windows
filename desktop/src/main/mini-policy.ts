@@ -60,7 +60,9 @@ export function watchStep(misses: number, answered: boolean, active = true): { m
 
 /**
  * Пересоздание — не чаще `count` раз за `windowMs` (R137): если окно ломается снова и снова (драйвер,
- * GPU), круг пересозданий хуже, чем мини-окна нет несколько минут.
+ * GPU), круг пересозданий хуже, чем мини-окна нет несколько минут. Счёт у сломанного окна (сторож,
+ * падение, «не отвечает») и у пересоздания из-за системы (`MINI_RENEW`) — раздельный (R188). Замена
+ * спрятанного окна новым (после каждого показа и при пробуждении) — не пересоздание и лимита не тратит.
  */
 export const MINI_REBUILDS = { count: 3, windowMs: 5 * 60_000 } as const;
 
@@ -72,11 +74,89 @@ export function decideRebuild(history: readonly number[], now: number): { allowe
 }
 
 /**
+ * Пересоздание из-за системы (R188): сон, разблокировка, сброс GPU, смена мониторов приходят пачкой
+ * (`resume`, следом `unlock-screen` и подключение монитора) — пересоздаётся один раз через `delayMs`
+ * тишины, а пока система спит или экран заблокирован — после разблокировки. Лимит у таких
+ * пересозданий свой (`MINI_REBUILDS`): пробуждение не съедает пересоздания сторожа кадров.
+ */
+export const MINI_RENEW = { delayMs: 1500 } as const;
+
+/**
  * Монитор сменился (`display-metrics-changed`): размер, масштаб и поворот меняют поверхность окна —
  * пересоздать; одна рабочая область (выехала панель задач) — нет, окно просто остаётся на экране.
  */
 export function displayNeedsRebuild(changed: readonly string[]): boolean {
   return changed.some((metric) => metric === 'bounds' || metric === 'scaleFactor' || metric === 'rotation');
+}
+
+/** Прямоугольник в DIP: рабочая область экрана или окно. */
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Отступ от краёв рабочей области на месте по умолчанию (снизу справа). */
+export const MINI_MARGIN = 12;
+
+/**
+ * Где стоять мини-окну (R188): там, куда его поставил человек (`anchor`, левый верхний угол в DIP), но
+ * целиком в рабочей области экрана, на котором оно больше всего стоит (нигде не стоит — на ближайшем):
+ * развёрнутое у нижнего края поднимается, а не уходит под панель задач, свёрнутое обратно — опускается на
+ * своё место. Места нет — снизу справа рабочей области основного экрана. Окно больше области — к её левому
+ * верхнему углу: полоса, за которую тащат, и кнопки «—» / «⧉» остаются на экране.
+ */
+export function placeMini(anchor: { x?: number; y?: number }, size: { width: number; height: number }, areas: readonly Box[], primary: Box): { x: number; y: number } {
+  const fit = (area: Box, x: number, y: number) => ({
+    x: Math.round(Math.max(area.x, Math.min(x, area.x + area.width - size.width))),
+    y: Math.round(Math.max(area.y, Math.min(y, area.y + area.height - size.height))),
+  });
+  if (anchor.x === undefined || anchor.y === undefined || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y) || !areas.length)
+    return fit(primary, primary.x + primary.width - size.width - MINI_MARGIN, primary.y + primary.height - size.height - MINI_MARGIN);
+  const rect = { x: anchor.x, y: anchor.y, width: size.width, height: size.height };
+  return fit(nearestArea(rect, areas), anchor.x, anchor.y);
+}
+
+/** Область, с которой окно пересекается больше всего; ни с одной — ближайшая к его середине. */
+export function nearestArea(rect: Box, areas: readonly Box[]): Box {
+  let best = areas[0]!;
+  let bestOverlap = -1;
+  let bestDistance = Infinity;
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  for (const area of areas) {
+    const overlap = Math.max(0, Math.min(rect.x + rect.width, area.x + area.width) - Math.max(rect.x, area.x)) * Math.max(0, Math.min(rect.y + rect.height, area.y + area.height) - Math.max(rect.y, area.y));
+    const dx = Math.max(area.x - cx, 0, cx - (area.x + area.width));
+    const dy = Math.max(area.y - cy, 0, cy - (area.y + area.height));
+    const distance = dx * dx + dy * dy;
+    if (overlap > bestOverlap || (overlap === 0 && bestOverlap === 0 && distance < bestDistance)) {
+      best = area;
+      bestOverlap = overlap;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/**
+ * Перетаскивание (R188): за какую точку окна его взяли — `{x, y}` страницы (CSS-пиксели = DIP окна) в
+ * пределах окна. Не число — `null`: тогда main берёт окно там, где сейчас курсор.
+ */
+export function readGrab(value: unknown, size: { width: number; height: number }): { x: number; y: number } | null {
+  if (!value || typeof value !== 'object') return null;
+  const data = value as Record<string, unknown>;
+  if (typeof data.x !== 'number' || typeof data.y !== 'number' || !Number.isFinite(data.x) || !Number.isFinite(data.y)) return null;
+  return { x: Math.max(0, Math.min(size.width, data.x)), y: Math.max(0, Math.min(size.height, data.y)) };
+}
+
+/**
+ * Где окно, пока его тащат (R188): точка, за которую взяли, — под настоящим курсором
+ * (`screen.getCursorScreenPoint()`). Не сумма сдвигов `screenX` страницы: те приходят с опозданием, теряются
+ * и на мониторах с разным масштабом считаются в разных единицах — окно отставало, прыгало и «застревало».
+ */
+export function dragPosition(cursor: { x: number; y: number }, grab: { x: number; y: number }): { x: number; y: number } {
+  return { x: Math.round(cursor.x - grab.x), y: Math.round(cursor.y - grab.y) };
 }
 
 /**
