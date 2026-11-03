@@ -31,7 +31,7 @@ import { readInstallerLanguage, shellLanguage, type Language } from './language'
 import { markFor, StartupMetrics, sumMemory } from './metrics';
 import { NativeClient } from './native/client';
 import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBinding, type NativeForegroundEvent } from '../native/protocol';
-import { decideMini, displayNeedsRebuild, miniActionRoute, MINI_DELAY_MS, MINI_WATCH } from './mini-policy';
+import { decideMini, displayChange, miniActionRoute, MINI_DELAY_MS, MINI_WATCH, spareMini } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
@@ -227,22 +227,14 @@ class Shell {
   private readonly mini = new MiniWindow(this.preloadDir, {
     moved: (x, y) => void this.settings.update({ mini: { ...this.settings.get().mini, x, y } }),
     loaded: (contents) => this.pairLevels('mini', contents),
-    gone: () => {
-      // Окно убрано: во встрече — новое заранее (порт уровней, состояние), видно ли — решит правило.
-      const mini = this.settings.get().mini;
-      if (this.call.inCall && mini.enabled) {
-        this.mini.prepare(mini, mini.expanded);
-        this.mini.send('mini.config', this.miniConfig());
-      }
-      this.updateMini();
-    },
+    // Окно убрано: во встрече — новое заранее (порт уровней, состояние), видно ли — решит правило.
+    gone: () => this.updateMini(),
+    config: () => this.miniConfig(),
     // Пропуски кадров не считаются, пока человек не трогает мышь и клавиатуру (экран мог погаснуть).
     // Дымовой прогон мышь не двигает — там человек «всегда смотрит».
     active: () => smoke || powerMonitor.getSystemIdleState(MINI_WATCH.idleSeconds) === 'active',
     log,
   });
-  /** Смена мониторов приходит пачкой событий — окно пересоздаётся один раз. */
-  private displayTimer: ReturnType<typeof setTimeout> | null = null;
   private main: MainWindow | null = null;
   private splash: SplashWindow | null = null;
   private servers: ServersWindow | null = null;
@@ -296,6 +288,8 @@ class Shell {
     // «Выйти» из трея, Cmd/Alt+F4 в заставке, завершение сеанса: дальше окно закрывается, а не прячется.
     app.on('before-quit', () => {
       this.quitting = true;
+      // Выход — мини-окна больше нет: ни показанного, пока страница выходит из встречи, ни нового.
+      this.updateMini();
     });
     this.adoptInstallerLanguage();
     this.games = { games: this.settings.get().games, ignored: this.settings.get().ignoredGames };
@@ -857,7 +851,7 @@ class Shell {
 
   /** Нужно ли сейчас мини-окно (`mini-policy.ts`). */
   private miniWanted(): boolean {
-    const main = this.main && !this.main.window.isDestroyed() ? this.main : null;
+    const main = this.main && !this.main.window.isDestroyed() && !this.quitting ? this.main : null;
     const state = main ? main.state() : null;
     if (state?.focused) this.miniDismissed = false;
     const foreground = this.foreground;
@@ -874,16 +868,33 @@ class Shell {
     });
   }
 
-  /** Видно ли мини-окно; появление — через 400 мс, уход — сразу. */
+  /**
+   * Видно ли мини-окно; появление — через 400 мс, уход — сразу. Показанное окно при уходе убирается
+   * совсем, а новое заготавливается спрятанным, когда впереди Cord или окно нужно сейчас (R188,
+   * `spareMini`): к следующему показу оно чистое и уже загружено; ушло ради игры или окна во весь
+   * экран — новое не создаётся, пока Cord не впереди. Вне встречи, без главного окна, с выключенным
+   * переключателем или при выходе мини-окна нет вовсе.
+   */
   private updateMini(): void {
     const saved = this.settings.get();
-    if (!this.miniWanted()) {
+    const wanted = this.miniWanted();
+    if (!wanted) {
       if (this.miniTimer) clearTimeout(this.miniTimer);
       this.miniTimer = null;
       this.mini.setVisible(false, saved.mini, saved.mini.expanded);
-      return;
     }
-    if (this.mini.visible || this.miniTimer) return;
+    const main = this.main && !this.main.window.isDestroyed() ? this.main : null;
+    const spare = spareMini({
+      inCall: this.call.inCall,
+      enabled: saved.mini.enabled,
+      main: !!main,
+      quitting: this.quitting,
+      wanted,
+      cordInFront: !!main?.state().focused || !!this.foreground?.cord,
+    });
+    if (spare === 'prepare') this.mini.prepare(saved.mini, saved.mini.expanded);
+    else if (spare === 'release') this.mini.release();
+    if (!wanted || this.mini.visible || this.miniTimer) return;
     this.miniTimer = setTimeout(() => {
       this.miniTimer = null;
       // Через 400 мс всё могло вернуться (Alt+Tab туда и обратно) или впереди встало окно во весь
@@ -954,33 +965,40 @@ class Shell {
    * Самовосстановление мини-окна (R137): после сна, разблокировки экрана, сброса процесса GPU и смены
    * мониторов (размер, масштаб, поворот) окно пересоздаётся — его поверхность могла умереть, а страница
    * при этом жива («замёрзшее» окно, Electron #37361, #40578). Пока экран заблокирован или система спит,
-   * сторож кадров не считает пропуски. Не чаще `MINI_REBUILDS` — это решает `MiniWindow.rebuild`.
+   * сторож кадров не считает пропуски и пересоздание ждёт. Пачка событий одного пробуждения — одно
+   * пересоздание, со своим лимитом `MINI_REBUILDS` (R188) — это решает `MiniWindow.renew`.
    */
   private installMiniRecovery(): void {
-    powerMonitor.on('suspend', () => this.mini.pause(true));
-    powerMonitor.on('lock-screen', () => this.mini.pause(true));
+    const away = { asleep: false, locked: false };
+    const pause = () => this.mini.pause(away.asleep || away.locked);
+    powerMonitor.on('suspend', () => {
+      away.asleep = true;
+      pause();
+    });
+    powerMonitor.on('lock-screen', () => {
+      away.locked = true;
+      pause();
+    });
     powerMonitor.on('resume', () => {
-      this.mini.pause(false);
-      this.mini.rebuild('после сна', false);
+      away.asleep = false;
+      this.mini.renew('после сна');
+      pause();
     });
     powerMonitor.on('unlock-screen', () => {
-      this.mini.pause(false);
-      this.mini.rebuild('после блокировки экрана', false);
+      away.locked = false;
+      this.mini.renew('после блокировки экрана');
+      pause();
     });
     app.on('child-process-gone', (_, details) => {
-      if (details.type === 'GPU') this.mini.rebuild(`процесс GPU: ${details.reason}`, false);
+      if (details.type === 'GPU') this.mini.renew(`процесс GPU: ${details.reason}`);
     });
-    const displays = (reason: string) => {
-      if (this.displayTimer) clearTimeout(this.displayTimer);
-      this.displayTimer = setTimeout(() => {
-        this.displayTimer = null;
-        this.mini.rebuild(reason, false);
-      }, 1000);
-    };
-    screen.on('display-added', () => displays('монитор подключён'));
-    screen.on('display-removed', () => displays('монитор отключён'));
+    screen.on('display-added', () => this.mini.renew('монитор подключён'));
+    screen.on('display-removed', () => this.mini.renew('монитор отключён'));
     screen.on('display-metrics-changed', (_, _display, changed) => {
-      if (displayNeedsRebuild(changed)) displays(`монитор изменился (${changed.join(', ')})`);
+      const change = displayChange(changed);
+      if (change === 'renew') this.mini.renew(`монитор изменился (${changed.join(', ')})`);
+      // Панель задач переехала или стала шире: окно снова целиком в рабочей области (R188).
+      else if (change === 'place') this.mini.fit();
     });
   }
 
@@ -1410,11 +1428,7 @@ class Shell {
         this.overlay.prepare();
         this.overlay.configure(this.overlayConfig());
       }
-      if (this.settings.get().mini.enabled) {
-        const mini = this.settings.get().mini;
-        this.mini.prepare(mini, mini.expanded);
-        this.mini.send('mini.config', this.miniConfig());
-      }
+      // Мини-окно заранее заготовит `updateMini` ниже.
     }
     if (!next.inCall && was.inCall) {
       this.miniDismissed = false;
@@ -1663,7 +1677,8 @@ class Shell {
           this.closeGoLive();
           return true;
         // Мини-окно звонка: нажатия и размер по содержимому (R93); ответ сторожу, «пришли всё заново»
-        // и перетаскивание (R137).
+        // и перетаскивание (R137): «взяли за точку {x, y}», «тащат», «отпустили» — окно main ставит по
+        // настоящему курсору (R188).
         case 'mini.action': {
           if (event.sender.id !== this.mini.contents?.id || typeof data.id !== 'string') return null;
           const want = typeof data.want === 'boolean' ? data.want : undefined;
@@ -1675,6 +1690,11 @@ class Shell {
           if (event.sender.id !== this.mini.contents?.id) return null;
           if (typeof data.seq === 'number') this.mini.pong(data.seq);
           return true;
+        // Страница нарисовала повторённое состояние — окно, ждавшее загрузки, можно показать (R188).
+        case 'mini.rendered':
+          if (event.sender.id !== this.mini.contents?.id) return null;
+          if (typeof data.seq === 'number') this.mini.rendered(data.seq);
+          return true;
         case 'mini.resync':
           // Кнопка не дождалась ответа встречи: мини-окну — всё, что знает main, странице — прислать заново.
           if (event.sender.id !== this.mini.contents?.id) return null;
@@ -1683,8 +1703,8 @@ class Shell {
           return true;
         case 'mini.drag':
           if (event.sender.id !== this.mini.contents?.id) return null;
-          if (data.phase === 'start') this.mini.dragStart();
-          else if (data.phase === 'move' && typeof data.dx === 'number' && typeof data.dy === 'number') this.mini.dragMove(data.dx, data.dy);
+          if (data.phase === 'start') this.mini.dragStart(data);
+          else if (data.phase === 'move') this.mini.dragMove();
           else if (data.phase === 'end') this.mini.dragEnd();
           return true;
         case 'mini.size':

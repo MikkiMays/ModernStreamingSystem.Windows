@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { appSettingsOf } from '../../src/main/app-settings';
 import { migrateSettings, SETTINGS_REV, SettingsStore } from '../../src/main/settings';
 
 const secrets = { isEncryptionAvailable: () => false, encryptString: (plain: string) => Buffer.from(plain), decryptString: (data: Buffer) => data.toString() };
@@ -21,7 +22,15 @@ describe('migrateSettings — ревизии умолчаний', () => {
   });
 
   it('файл текущей ревизии — выбор человека не трогается', () => {
-    expect(migrateSettings({ settingsRev: SETTINGS_REV, overlayEnabled: false })).toEqual({ settingsRev: SETTINGS_REV, overlayEnabled: false });
+    const mini = { enabled: true, expanded: true, x: 10, y: 20 };
+    expect(migrateSettings({ settingsRev: SETTINGS_REV, overlayEnabled: false, mini })).toEqual({ settingsRev: SETTINGS_REV, overlayEnabled: false, mini });
+  });
+
+  it('ревизия 2 и раньше — мини-окно выключается один раз, место и развёрнутость остаются (R188)', () => {
+    expect(migrateSettings({ settingsRev: 2, mini: { enabled: true, expanded: true, x: 1500, y: 300 } })).toEqual({ settingsRev: SETTINGS_REV, mini: { enabled: false, expanded: true, x: 1500, y: 300 } });
+    expect(migrateSettings({ mini: { enabled: true, expanded: false } }).mini).toEqual({ enabled: false, expanded: false });
+    // Без записи о мини-окне — умолчание, а оно и так «выключено».
+    expect(migrateSettings({ settingsRev: 2, tray: true })).toEqual({ settingsRev: SETTINGS_REV, tray: true });
   });
 });
 
@@ -36,6 +45,27 @@ describe('SettingsStore', () => {
     expect(store.get().notifications).toBe(true);
     expect(store.get().trayHintShown).toBe(false);
     expect(store.get().settingsRev).toBe(SETTINGS_REV);
+    expect(store.get().mini, 'мини-окно звонка по умолчанию выключено (R188)').toEqual({ enabled: false, expanded: false });
+    expect(appSettingsOf(store.get()).mini, 'веб в «Windows» видит переключатель выключенным').toBe(false);
+  });
+
+  it('файл ревизии 2 с «mini.enabled: true» — после чтения мини-окно выключено, место осталось; включённое после этого — остаётся включённым (R188)', () => {
+    const root = dir();
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ settingsRev: 2, mini: { enabled: true, expanded: true, x: 1500, y: 300 } }));
+    const store = new SettingsStore(root, secrets);
+    expect(store.get().mini).toEqual({ enabled: false, expanded: true, x: 1500, y: 300 });
+    store.update({ mini: { ...store.get().mini, enabled: true } });
+    const written = JSON.parse(readFileSync(join(root, 'settings.json'), 'utf8')) as Record<string, unknown>;
+    expect(written.settingsRev).toBe(SETTINGS_REV);
+    expect(new SettingsStore(root, secrets).get().mini).toEqual({ enabled: true, expanded: true, x: 1500, y: 300 });
+  });
+
+  it('мини-окно без «enabled» или с чужим значением — выключено (R188)', () => {
+    const root = dir();
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ settingsRev: SETTINGS_REV, mini: { expanded: true } }));
+    expect(new SettingsStore(root, secrets).get().mini).toEqual({ enabled: false, expanded: true });
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ settingsRev: SETTINGS_REV, mini: { enabled: 'yes', x: 5, y: 6 } }));
+    expect(new SettingsStore(root, secrets).get().mini).toEqual({ enabled: false, expanded: false, x: 5, y: 6 });
   });
 
   it('старый файл с overlayEnabled: false без ревизии — после чтения оверлей включён и ревизия записывается при первом изменении', () => {

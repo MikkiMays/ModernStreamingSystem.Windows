@@ -1,7 +1,8 @@
 /**
  * Стресс мини-окна: 25 человек с аватарами, уровни 30 раз в секунду, состав меняется 5 раз в секунду,
  * десятки циклов «спрятать / показать / свернуть / вернуть / другое окно впереди / перезагрузка страницы».
- * В конце мини-окно должно появиться и отвечать: «ещё» (только main) и микрофон (до страницы).
+ * В конце мини-окно должно появиться и отвечать: «ещё» (только main) и микрофон (до страницы). Мини-окно
+ * по умолчанию выключено (R188) — тест включает его сам; каждый показ — новое окно, прежние не висят.
  */
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { join } from 'node:path';
@@ -21,6 +22,17 @@ async function windowWithUrl(app: ElectronApplication, prefix: string, timeout =
   for (;;) {
     for (const page of app.windows()) if (page.url().startsWith(prefix)) return page;
     if (Date.now() > deadline) throw new Error(`окно ${prefix} не появилось`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+/** Страница видимого мини-окна (R188: каждый показ — новое окно со своим `?n=` в адресе). */
+async function visibleMini(app: ElectronApplication, timeout = 30_000): Promise<Page> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const url = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.getURL().startsWith('cord-app://mini/') && w.isVisible())?.webContents.getURL() ?? null);
+    const found = url ? app.windows().find((page) => !page.isClosed() && page.url() === url) : undefined;
+    if (found) return found;
+    if (Date.now() > deadline) throw new Error('видимого мини-окна нет');
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 }
@@ -76,6 +88,8 @@ test('мини-окно отвечает после стресса', async () =>
     const main = await windowWithUrl(app, server, 90_000);
     await main.waitForLoadState('domcontentloaded');
     await new Promise((r) => setTimeout(r, 2000));
+    // Мини-окно по умолчанию выключено (R188).
+    await main.evaluate(() => (window as unknown as { cordDesktop: { invoke(method: string, payload: object): Promise<unknown> } }).cordDesktop.invoke('app.settings', { mini: true }));
     await inCall(main);
     const steps = ['hide', 'show', 'minimize', 'restore', 'hide', 'focus', 'other', 'cord', 'reload'];
     let seed = 7;
@@ -97,8 +111,10 @@ test('мини-окно отвечает после стресса', async () =>
     // Финал: Cord спрятан, впереди другое окно — мини-окно должно появиться и отвечать.
     await front(app, other);
     await mainDo(app, 'hide');
-    const mini = await windowWithUrl(app, 'cord-app://mini/mini.html', 30_000);
     await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
+    const mini = await visibleMini(app);
+    const windows = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.webContents.getURL().startsWith('cord-app://mini/')).length);
+    expect(windows, 'после десятков показов — одно мини-окно, прежние уничтожены').toBe(1);
     const lag = await mini.evaluate(() => new Promise<number>((resolve) => { const t = performance.now(); setTimeout(() => resolve(performance.now() - t), 0); }));
     console.log('mini event-loop lag ms', lag.toFixed(1), 'tiles', await mini.locator('#tiles .tile').count());
     await expect(mini.locator('#tiles .tile')).toHaveCount(3);

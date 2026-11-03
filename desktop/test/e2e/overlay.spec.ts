@@ -8,7 +8,8 @@
  * Проверяется: впереди игра без рамки (`game.exe`) — реестр её запомнил, окно `cord-app://overlay` видно
  * и карточки людей в DOM; уровень со страницы доходит до кольца по порту мимо main; карточка «Показать
  * игру»; замок; впереди Cord — оверлей прячется; Cord спрятан, впереди другое окно — мини-окно
- * `cord-app://mini` видно, нажатие в нём доходит до страницы; Cord снова впереди — мини-окна нет.
+ * `cord-app://mini` видно (оно по умолчанию выключено, R188, — тест включает его), нажатие в нём
+ * доходит до страницы; Cord снова впереди — мини-окна нет.
  * Снимки — в `test-results/shots/` (артефакт CI).
  */
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
@@ -94,6 +95,8 @@ test('оверлей над игрой, «Показать игру» и мин�
       (window as unknown as { seen: Record<string, unknown>[] }).seen = seen;
       for (const type of ['mini.action', 'game.active', 'games.changed']) api.on(type, (data) => seen.push({ type, ...data }));
     });
+    // Мини-окно звонка по умолчанию выключено (R188).
+    await main.evaluate(() => (window as unknown as { cordDesktop: { invoke(method: string, payload: object): Promise<unknown> } }).cordDesktop.invoke('app.settings', { mini: true }));
     await inCall(main);
 
     // ----- игра впереди: реестр и оверлей (R62, R63) -----

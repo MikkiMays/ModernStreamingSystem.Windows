@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { decideMini, decideRebuild, displayNeedsRebuild, miniActionRoute, MINI_REBUILDS, MINI_WATCH, watchStep, type MiniInput } from '../../src/main/mini-policy';
+import {
+  decideMini,
+  decideRebuild,
+  displayChange,
+  dragPosition,
+  miniActionRoute,
+  MINI_MARGIN,
+  MINI_REBUILDS,
+  MINI_WATCH,
+  nearestArea,
+  placeMini,
+  readGrab,
+  spareMini,
+  watchStep,
+  type MiniInput,
+} from '../../src/main/mini-policy';
 
 const away: MiniInput = {
   inCall: true,
@@ -92,11 +107,14 @@ describe('лимит пересозданий (R137): не больше 3 за 5
 
 describe('смена мониторов (R137): что пересоздаёт окно', () => {
   it('размер, масштаб и поворот — пересоздать; только рабочая область (панель задач) — нет', () => {
-    expect(displayNeedsRebuild(['scaleFactor'])).toBe(true);
-    expect(displayNeedsRebuild(['bounds', 'workArea'])).toBe(true);
-    expect(displayNeedsRebuild(['rotation'])).toBe(true);
-    expect(displayNeedsRebuild(['workArea'])).toBe(false);
-    expect(displayNeedsRebuild([])).toBe(false);
+    expect(displayChange(['scaleFactor'])).toBe('renew');
+    expect(displayChange(['bounds', 'workArea'])).toBe('renew');
+    expect(displayChange(['rotation'])).toBe('renew');
+    expect(displayChange([])).toBeNull();
+  });
+
+  it('только рабочая область (панель задач переехала или стала шире) — не пересоздать, а снова поставить окно целиком в неё (R188)', () => {
+    expect(displayChange(['workArea'])).toBe('place');
   });
 });
 
@@ -118,5 +136,104 @@ describe('нажатия мини-окна и трея — кто исполня
   it('развернуть, свернуть, открыть — сама оболочка; незнакомое — unknown (мини-окну сразу ignored)', () => {
     for (const id of ['open', 'collapse', 'expand', 'compact']) expect(miniActionRoute(id, undefined, false), id).toBe('main');
     expect(miniActionRoute('record', undefined, false)).toBe('unknown');
+  });
+});
+
+describe('место мини-окна (R188): где поставил человек, но целиком в рабочей области своего экрана', () => {
+  // Основной экран 1920×1080 с панелью задач 48 px внизу; второй — справа, 2560×1440 без панели.
+  const primary = { x: 0, y: 0, width: 1920, height: 1032 };
+  const right = { x: 1920, y: 0, width: 2560, height: 1440 };
+  const areas = [primary, right];
+  const compact = { width: 220, height: 200 };
+  const expanded = { width: 260, height: 545 };
+
+  it('места нет — снизу справа основного экрана с отступом', () => {
+    expect(placeMini({}, compact, areas, primary)).toEqual({ x: 1920 - 220 - MINI_MARGIN, y: 1032 - 200 - MINI_MARGIN });
+    expect(placeMini({ x: Number.NaN, y: 10 }, compact, areas, primary), 'не число — как нет места').toEqual({ x: 1920 - 220 - MINI_MARGIN, y: 1032 - 200 - MINI_MARGIN });
+  });
+
+  it('целиком на экране — ровно там, где поставили', () => {
+    expect(placeMini({ x: 300, y: 400 }, compact, areas, primary)).toEqual({ x: 300, y: 400 });
+    expect(placeMini({ x: 3000, y: 900 }, compact, areas, primary), 'на втором экране — тоже').toEqual({ x: 3000, y: 900 });
+  });
+
+  it('владелец: подвинул вниз, развернул — окно поднимается над панелью задач целиком; свернул — опускается на своё место', () => {
+    const anchor = { x: 1600, y: 800 };
+    expect(placeMini(anchor, compact, areas, primary)).toEqual({ x: 1600, y: 800 });
+    const up = placeMini(anchor, expanded, areas, primary);
+    expect(up).toEqual({ x: 1600, y: 1032 - 545 });
+    expect(up.y + expanded.height, 'низ развёрнутого — над панелью задач, «Выйти из встречи» видно').toBeLessThanOrEqual(primary.y + primary.height);
+    expect(placeMini(anchor, compact, areas, primary), 'место человека не потерялось').toEqual(anchor);
+  });
+
+  it('частью за краем — сдвигается внутрь со всех четырёх сторон', () => {
+    expect(placeMini({ x: -100, y: -50 }, compact, areas, primary)).toEqual({ x: 0, y: 0 });
+    expect(placeMini({ x: 1800, y: 1000 }, compact, [primary], primary), 'за правым и нижним краем одного экрана').toEqual({ x: 1920 - 220, y: 1032 - 200 });
+  });
+
+  it('на стыке двух экранов — на том, где его больше', () => {
+    // 220 px: 40 на основном, 180 на втором — на второй.
+    expect(placeMini({ x: 1880, y: 100 }, compact, areas, primary)).toEqual({ x: 1920, y: 100 });
+    // 180 на основном, 40 на втором — на основной.
+    expect(placeMini({ x: 1740, y: 100 }, compact, areas, primary)).toEqual({ x: 1700, y: 100 });
+  });
+
+  it('второй экран у нижнего края — поднимается в его рабочей области, а не прыгает на основной', () => {
+    expect(placeMini({ x: 3000, y: 1300 }, expanded, areas, primary)).toEqual({ x: 3000, y: 1440 - 545 });
+  });
+
+  it('монитор с запомненным местом отключили — на ближайший экран, целиком', () => {
+    expect(placeMini({ x: 5000, y: 300 }, compact, [primary], primary)).toEqual({ x: 1920 - 220, y: 300 });
+    expect(placeMini({ x: -2000, y: 2000 }, compact, areas, primary)).toEqual({ x: 0, y: 1032 - 200 });
+  });
+
+  it('окно больше рабочей области — к её левому верхнему углу: полоса и «—» / «⧉» на экране', () => {
+    expect(placeMini({ x: 50, y: 50 }, { width: 260, height: 640 }, [{ x: 0, y: 0, width: 1024, height: 560 }], primary)).toEqual({ x: 50, y: 0 });
+  });
+
+  it('экран слева от основного (отрицательные координаты)', () => {
+    const left = { x: -1280, y: 200, width: 1280, height: 984 };
+    expect(nearestArea({ x: -600, y: 900, width: 220, height: 200 }, [primary, left])).toBe(left);
+    expect(placeMini({ x: -600, y: 1100 }, compact, [primary, left], primary)).toEqual({ x: -600, y: 200 + 984 - 200 });
+  });
+});
+
+describe('перетаскивание (R188): точка, за которую взяли, — под настоящим курсором', () => {
+  it('за какую точку взяли — с полосы, в пределах окна; мусор — null', () => {
+    expect(readGrab({ phase: 'start', x: 40, y: 14 }, { width: 220, height: 200 })).toEqual({ x: 40, y: 14 });
+    expect(readGrab({ x: -5, y: 900 }, { width: 220, height: 200 })).toEqual({ x: 0, y: 200 });
+    for (const bad of [null, 'x', {}, { x: '40', y: 14 }, { x: Number.POSITIVE_INFINITY, y: 1 }, { x: 1, y: Number.NaN }]) expect(readGrab(bad, { width: 220, height: 200 })).toBeNull();
+  });
+
+  it('окно — курсор минус точка захвата; сдвиги не копятся: где курсор, там и окно', () => {
+    const grab = { x: 40, y: 14 };
+    expect(dragPosition({ x: 1000, y: 500 }, grab)).toEqual({ x: 960, y: 486 });
+    // Курсор вернулся туда же — окно на том же месте, сколько бы событий ни потерялось по дороге.
+    expect(dragPosition({ x: 1000, y: 500 }, grab)).toEqual(dragPosition({ x: 1000, y: 500 }, grab));
+    expect(dragPosition({ x: -700, y: 300 }, grab), 'экран слева').toEqual({ x: -740, y: 286 });
+    expect(dragPosition({ x: 100.6, y: 50.4 }, { x: 0.2, y: 0 })).toEqual({ x: 100, y: 50 });
+  });
+});
+
+describe('заготовка мини-окна (R188): новое окно — когда Cord впереди или окно нужно сейчас', () => {
+  const base = { inCall: true, enabled: true, main: true, quitting: false, wanted: false, cordInFront: true };
+
+  it('человек вернулся в Cord — заготовить: следующий показ без задержки', () => {
+    expect(spareMini(base)).toBe('prepare');
+  });
+
+  it('окно нужно сейчас — создать, даже если Cord не впереди', () => {
+    expect(spareMini({ ...base, cordInFront: false, wanted: true })).toBe('prepare');
+  });
+
+  it('окно ушло ради игры, окна во весь экран или «—», а Cord не впереди — новое не создаётся, но и не убирается', () => {
+    expect(spareMini({ ...base, cordInFront: false })).toBe('wait');
+  });
+
+  it('вне встречи, выключено, нет главного окна, выход — окна нет вовсе', () => {
+    expect(spareMini({ ...base, inCall: false })).toBe('release');
+    expect(spareMini({ ...base, enabled: false, wanted: true })).toBe('release');
+    expect(spareMini({ ...base, main: false })).toBe('release');
+    expect(spareMini({ ...base, quitting: true, wanted: true })).toBe('release');
   });
 });

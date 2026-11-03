@@ -14,8 +14,11 @@
 // - нажатие несёт нужное состояние (`want`: включить или выключить, а не «переключить») и номер; кнопка
 //   показывает «ожидание», пока встреча не ответит (`mini.ack`), не придёт новое состояние или не
 //   пройдут 4 с — тогда main просит у встречи всё заново (`mini.resync`);
-// - перетаскивание за полосу — своим кодом (сдвиг мыши → `mini.drag`), без `app-region: drag`;
-// - на вопрос сторожа main (`mini.ping`) страница отвечает из `requestAnimationFrame`: окно рисует.
+// - перетаскивание за полосу — своим кодом (`mini.drag`), без `app-region: drag`: страница говорит, за какую
+//   точку взяли, и что мышь сдвинулась или отпущена, а окно main ставит по настоящему курсору (R188);
+// - на вопрос сторожа main (`mini.ping`) страница отвечает из `requestAnimationFrame`: окно рисует;
+// - окно, которое ждало загрузки страницы, main показывает по её «нарисовано» (`mini.reveal` → размер и
+//   `mini.rendered`, R188): сразу с плитками и нужной высоты.
 (() => {
   const $ = (id) => document.getElementById(id);
   const mini = $('mini');
@@ -113,7 +116,8 @@
   let draggedAt = 0;
   bar.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest('button'))) return;
-    drag = { pointerId: event.pointerId, x: event.screenX, y: event.screenY, dx: 0, dy: 0, moving: false };
+    // Точка, за которую взяли, — в координатах окна: main держит её под курсором.
+    drag = { pointerId: event.pointerId, x: event.screenX, y: event.screenY, grab: { x: event.clientX, y: event.clientY }, moving: false };
     // Мышь быстро уходит за полосу и за окно — события всё равно приходят сюда.
     try {
       bar.setPointerCapture(event.pointerId);
@@ -128,35 +132,42 @@
       if (!drag || event.pointerId !== drag.pointerId) return;
       // Кнопку отпустили, а `pointerup` потерялся (отпустили за окном) — перетаскивание кончилось.
       if (!(event.buttons & 1)) return endDrag();
-      drag.dx = event.screenX - drag.x;
-      drag.dy = event.screenY - drag.y;
       if (!drag.moving) {
-        if (Math.hypot(drag.dx, drag.dy) < DRAG_SLOP) return;
+        if (Math.hypot(event.screenX - drag.x, event.screenY - drag.y) < DRAG_SLOP) return;
         drag.moving = true;
-        call('mini.drag', { phase: 'start' });
+        call('mini.drag', { phase: 'start', ...drag.grab });
       }
       if (dragFrame) return;
       dragFrame = requestAnimationFrame(() => {
         dragFrame = 0;
-        if (drag && drag.moving) call('mini.drag', { phase: 'move', dx: drag.dx, dy: drag.dy });
+        if (drag && drag.moving) call('mini.drag', { phase: 'move' });
       });
     },
     true,
   );
+  /** Перетаскивание кончилось: захват указателя отпускается сам, а не ждёт `pointerup`, который мог потеряться. */
   function endDrag() {
     if (!drag) return;
     const was = drag;
     drag = null;
     if (dragFrame) cancelAnimationFrame(dragFrame);
     dragFrame = 0;
+    try {
+      if (bar.hasPointerCapture(was.pointerId)) bar.releasePointerCapture(was.pointerId);
+    } catch {
+      /* указателя уже нет */
+    }
     if (!was.moving) return;
     draggedAt = performance.now();
-    call('mini.drag', { phase: 'move', dx: was.dx, dy: was.dy });
+    call('mini.drag', { phase: 'move' });
     call('mini.drag', { phase: 'end' });
   }
   for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, endDrag, true);
   bar.addEventListener('lostpointercapture', endDrag);
   window.addEventListener('blur', endDrag);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) endDrag();
+  });
   bar.addEventListener('dblclick', (event) => {
     if ((event.target instanceof Element && event.target.closest('button')) || performance.now() - draggedAt < DRAG_QUIET_MS) return;
     act(config.expanded ? 'compact' : 'expand');
@@ -452,7 +463,16 @@
 
   // Размер окна — по карточке: main подстраивает окно.
   const frame = $('frame');
-  new ResizeObserver(() => call('mini.size', { width: frame.offsetWidth, height: frame.offsetHeight })).observe(frame);
+  const reportSize = () => call('mini.size', { width: frame.offsetWidth, height: frame.offsetHeight });
+  new ResizeObserver(reportSize).observe(frame);
+  // Окно ждёт показа, пока страница не нарисует повторённое состояние (R188): сообщения main приходят по
+  // порядку, так что к этому вопросу всё повторённое уже в узлах. Размер — сразу (чтение размера сам
+  // пересчитывает раскладку), не дожидаясь кадра: спрятанное окно кадров может и не рисовать.
+  window.cordShell.on('mini.reveal', (data) => {
+    const seq = data && typeof data.seq === 'number' ? data.seq : 0;
+    reportSize();
+    call('mini.rendered', { seq });
+  });
 
   window.cordShell.on('mini.config', (next) => {
     if (!next || typeof next !== 'object') return;

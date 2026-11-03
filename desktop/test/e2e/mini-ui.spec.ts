@@ -15,12 +15,19 @@
  * (`mini.ack`) не дольше 4 с; перетаскивание — своим кодом; сторож кадров пересоздаёт замершее окно;
  * сон, сброс GPU — тоже, но не чаще 3 раз за 5 минут. R156: «Звук встречи» в развёрнутом виде между
  * микрофоном и камерой — нужное состояние, ответ `mini.ack`; веб без `deafened` — кнопки нет.
+ * R188: по умолчанию мини-окна нет (свежая папка данных), включается переключателем посреди встречи;
+ * случай владельца настоящей мышью — подвинул, развернул, вернулся в Cord, снова спрятал — несколько
+ * кругов: окно каждый раз новое, едет за курсором, целиком на экране, кнопки отвечают; перетаскивание,
+ * оборванное прятанием, следующему показу не мешает; пробуждение (сон и разблокировка) — одно
+ * пересоздание, лимит у пересозданий из-за системы свой; событие системы перед самым показом — показ
+ * нового окна без пересоздания следом; сменилась только рабочая область — окно снова целиком в ней;
+ * ушло ради окна во весь экран — новое не заготавливается, а без заготовки появляется уже нарисованным.
  * Снимки — в `test-results/shots/mini-ui-*.png`.
  */
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { osClick } from './os-click';
+import { osClick, osDrag, osMouse, osPoint, path } from './os-click';
 
 const root = join(__dirname, '..', '..');
 const shots = join(root, 'test-results', 'shots');
@@ -46,13 +53,35 @@ async function windowWithUrl(app: ElectronApplication, prefix: string, timeout =
 }
 const shown = (app: ElectronApplication, prefix: string) =>
   app.evaluate(({ BrowserWindow }, prefix) => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.webContents.getURL().startsWith(prefix) && w.isVisible()), prefix);
+/** Сколько окон мини-окна есть вообще — видимых и заготовленных. */
+const miniCount = (app: ElectronApplication) =>
+  app.evaluate(({ BrowserWindow }, prefix) => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed() && w.webContents.getURL().startsWith(prefix)).length, MINI);
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Страница видимого мини-окна (R188: каждый показ — новое окно со своим `?n=` в адресе). `not` — прежняя
+ * страница: нужна новая.
+ */
+async function visibleMini(app: ElectronApplication, timeout = 30_000, not?: Page): Promise<Page> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const url = await app.evaluate(({ BrowserWindow }, prefix) => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.getURL().startsWith(prefix) && w.isVisible())?.webContents.getURL() ?? null, MINI);
+    const found = url ? app.windows().find((page) => page !== not && !page.isClosed() && page.url() === url) : undefined;
+    if (found) {
+      await found.waitForLoadState('domcontentloaded');
+      return found;
+    }
+    if (Date.now() > deadline) throw new Error('видимого мини-окна нет');
+    await wait(250);
+  }
+}
 const front = (app: ElectronApplication, value: unknown) =>
   app.evaluate((_, value) => (globalThis as unknown as { cordSmoke: { foreground(v: unknown): void } }).cordSmoke.foreground(value), value);
-const mainDo = (app: ElectronApplication, what: 'hide' | 'focus' | 'crash') =>
+const mainDo = (app: ElectronApplication, what: 'hide' | 'focus' | 'crash' | 'minimize') =>
   app.evaluate(({ BrowserWindow }, { server, what }) => {
     const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.webContents.getURL().startsWith(server));
     if (what === 'hide') w?.hide();
-    if (what === 'focus') { w?.show(); w?.focus(); }
+    if (what === 'minimize') w?.minimize();
+    if (what === 'focus') { if (w?.isMinimized()) w.restore(); w?.show(); w?.focus(); }
     if (what === 'crash') w?.webContents.forcefullyCrashRenderer();
   }, { server, what });
 const mainVisible = (app: ElectronApplication) =>
@@ -83,11 +112,22 @@ async function inCall(app: ElectronApplication, roster = people(4), state: objec
 const seen = async (app: ElectronApplication) => (await page<string[]>(app, 'window.seen.map((e) => e.id)')) ?? [];
 /** Последнее нажатие целиком: id, нужное состояние (want) и номер (seq). */
 const lastAction = (app: ElectronApplication) => page<{ id: string; want?: boolean; seq?: number }>(app, 'window.seen.at(-1)');
+/** Скрипт над окном мини-окна в main: над видимым, а нет видимого — над заготовленным. */
 const miniWindow = <T>(app: ElectronApplication, script: string) =>
-  app.evaluate(({ BrowserWindow }, { url, script }) => {
-    const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.webContents.getURL() === url);
+  app.evaluate(({ BrowserWindow }, { prefix, script }) => {
+    const all = BrowserWindow.getAllWindows().filter((x) => !x.isDestroyed() && x.webContents.getURL().startsWith(prefix));
+    const w = all.find((x) => x.isVisible()) ?? all[0];
     return w ? new Function('w', script)(w) : undefined;
-  }, { url: MINI, script }) as Promise<T | undefined>;
+  }, { prefix: MINI, script }) as Promise<T | undefined>;
+/** Окно мини-окна целиком в рабочей области своего экрана (R188). */
+const inWorkArea = (app: ElectronApplication) =>
+  app.evaluate(({ BrowserWindow, screen }, prefix) => {
+    const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.webContents.getURL().startsWith(prefix) && x.isVisible());
+    if (!w) return 'нет видимого окна';
+    const b = w.getBounds();
+    const a = screen.getDisplayMatching(b).workArea;
+    return b.x >= a.x && b.y >= a.y && b.x + b.width <= a.x + a.width && b.y + b.height <= a.y + a.height ? 'целиком' : `окно ${JSON.stringify(b)} вне ${JSON.stringify(a)}`;
+  }, MINI);
 const forget = (app: ElectronApplication) => page(app, 'window.seen = []; 0');
 async function shot(page: Page, name: string): Promise<void> {
   mkdirSync(shots, { recursive: true });
@@ -96,18 +136,25 @@ async function shot(page: Page, name: string): Promise<void> {
   await page.evaluate(() => (document.documentElement.style.background = ''));
 }
 
-/** Cord спрятан, впереди другое окно — мини-окно должно появиться. */
-async function away(app: ElectronApplication, not?: Page): Promise<Page> {
+/** Cord спрятан (или свёрнут), впереди другое окно — мини-окно должно появиться. */
+async function away(app: ElectronApplication, how: 'hide' | 'minimize' = 'hide'): Promise<Page> {
   await front(app, other);
-  await mainDo(app, 'hide');
-  const mini = await windowWithUrl(app, MINI, 30_000, not);
-  await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
-  await mini.waitForLoadState('domcontentloaded');
-  return mini;
+  await mainDo(app, how);
+  return visibleMini(app);
 }
+/** Cord снова впереди — мини-окна не видно. */
+async function back(app: ElectronApplication): Promise<void> {
+  await mainDo(app, 'focus');
+  await front(app, cordFront);
+  await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 5_000 }).toBe(false);
+}
+const cordFront = { ...other, hwnd: 5, pid: 1, cord: true, exe: 'Cord.exe', title: 'Cord' };
+const position = async (app: ElectronApplication) => (await miniWindow<number[]>(app, 'return w.getPosition()')) ?? [];
+/** Окно там, где ждали (±1 px: округление DIP на экране с масштабом). */
+const near = (actual: number[], expected: number[]) => actual.length === 2 && Math.abs(actual[0]! - expected[0]!) <= 1 && Math.abs(actual[1]! - expected[1]!) <= 1;
 
 test('мини-окно: вид, каждая кнопка, связь, падения и нагрузка', async () => {
-  test.setTimeout(300_000);
+  test.setTimeout(480_000);
   const app = await electron.launch({
     args: [root],
     env: { ...process.env, ELECTRON_DISABLE_SANDBOX: '1', CORD_SMOKE: '1', CORD_NATIVE_FAKE: '1', CORD_DEFAULT_SERVER: server, CORD_UPDATE_CHANNEL: 'https://127.0.0.1:9/downloads/windows/desktop/' },
@@ -120,7 +167,17 @@ test('мини-окно: вид, каждая кнопка, связь, паде
     await main.waitForLoadState('domcontentloaded');
     await new Promise((resolve) => setTimeout(resolve, 2000));
     await inCall(app);
-    let mini = await away(app);
+
+    await test.step('по умолчанию мини-окна нет — даже заготовленного (R188); включили посреди встречи — появилось', async () => {
+      expect(await page<boolean>(app, `window.cordDesktop.invoke('app.settings', {}).then((values) => values.mini)`), 'свежая папка данных: переключатель выключен').toBe(false);
+      await front(app, other);
+      await mainDo(app, 'hide');
+      await wait(1500);
+      expect(await shown(app, 'cord-app://mini'), 'Cord спрятан во встрече, а мини-окна нет').toBe(false);
+      expect(await miniCount(app), 'и спрятанного заранее окна нет').toBe(0);
+      await page(app, `window.cordDesktop.invoke('app.settings', { mini: true }).then(() => 0)`);
+    });
+    let mini = await visibleMini(app);
 
     await test.step('плитки: без себя, аватар, выключенный микрофон', async () => {
       await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact');
@@ -208,7 +265,7 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       for (const id of ['mic', 'camera', 'screen']) await expect(mini.locator(`.action[data-action="${id}"]`)).toBeDisabled();
       await shot(mini, 'recovering-expanded');
       await mini.locator('.action[data-action="mic"]').dispatchEvent('click');
-      await mini.waitForTimeout(500);
+      await wait(500);
       expect(await seen(app)).toEqual(['mic', 'screen', 'screen']);
       await send(app, 'mini.state', { ...base, count: 25, status: 'connected' });
       await expect(mini.locator('#link')).toBeHidden();
@@ -262,7 +319,7 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       // Посреди нажатия: кто-то включил микрофон, пришло сообщение в чат.
       await send(app, 'overlay.roster', { participants: people(25).map((person, i) => ({ ...person, muted: i % 2 === 0 })) });
       await send(app, 'mini.state', { ...base, count: 25, unread: 121 });
-      await mini.waitForTimeout(300);
+      await wait(300);
       await mini.mouse.up();
       await expect.poll(() => seen(app), { timeout: 5_000 }).toEqual(['camera']);
       expect(await mini.evaluate(() => !!(window as unknown as { camera: Element | null }).camera?.isConnected), 'кнопка — тот же узел').toBe(true);
@@ -283,9 +340,9 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       mini = await away(app);
       await osClick(app, mini, '#compact');
       await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact', { timeout: 5_000 });
-      await mini.locator('#bar').dblclick({ position: { x: 60, y: 14 } });
+      await osClick(app, mini, '#bar', { count: 2, offset: { x: 60, y: 14 } });
       await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'expanded', { timeout: 5_000 });
-      await mini.locator('#bar').dblclick({ position: { x: 60, y: 14 } });
+      await osClick(app, mini, '#bar', { count: 2, offset: { x: 60, y: 14 } });
       await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact', { timeout: 5_000 });
     });
 
@@ -321,40 +378,114 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await send(app, 'mini.state', { ...base, count: 25 });
     });
 
-    await test.step('перетаскивание за полосу — своим кодом: окно едет за мышью, место запоминается (R137)', async () => {
-      const [x0 = 0, y0 = 0] = (await miniWindow<number[]>(app, 'return w.getPosition()')) ?? [];
-      const bar = (await mini.locator('#bar').boundingBox())!;
-      await mini.mouse.move(bar.x + 40, bar.y + bar.height / 2);
-      await mini.mouse.down();
-      await mini.mouse.move(bar.x + 40 - 60, bar.y + bar.height / 2 - 50);
-      await mini.mouse.up();
-      await expect.poll(async () => JSON.stringify(await miniWindow<number[]>(app, 'return w.getPosition()')), { timeout: 5_000 }).toBe(JSON.stringify([x0 - 60, y0 - 50]));
+    await test.step('перетаскивание за полосу — своим кодом: окно едет за настоящим курсором, место запоминается (R137, R188)', async () => {
+      // Окно main ставит по настоящему курсору — мышь CDP его не двигает: только Windows.
+      if (process.platform !== 'win32') return;
+      const [x0 = 0, y0 = 0] = await position(app);
+      await osDrag(app, mini, '#bar', -60, -50, { x: 40 });
+      await expect.poll(async () => near(await position(app), [x0 - 60, y0 - 50]), { timeout: 5_000 }).toBe(true);
+      const [x1 = 0, y1 = 0] = await position(app);
+      console.log(`перетаскивание настоящей мышью: ${x0},${y0} → ${x1},${y1}`);
       const userData = await app.evaluate(({ app }) => app.getPath('userData'));
-      await expect.poll(() => JSON.parse(readFileSync(join(userData, 'settings.json'), 'utf8')).mini, { timeout: 5_000 }).toMatchObject({ x: x0 - 60, y: y0 - 50 });
+      await expect.poll(() => JSON.parse(readFileSync(join(userData, 'settings.json'), 'utf8')).mini, { timeout: 5_000 }).toMatchObject({ x: x1, y: y1 });
       expect(await mini.locator('#mini').getAttribute('data-mode'), 'перетаскивание — не щелчок и не двойной щелчок').toBe('compact');
     });
 
+    await test.step('владелец (R188): подвинул, развернул, вернулся в Cord, снова спрятал — окно каждый раз новое, едет и отвечает', async () => {
+      if (process.platform !== 'win32') return;
+      const ways = ['hide', 'minimize', 'hide'] as const;
+      for (const [round, how] of ways.entries()) {
+        // Подвинул.
+        const [x0 = 0, y0 = 0] = await position(app);
+        await osDrag(app, mini, '#bar', -30 - 10 * round, -20, { x: 40 });
+        await expect.poll(async () => near(await position(app), [x0 - 30 - 10 * round, y0 - 20]), { timeout: 5_000, message: `круг ${round}: окно едет за курсором` }).toBe(true);
+        // Развернул: «ещё» или двойной щелчок по полосе — по очереди.
+        if (round % 2) await osClick(app, mini, '#bar', { count: 2, offset: { x: 60 } });
+        else await osClick(app, mini, '#dock-more');
+        await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'expanded', { timeout: 5_000 });
+        await expect.poll(() => inWorkArea(app), { timeout: 5_000, message: 'развёрнутое — целиком на экране, не под панелью задач' }).toBe('целиком');
+        // Вернулся в Cord — и снова спрятал (в трей или свернул).
+        const before = mini;
+        await back(app);
+        await expect.poll(() => before.isClosed(), { timeout: 5_000, message: 'показанное окно убрано совсем' }).toBe(true);
+        await expect.poll(() => miniCount(app), { timeout: 5_000, message: 'новое заготовлено спрятанным' }).toBe(1);
+        mini = await away(app, how);
+        expect(mini.url(), 'каждый показ — новое окно').not.toBe(before.url());
+        await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'expanded');
+        await expect.poll(() => inWorkArea(app), { timeout: 5_000 }).toBe('целиком');
+        // Тащится…
+        const [x1 = 0, y1 = 0] = await position(app);
+        await osDrag(app, mini, '#bar', 25, -15, { x: 40 });
+        await expect.poll(async () => near(await position(app), [x1 + 25, y1 - 15]), { timeout: 5_000, message: `круг ${round}: после возврата окно тащится` }).toBe(true);
+        // …и кнопки отвечают: нажатие дошло до встречи, ответ встречи снял «ожидание».
+        await forget(app);
+        await osClick(app, mini, '.action[data-action="mic"]');
+        await expect.poll(async () => (await lastAction(app))?.id, { timeout: 5_000, message: `круг ${round}: нажатие дошло` }).toBe('mic');
+        const press = (await lastAction(app))!;
+        await send(app, 'mini.ack', { seq: press.seq, result: 'ok' });
+        await expect(mini.locator('.action[data-action="mic"]')).not.toHaveAttribute('data-pending', 'true', { timeout: 3_000 });
+        await send(app, 'mini.state', { ...base, count: 25, mic: press.want === true });
+        await osClick(app, mini, '#compact');
+        await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact', { timeout: 5_000 });
+        await expect.poll(() => inWorkArea(app), { timeout: 5_000 }).toBe('целиком');
+        console.log(`круг ${round} (${how}): окно ${before.url()} → ${mini.url()}, место ${(await position(app)).join(',')}`);
+      }
+      const windows = await miniCount(app);
+      expect(windows, 'одно окно, прежние не висят').toBe(1);
+    });
+
+    await test.step('перетаскивание, оборванное прятанием, следующему показу не мешает (R188)', async () => {
+      if (process.platform !== 'win32') return;
+      const from = await osPoint(app, mini, '#bar', { x: 40 });
+      // Нажал на полосе и тащит — а Cord вышел вперёд, мини-окно убрано посреди перетаскивания.
+      osMouse([{ to: from }, { wait: 60 }, 'down', ...path(from, { x: from.x - 30, y: from.y - 20 }, 5)]);
+      const before = mini;
+      await back(app);
+      osMouse(['up']);
+      await expect.poll(() => before.isClosed(), { timeout: 5_000 }).toBe(true);
+      mini = await away(app);
+      const [x0 = 0, y0 = 0] = await position(app);
+      await osDrag(app, mini, '#bar', -20, -20, { x: 40 });
+      await expect.poll(async () => near(await position(app), [x0 - 20, y0 - 20]), { timeout: 5_000 }).toBe(true);
+      await forget(app);
+      await osClick(app, mini, '#dock-mic');
+      await expect.poll(() => seen(app), { timeout: 5_000 }).toEqual(['mic']);
+      await send(app, 'mini.state', { ...base, count: 25 });
+    });
+
     await test.step('размер окна — по содержимому', async () => {
-      const size = () => app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.getURL() === url)?.getContentSize(), MINI);
+      const size = () => miniWindow<number[]>(app, 'return w.getContentSize()');
       const frame = () => mini.evaluate(() => [document.getElementById('frame')!.offsetWidth, document.getElementById('frame')!.offsetHeight]);
       await expect.poll(async () => JSON.stringify(await size()), { timeout: 5_000 }).toBe(JSON.stringify(await frame()));
       await osClick(app, mini, '#dock-more');
       await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'expanded', { timeout: 5_000 });
-      await mini.waitForTimeout(400);
+      await wait(400);
       await expect.poll(async () => JSON.stringify(await size()), { timeout: 5_000 }).toBe(JSON.stringify(await frame()));
       console.log('размер развёрнутого', await size());
       await osClick(app, mini, '#compact');
+      await expect(mini.locator('#mini')).toHaveAttribute('data-mode', 'compact', { timeout: 5_000 });
+      await expect.poll(async () => JSON.stringify(await size()), { timeout: 5_000 }).toBe(JSON.stringify(await frame()));
+    });
+
+    await test.step('сменилась только рабочая область (панель задач) — окно снова целиком в ней, на своём месте, без пересоздания (R188)', async () => {
+      const before = await position(app);
+      await miniWindow(app, 'const [x] = w.getPosition(); w.setPosition(x, 20000)');
+      expect(await inWorkArea(app)).not.toBe('целиком');
+      await app.evaluate(({ screen }) => void screen.emit('display-metrics-changed', {}, {}, ['workArea']));
+      await expect.poll(() => inWorkArea(app), { timeout: 3_000 }).toBe('целиком');
+      expect(await position(app), 'на месте человека').toEqual(before);
+      expect(mini.isClosed(), 'то же окно').toBe(false);
     });
 
     await test.step('«—» прячет мини-окно до возврата в Cord', async () => {
       await osClick(app, mini, '#collapse');
       await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 5_000 }).toBe(false);
       await front(app, { ...other, hwnd: 8, title: 'Другое' });
-      await mini.waitForTimeout(800);
+      await wait(800);
       expect(await shown(app, 'cord-app://mini'), 'после «—» не возвращается само').toBe(false);
       await mainDo(app, 'focus');
-      await front(app, { ...other, hwnd: 5, pid: 1, cord: true, exe: 'Cord.exe', title: 'Cord' });
-      await mini.waitForTimeout(300);
+      await front(app, cordFront);
+      await wait(300);
       mini = await away(app);
     });
 
@@ -398,7 +529,7 @@ test('мини-окно: вид, каждая кнопка, связь, паде
         setTimeout(() => (clearInterval(levels), clearInterval(changes)), 6000);
         return 0;
       })()`);
-      await mini.waitForTimeout(6500);
+      await wait(6500);
       const load = await mini.evaluate(() => {
         const w = window as unknown as { batches: number; recreated: number; longest: number };
         return { batches: w.batches, recreated: w.recreated, longest: w.longest };
@@ -415,9 +546,8 @@ test('мини-окно: вид, каждая кнопка, связь, паде
 
     await test.step('мини-окно упало — новое с тем же состоянием и отвечает', async () => {
       const before = mini;
-      await app.evaluate(({ BrowserWindow }, url) => BrowserWindow.getAllWindows().find((w) => !w.isDestroyed() && w.webContents.getURL() === url)?.webContents.forcefullyCrashRenderer(), MINI);
-      mini = await windowWithUrl(app, MINI, 15_000, before);
-      await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
+      await miniWindow(app, 'w.webContents.forcefullyCrashRenderer()');
+      mini = await visibleMini(app, 15_000, before);
       await expect(mini.locator('#tiles .tile')).toHaveCount(3, { timeout: 5_000 });
       await expect(mini.locator('#tiles .tile--more')).toHaveText('+22');
       await forget(app);
@@ -446,20 +576,39 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await front(app, other);
       await mainDo(app, 'hide');
       await front(app, { ...other, hwnd: 9, fullscreen: true, exe: 'video.exe', title: 'Видео' });
-      await mini.waitForTimeout(1000);
+      await wait(1000);
       expect(await shown(app, 'cord-app://mini')).toBe(false);
+    });
+
+    await test.step('окно ушло ради окна во весь экран — новое не заготавливается, пока Cord не впереди; без заготовки окно появляется уже нарисованным (R188)', async () => {
+      await front(app, other);
+      mini = await visibleMini(app);
+      await front(app, { ...other, hwnd: 9, fullscreen: true, exe: 'video.exe', title: 'Видео' });
+      await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 5_000 }).toBe(false);
+      await expect.poll(() => miniCount(app), { timeout: 5_000, message: 'показанное убрано, а процесс новой страницы не запущен' }).toBe(0);
+      await wait(800);
+      expect(await miniCount(app), 'и не запускается, пока впереди окно во весь экран').toBe(0);
+      // Окно во весь экран ушло — мини-окно создаётся при показе и появляется сразу с плитками и нужной высоты.
+      await front(app, other);
+      mini = await visibleMini(app);
+      const [size, frame, tiles] = await Promise.all([
+        miniWindow<number[]>(app, 'return w.getContentSize()'),
+        mini.evaluate(() => [document.getElementById('frame')!.offsetWidth, document.getElementById('frame')!.offsetHeight]),
+        mini.locator('#tiles .tile').count(),
+      ]);
+      expect(size, 'появилось сразу нужной высоты').toEqual(frame);
+      expect(tiles, 'и сразу с плитками').toBe(3);
     });
 
     await test.step('сторож: мини-окно перестало рисовать кадры — пересоздано с тем же состоянием (R137)', async () => {
       await front(app, other);
-      await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
+      mini = await visibleMini(app);
       await send(app, 'overlay.roster', { participants: people(25) });
       await send(app, 'mini.state', { ...base, count: 25 });
       const before = mini;
       // Поток страницы мини-окна занят 9 с: кадров нет, на «кадр?» никто не отвечает.
       void before.evaluate(() => { const end = Date.now() + 9000; while (Date.now() < end); }).catch(() => {});
-      mini = await windowWithUrl(app, MINI, 20_000, before);
-      await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
+      mini = await visibleMini(app, 20_000, before);
       await expect(mini.locator('#tiles .tile--more')).toHaveText('+22', { timeout: 5_000 });
       expect(log.join(''), 'в журнале — почему пересоздано').toMatch(/мини-окно: кадра нет/);
       await forget(app);
@@ -467,18 +616,51 @@ test('мини-окно: вид, каждая кнопка, связь, паде
       await expect.poll(() => seen(app), { timeout: 5_000 }).toEqual(['mic']);
     });
 
-    await test.step('после сна — новое окно; сброс GPU сверх 3 пересозданий за 5 минут — только запись в журнал (R137)', async () => {
-      const before = mini;
-      await app.evaluate(({ powerMonitor }) => void powerMonitor.emit('resume'));
-      mini = await windowWithUrl(app, MINI, 15_000, before);
-      await expect.poll(() => shown(app, 'cord-app://mini'), { timeout: 10_000 }).toBe(true);
-      expect(log.join('')).toMatch(/мини-окно: после сна/);
-      // Это третье пересоздание за прогон (падение, кадры, сон) — четвёртое лимит не даёт.
+    await test.step('событие системы, пока Cord впереди, и сразу показ: показывается новое окно, а не прежняя заготовка, и его не пересоздают следом (R188)', async () => {
+      await back(app);
+      await expect.poll(() => miniCount(app), { timeout: 5_000, message: 'заготовка есть' }).toBe(1);
       await app.evaluate(({ app }) => void app.emit('child-process-gone', {}, { type: 'GPU', reason: 'crashed', exitCode: 1 }));
-      await expect.poll(() => log.join(''), { timeout: 5_000 }).toMatch(/мини-окно: процесс GPU[^\n]*лимит/);
-      await mini.waitForTimeout(1000);
+      mini = await away(app);
+      await expect.poll(() => log.join(''), { timeout: 6_000 }).toMatch(/мини-окно: процесс GPU[^\n]*окно уже новое/);
+      await wait(500);
+      expect(mini.isClosed(), 'показанное окно не пересоздано: не «появилось, пропало, появилось»').toBe(false);
+      expect(await shown(app, 'cord-app://mini')).toBe(true);
+    });
+
+    await test.step('пробуждение: сон и разблокировка — одно новое окно; у пересозданий из-за системы свой лимит 3 за 5 минут (R137, R188)', async () => {
+      let before = mini;
+      // Экран заблокирован, система уснула и проснулась — окно ждёт разблокировки.
+      await app.evaluate(({ powerMonitor }) => {
+        powerMonitor.emit('lock-screen');
+        powerMonitor.emit('suspend');
+        powerMonitor.emit('resume');
+      });
+      await wait(2500);
+      expect(before.isClosed(), 'пока экран заблокирован — окно не трогается').toBe(false);
+      await app.evaluate(({ powerMonitor }) => void powerMonitor.emit('unlock-screen'));
+      mini = await visibleMini(app, 15_000, before);
+      expect(log.join(''), 'сон и разблокировка — одно пересоздание').toMatch(/мини-окно: после сна, после блокировки экрана — пересоздаём/);
+      // Падение и сторож уже пересоздавали окно — у пересозданий из-за системы счёт свой: ещё два можно.
+      for (const what of ['gpu', 'display'] as const) {
+        before = mini;
+        if (what === 'gpu') await app.evaluate(({ app }) => void app.emit('child-process-gone', {}, { type: 'GPU', reason: 'crashed', exitCode: 1 }));
+        else await app.evaluate(({ screen }) => void screen.emit('display-metrics-changed', {}, {}, ['scaleFactor']));
+        mini = await visibleMini(app, 15_000, before);
+      }
+      // Четвёртое за 5 минут — только запись в журнал: окно, которое рисует, не тронуто.
+      await app.evaluate(({ app }) => void app.emit('child-process-gone', {}, { type: 'GPU', reason: 'crashed', exitCode: 1 }));
+      await expect.poll(() => log.join(''), { timeout: 6_000 }).toMatch(/мини-окно: процесс GPU[^\n]*лимит/);
+      await wait(1000);
       expect(mini.isClosed(), 'окно, которое рисует, не тронуто').toBe(false);
       expect(await shown(app, 'cord-app://mini')).toBe(true);
+      // Спрятанное окно при пробуждении просто заменяется новым — без лимита.
+      await back(app);
+      await app.evaluate(({ powerMonitor }) => void powerMonitor.emit('resume'));
+      await expect.poll(() => log.join(''), { timeout: 6_000 }).toMatch(/мини-окно: после сна — заменено новым/);
+      mini = await away(app);
+      await forget(app);
+      await osClick(app, mini, '#dock-mic');
+      await expect.poll(() => seen(app), { timeout: 5_000 }).toEqual(['mic']);
     });
   } catch (error) {
     console.log(log.join('').split('\n').slice(-25).join('\n'));
