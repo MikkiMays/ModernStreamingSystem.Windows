@@ -14,11 +14,13 @@ const metrics = [
   { pid: 400, type: 'Utility', name: 'Audio Service', serviceName: 'audio.mojom.AudioService' },
   { pid: 401, type: 'Utility', name: 'Network Service', serviceName: 'network.mojom.NetworkService' },
   { pid: 402, type: 'Utility', name: 'Cord native', serviceName: 'Cord native' },
+  { pid: 403, type: 'Utility', name: 'Video Capture', serviceName: 'video_capture.mojom.VideoCaptureService' },
+  { pid: 404, type: 'Utility', name: 'Storage Service', serviceName: 'storage.mojom.StorageService' },
 ] as const;
 
 describe('boostTargets — кого поднимать', () => {
-  it('свой процесс, рендерер главного окна и аудиосервис; GPU, сеть, другие вкладки и cord-native — нет', () => {
-    expect(boostTargets(metrics, 100, 201)).toEqual([100, 201, 400]);
+  it('свой процесс, рендерер главного окна и всё, через что идут звук и видео: аудио, GPU, сеть, захват камеры (R189); другие вкладки и чужие службы — нет', () => {
+    expect(boostTargets(metrics, 100, 201)).toEqual([100, 201, 300, 400, 401, 403]);
   });
 
   it('аудиосервис узнаётся и по одному имени службы; рендерера нет — без него', () => {
