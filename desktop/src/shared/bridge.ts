@@ -64,8 +64,6 @@ export const PAGE_MESSAGES = [
   'hotkeys.configure',
   'favorites.changed',
   'preferences.changed', // {showPing?, notificationSounds?} — прежний веб; с флагом prefs.shared (R146) — ещё {shared: {ключ: {value, at}}, seed?: true}
-  'server.autoconnect',
-  'servers.open',
   'close.ready',
   'update.check',
   'update.apply',
@@ -184,7 +182,6 @@ export interface Bootstrap {
   language: string | null;
   showPing: boolean;
   notificationSounds: boolean;
-  autoConnect: boolean;
   /** Высота кнопок окна «— ⧉ ×» в DIP (`TITLEBAR_HEIGHT`, с 1.0.10); без неё веб считает 36. */
   titlebarHeight: number;
   /**

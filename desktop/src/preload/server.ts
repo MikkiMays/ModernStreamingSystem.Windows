@@ -193,7 +193,7 @@ const api: CordDesktopApi = {
   protocol: PROTOCOL,
   features,
   app: { version: handed?.version ?? '', arch: process.arch as 'x64' },
-  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, autoConnect: true, titlebarHeight: TITLEBAR_HEIGHT, shared: {}, yandexMusicToken: null },
+  bootstrap: bootstrap ?? { profile: '', theme: 'system', language: null, showPing: false, notificationSounds: true, titlebarHeight: TITLEBAR_HEIGHT, shared: {}, yandexMusicToken: null },
   send(type, payload) {
     if ((type as string) === LEVELS_MESSAGE) {
       postLevels(payload);

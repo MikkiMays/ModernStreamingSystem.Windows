@@ -21,7 +21,7 @@ import { appSettingsOf, keepAwake, readAppSettingsPatch, readOffset, settingsPat
 import { boostTargets, planBoost } from './boost-plan';
 import { buildConfig } from './config';
 import { CaptureSelection, captureSourceViews, loopbackFor, nativeAudioFor, readCaptureSelect, type AudioMode, type CaptureSourceView, type NativeAudioPlan } from './capture';
-import { Catalog, CatalogServer, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
+import { Catalog, defaultServer, fetchCatalog, parseCatalogKeys, pickCatalog } from './catalog';
 import { decideClose, startMode } from './close-policy';
 import { deepLinkFromArgv, parseDeepLink, type DeepLink } from './deeplink';
 import { CARD_MS, decideGameNotice, hotkeyLabel } from './game-notice';
@@ -36,7 +36,6 @@ import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
 import { pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
-import { loadBars, serverStatus } from './server-status';
 import { SettingsStore } from './settings';
 import { bootstrapShared, SharedPreferences } from './shared-preferences';
 import { shellText, type ShellText } from './shell-text';
@@ -47,7 +46,6 @@ import { appUserModelId, configureSession, cordSession, MainWindow, type WindowS
 import { MiniWindow } from './windows/mini';
 import { displayFor, OverlayWindow, type OverlayConfig } from './windows/overlay';
 import { SplashWindow } from './windows/splash';
-import { ServersWindow } from './windows/servers';
 
 // ---------- пути и один экземпляр ----------
 
@@ -237,7 +235,6 @@ class Shell {
   });
   private main: MainWindow | null = null;
   private splash: SplashWindow | null = null;
-  private servers: ServersWindow | null = null;
   private catalog: Catalog | null = null;
   private page: string | null = null;
   private call: CallState = { inCall: false, mic: false, camera: false, screen: false };
@@ -1181,36 +1178,13 @@ class Shell {
     log(`каталог: из сети, seq ${fresh.catalog.seq}`);
   }
 
-  private catalogServers(): (CatalogServer & { current: boolean })[] {
-    const current = this.currentOrigin();
-    const list = this.catalog?.servers ?? [{ id: 'default', name: { ru: new URL(this.config.defaultServer).host }, country: 'NL', url: this.config.defaultServer, order: 0, default: true }];
-    return list.map((server) => ({ ...server, current: current.owns(server.url) }));
-  }
-
-  async chooseServer(url: string): Promise<void> {
-    const origin = ServerOrigin.tryParse(url);
-    if (!origin || !this.allowedOrigins().some((known) => known.equals(origin)) || !this.main) return;
-    if (this.call.inCall) {
-      const text = this.text();
-      if (!(await this.confirm(text.switchTitle, text.newDetail, text.leave))) return;
-      await this.requestClose();
-    }
-    this.settings.update({ serverUrl: origin.url });
-    await this.main.showLoading();
-    await this.router.prepareBootstrap(origin);
-    this.router.attach(this.main.window.webContents, origin);
-    await this.main.open(origin);
-  }
-
   // ----- мост -----
 
   private async bootstrap(origin: ServerOrigin): Promise<Bootstrap> {
     const saved = this.settings.get();
-    const entry = saved.servers.find((server) => server.url === origin.url);
     return {
       profile: await this.settings.profileFor(origin),
       language: saved.language,
-      autoConnect: entry?.autoConnect ?? saved.autoConnect,
       titlebarHeight: TITLEBAR_HEIGHT,
       ...this.liveBootstrap(origin),
     };
@@ -1291,17 +1265,6 @@ class Shell {
         return;
       case 'preferences.changed':
         this.applyShared(message);
-        return;
-      case 'server.autoconnect': {
-        const origin = this.router.origin;
-        if (!origin) return;
-        const servers = this.settings.get().servers.filter((server) => server.url !== origin.url);
-        servers.unshift({ url: origin.url, name: '', autoConnect: message.autoConnect });
-        this.settings.update({ servers, autoConnect: message.autoConnect });
-        return;
-      }
-      case 'servers.open':
-        this.openServers();
         return;
       case 'close.ready':
         return; // обрабатывается в requestClose
@@ -1613,45 +1576,13 @@ class Shell {
     );
   }
 
-  // ----- окно серверов и вызовы оболочки -----
-
-  private openServers(): void {
-    if (!this.main) return;
-    this.servers ??= new ServersWindow(this.preloadDir, this.main.window, this.text().serversTitle, () => {
-      this.servers = null;
-    });
-    this.servers.focus();
-  }
-
-  /** Тексты окна «Серверы» (R143, R146) — на языке Cord; русский — запасной в самом окне. */
-  private serversText(): { language: Language; text: Record<string, string> } {
-    const text = this.text();
-    return {
-      language: this.language(),
-      text: { title: text.serversTitle, list: text.serversList, note: text.serversNote, close: text.close, ping: text.ping, unknown: loadBars(null, text).label },
-    };
-  }
+  // ----- вызовы оболочки -----
 
   private installShellCalls(): void {
     ipcMain.handle(IPC.shellCall, async (event, method: unknown, payload: unknown) => {
       if (!event.senderFrame?.url.startsWith(`${SHELL_SCHEME}://`)) throw new Error('Недоступно.');
       const data = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
       switch (method) {
-        case 'servers.list':
-          return this.catalogServers();
-        // Пинг и загрузка сервера каталога (R143): окно спрашивает раз в 10 с, пока открыто.
-        case 'servers.status':
-          return serverStatus(ServerOrigin.tryParse(data.url), this.allowedOrigins(), (url, init) => net.fetch(url, init), this.text());
-        // Тексты окна — на языке Cord, как меню трея (R103, Р-22): язык страницы, установщика, Windows.
-        case 'servers.text':
-          return this.serversText();
-        case 'servers.choose':
-          this.servers?.close();
-          await this.chooseServer(String(data.url ?? ''));
-          return true;
-        case 'servers.close':
-          this.servers?.close();
-          return true;
         case 'offline.retry': {
           if (!this.main) return false;
           const origin = this.currentOrigin();

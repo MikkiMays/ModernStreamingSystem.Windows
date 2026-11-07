@@ -26,7 +26,6 @@ const base: Bootstrap = {
   language: null,
   showPing: false,
   notificationSounds: true,
-  autoConnect: true,
   titlebarHeight: TITLEBAR_HEIGHT,
   shared: {},
   yandexMusicToken: null,
@@ -39,7 +38,7 @@ describe('mergeBootstrap — preload страницы сервера', () => {
     expect(storage.getItem('cord:profile:v1')).toBe('p'.repeat(43));
     expect(storage.getItem('cord:theme')).toBe('dark');
     expect(storage.json('cord:preferences:v1')).toEqual({ showPing: true, notificationSounds: true });
-    expect(storage.json('cord:servers:v1')).toEqual({ url: 'https://cord.nikg.tech/', autoConnect: true });
+    expect(storage.json('cord:servers:v1')).toEqual({ url: 'https://cord.nikg.tech/' });
   });
 
   it('общие настройки (R146) — поверх своих у origin; своё, чего нет в общем, остаётся', () => {
@@ -97,6 +96,6 @@ describe('mergeBootstrap — preload страницы сервера', () => {
     mergeBootstrap(storage, { ...base, shared: { showPing: true } }, 'https://cord.nikg.tech');
     // Общее — новее прежнего флага оболочки: PING из общих настроек.
     expect(storage.json('cord:preferences:v1')).toEqual({ showPing: true, notificationSounds: true });
-    expect(storage.json('cord:servers:v1')).toEqual({ url: 'https://cord.nikg.tech/', autoConnect: true });
+    expect(storage.json('cord:servers:v1')).toEqual({ url: 'https://cord.nikg.tech/' });
   });
 });

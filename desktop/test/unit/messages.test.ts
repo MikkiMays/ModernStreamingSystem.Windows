@@ -50,7 +50,6 @@ describe('readPageMessage — границы, как BridgeProtocol.Read', () =>
   it('call.state, preferences, autoconnect, badge, progress, capture.select', () => {
     expect(readPageMessage('call.state', { inCall: true, mic: false, camera: true, screen: false, room })).toEqual({ type: 'call.state', inCall: true, mic: false, camera: true, screen: false, room });
     expect(readPageMessage('preferences.changed', { showPing: true })).toEqual({ type: 'preferences.changed', showPing: true });
-    expect(readPageMessage('server.autoconnect', { autoConnect: 'yes' })).toBeNull();
     expect(readPageMessage('badge', { count: 5000 })).toEqual({ type: 'badge', count: 999 });
     expect(readPageMessage('badge', { count: -1 })).toBeNull();
     expect(readPageMessage('progress', { value: 2 })).toEqual({ type: 'progress', value: 1 });

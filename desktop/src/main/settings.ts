@@ -18,7 +18,6 @@ import { ServerOrigin } from './origins';
 export interface ServerEntry {
   url: string;
   name: string;
-  autoConnect: boolean;
 }
 
 export interface Settings {
@@ -36,7 +35,6 @@ export interface Settings {
   uiLanguage: Language | null;
   showPing: boolean;
   notificationSounds: boolean;
-  autoConnect: boolean;
   servers: ServerEntry[];
   catalogSeq: number;
   hotkeys: HotkeyBinding[];
@@ -75,7 +73,6 @@ const DEFAULTS: Settings = {
   uiLanguage: null,
   showPing: false,
   notificationSounds: true,
-  autoConnect: true,
   servers: [],
   catalogSeq: 0,
   hotkeys: [],
@@ -202,7 +199,7 @@ function sanitize(raw: unknown): Partial<Settings> {
   if (data.theme === 'light' || data.theme === 'dark' || data.theme === 'system') result.theme = data.theme;
   if (typeof data.language === 'string' && LANGUAGES.has(data.language)) result.language = data.language as Language;
   if (typeof data.uiLanguage === 'string' && LANGUAGES.has(data.uiLanguage)) result.uiLanguage = data.uiLanguage as Language;
-  for (const flag of ['showPing', 'notificationSounds', 'autoConnect', 'tray', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart', 'notifications', 'trayHintShown'] as const)
+  for (const flag of ['showPing', 'notificationSounds', 'tray', 'flash', 'sleepBlocker', 'overlayEnabled', 'autostart', 'notifications', 'trayHintShown'] as const)
     if (typeof data[flag] === 'boolean') result[flag] = data[flag] as boolean;
   if (typeof data.catalogSeq === 'number' && Number.isInteger(data.catalogSeq) && data.catalogSeq >= 0) result.catalogSeq = data.catalogSeq;
   if (typeof data.sidebarWidth === 'number' && data.sidebarWidth >= 200 && data.sidebarWidth <= 600) result.sidebarWidth = Math.round(data.sidebarWidth);
@@ -215,7 +212,7 @@ function sanitize(raw: unknown): Partial<Settings> {
       const url = ServerOrigin.tryParse(entry.url);
       if (!url || seen.has(url.url)) continue;
       seen.add(url.url);
-      result.servers.push({ url: url.url, name: typeof entry.name === 'string' ? entry.name.trim().slice(0, 60) : '', autoConnect: entry.autoConnect !== false });
+      result.servers.push({ url: url.url, name: typeof entry.name === 'string' ? entry.name.trim().slice(0, 60) : '' });
     }
   }
   if (Array.isArray(data.games) || Array.isArray(data.ignoredGames)) {

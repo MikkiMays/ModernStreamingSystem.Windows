@@ -56,6 +56,5 @@ export function mergeBootstrap(storage: KeyValueStorage, bootstrap: Bootstrap, o
   storage.setItem(PREFERENCES_KEY, JSON.stringify(saved));
   const server = readObject(storage, 'cord:servers:v1');
   server.url = origin + '/';
-  server.autoConnect = bootstrap.autoConnect;
   storage.setItem('cord:servers:v1', JSON.stringify(server));
 }

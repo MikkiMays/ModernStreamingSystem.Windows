@@ -24,7 +24,6 @@ const required = [
   'shell/mini.js',
   'shell/mini.css',
   'main/games-known.json',
-  'shell/servers.html',
   'catalog-keys.json',
   'update-keys.json',
 ];

@@ -112,8 +112,6 @@ export type Validated =
   | { type: 'hotkeys.configure'; bindings: HotkeyBinding[] }
   | { type: 'favorites.changed' }
   | { type: 'preferences.changed'; showPing?: boolean; notificationSounds?: boolean; shared?: SharedEntries; seed?: true }
-  | { type: 'server.autoconnect'; autoConnect: boolean }
-  | { type: 'servers.open' }
   | { type: 'close.ready' }
   | { type: 'update.check' }
   | { type: 'update.apply' }
@@ -335,7 +333,6 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
       return { type: kind, bindings };
     }
     case 'favorites.changed':
-    case 'servers.open':
     case 'close.ready':
     case 'update.check':
     case 'update.apply':
@@ -355,10 +352,6 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
         ...(shared ? { shared } : {}),
         ...(shared && data.seed === true ? { seed: true as const } : {}),
       };
-    }
-    case 'server.autoconnect': {
-      const autoConnect = bool(data.autoConnect);
-      return autoConnect === undefined ? null : { type: kind, autoConnect };
     }
     case 'overlay.state': {
       if (!Array.isArray(data.participants) || data.participants.length > 20) return null;

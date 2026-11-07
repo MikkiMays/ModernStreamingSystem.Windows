@@ -86,9 +86,6 @@ export interface ShellText {
   undeafen: string;
   deafenedNote: string;
   /** Окно «Серверы» (T05, R143): заголовок, имя списка, подвал (R146), пинг (`{n}` — мс). */
-  serversTitle: string;
-  serversList: string;
-  serversNote: string;
   ping: string;
   /** Загрузка сервера палочками (R143, Р-37): `{value}` — ступень словами. Слова — как `kit.load` веба. */
   loadLabel: string;
@@ -167,9 +164,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Выключить звук встречи',
     undeafen: 'Включить звук встречи',
     deafenedNote: 'звук встречи выключен',
-    serversTitle: 'Серверы',
-    serversList: 'Серверы Cord',
-    serversNote: 'Настройки общие для всех серверов. Комнаты, избранное и недавние у каждого сервера свои.',
     ping: '{n} мс',
     loadLabel: 'Загрузка сервера: {value}',
     loadLow: 'низкая',
@@ -242,9 +236,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Turn off meeting sound',
     undeafen: 'Turn on meeting sound',
     deafenedNote: 'meeting sound off',
-    serversTitle: 'Servers',
-    serversList: 'Cord servers',
-    serversNote: 'Settings are shared by all servers. Rooms, Favorites and recent meetings are separate on each server.',
     ping: '{n} ms',
     loadLabel: 'Server load: {value}',
     loadLow: 'low',
@@ -317,9 +308,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Meeting-Ton ausschalten',
     undeafen: 'Meeting-Ton einschalten',
     deafenedNote: 'Meeting-Ton aus',
-    serversTitle: 'Server',
-    serversList: 'Cord-Server',
-    serversNote: 'Die Einstellungen gelten für alle Server. Räume, Favoriten und letzte Meetings hat jeder Server für sich.',
     ping: '{n} ms',
     loadLabel: 'Serverauslastung: {value}',
     loadLow: 'niedrig',
@@ -392,9 +380,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Silenciar la reunión',
     undeafen: 'Activar el sonido de la reunión',
     deafenedNote: 'sonido de la reunión desactivado',
-    serversTitle: 'Servidores',
-    serversList: 'Servidores de Cord',
-    serversNote: 'Los ajustes son comunes a todos los servidores. Las salas, los favoritos y las reuniones recientes son propios de cada servidor.',
     ping: '{n} ms',
     loadLabel: 'Carga del servidor: {value}',
     loadLow: 'baja',
@@ -467,9 +452,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Couper le son de la réunion',
     undeafen: 'Activer le son de la réunion',
     deafenedNote: 'son de la réunion coupé',
-    serversTitle: 'Serveurs',
-    serversList: 'Serveurs Cord',
-    serversNote: 'Les paramètres sont communs à tous les serveurs. Les salles, les favoris et les réunions récentes sont propres à chaque serveur.',
     ping: `{n}${NBSP}ms`,
     loadLabel: `Charge du serveur${NBSP}: {value}`,
     loadLow: 'faible',
@@ -542,9 +524,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: "Disattiva l'audio della riunione",
     undeafen: "Attiva l'audio della riunione",
     deafenedNote: 'audio della riunione disattivato',
-    serversTitle: 'Server',
-    serversList: 'Server di Cord',
-    serversNote: 'Le impostazioni sono comuni a tutti i server. Stanze, preferiti e riunioni recenti sono separati per ogni server.',
     ping: '{n} ms',
     loadLabel: 'Carico del server: {value}',
     loadLow: 'basso',
@@ -617,9 +596,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: 'Desligar o som da reunião',
     undeafen: 'Ligar o som da reunião',
     deafenedNote: 'som da reunião desligado',
-    serversTitle: 'Servidores',
-    serversList: 'Servidores do Cord',
-    serversNote: 'As configurações valem para todos os servidores. Salas, favoritos e reuniões recentes são separados em cada servidor.',
     ping: '{n} ms',
     loadLabel: 'Carga do servidor: {value}',
     loadLow: 'baixa',
@@ -692,9 +668,6 @@ export const SHELL_TEXT: Readonly<Record<Language, ShellText>> = {
     deafen: '关闭会议声音',
     undeafen: '开启会议声音',
     deafenedNote: '会议声音已关闭',
-    serversTitle: '服务器',
-    serversList: 'Cord 服务器',
-    serversNote: '设置在所有服务器上通用。房间、收藏和最近的会议在每台服务器上各自独立。',
     ping: '{n} 毫秒',
     loadLabel: '服务器负载：{value}',
     loadLow: '低',
