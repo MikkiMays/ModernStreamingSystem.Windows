@@ -83,6 +83,24 @@ export function pickOrigin(
   return ServerOrigin.parse(catalogDefault ?? build);
 }
 
+/**
+ * Серверы, которые знает эта сборка: подписанный каталог, а без него — сервер из сборки. Сервер, заданный
+ * окружением (`CORD_DEFAULT_SERVER`: запуск из исходников, дымовой прогон CI на стенде разработки), известен
+ * всегда — иначе каталог продукта, где стенда нет, увёл бы клиент на продукт (R200 §8.6). Для сборки это
+ * ничего не меняет: её сервер и так в каталоге, а убранный из каталога сервер прежней сборки по-прежнему
+ * уступает умолчанию каталога (`pickOrigin`).
+ */
+export function knownServers(catalog: readonly string[] | null, build: string, devServer: boolean): ServerOrigin[] {
+  const urls = catalog ? [...catalog] : [build];
+  if (catalog && devServer && build) urls.push(build);
+  const known: ServerOrigin[] = [];
+  for (const url of urls) {
+    const origin = ServerOrigin.tryParse(url);
+    if (origin && !known.some((item) => item.equals(origin))) known.push(origin);
+  }
+  return known;
+}
+
 export type Navigation = 'allow' | 'external' | 'deny';
 
 export function decideNavigation(target: string, allowed: readonly ServerOrigin[]): Navigation {

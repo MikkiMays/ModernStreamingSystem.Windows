@@ -3,10 +3,11 @@
  * НЕ следует за выбранным сервером встреч (правило `CordDefaults.cs`): вход в чужую комнату
  * не должен решать, какой исполняемый файл поставится на эту машину.
  *
- * Адресов в коде нет: сервер по умолчанию и канал обновлений задаёт сборка — переменные
- * `CORD_DEFAULT_SERVER` и `CORD_UPDATE_CHANNEL` (`scripts/copy-shell.mjs` пишет их в
- * `dist/update-keys.json`); канал по умолчанию — `<сервер>downloads/windows/desktop/`. При запуске из
- * исходников те же переменные окружения перекрывают файл.
+ * Сервер по умолчанию — продукт `https://cordcam.ru/` из `build/update-keys.json` (R200, Р-110: продукт
+ * один); канал обновлений — `<сервер>downloads/windows/desktop/` или `CORD_UPDATE_CHANNEL`
+ * (`scripts/copy-shell.mjs` пишет оба в `dist/update-keys.json`). При запуске из исходников и в дымовом
+ * прогоне CI переменные окружения `CORD_DEFAULT_SERVER` и `CORD_UPDATE_CHANNEL` перекрывают файл: так
+ * клиент ходит на стенд разработки, которого в каталоге продукта нет (`devServer`).
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,6 +28,12 @@ export interface BuildConfig {
   /** Сервер для первого запуска, пока каталог не подписан ядром. */
   defaultServer: string;
   /**
+   * `defaultServer` задан окружением (`CORD_DEFAULT_SERVER`: запуск из исходников, дымовой прогон CI), а не
+   * сборкой. Такой сервер клиент считает известным и без каталога: разработчик, направивший клиент на стенд,
+   * хочет открыть стенд, а не сервер по умолчанию из каталога продукта.
+   */
+  devServer: boolean;
+  /**
    * Включать ли аппаратный AV1 для WebRTC (`WebRtcAV1HWEncode`, R152) на видеокартах из белого списка
    * (`gpu.ts`). По умолчанию — да; `"av1HwEncode": false` в `update-keys.json` выключает в сборке,
    * `CORD_AV1_HW=0` — у человека.
@@ -38,6 +45,7 @@ const DEFAULTS: BuildConfig = {
   updateChannel: '',
   updateKeys: [],
   defaultServer: '',
+  devServer: false,
   av1HwEncode: true,
 };
 
@@ -55,10 +63,18 @@ export function buildConfig(appPath: string): BuildConfig {
     if (parsed.av1HwEncode === false) config.av1HwEncode = false;
   }
   if (process.env.CORD_UPDATE_CHANNEL) config.updateChannel = process.env.CORD_UPDATE_CHANNEL;
-  if (process.env.CORD_DEFAULT_SERVER) config.defaultServer = process.env.CORD_DEFAULT_SERVER;
+  if (process.env.CORD_DEFAULT_SERVER) {
+    config.defaultServer = process.env.CORD_DEFAULT_SERVER;
+    config.devServer = true;
+  }
   if (!config.updateChannel && config.defaultServer) config.updateChannel = channelFor(config.defaultServer);
   cached = config;
   return config;
+}
+
+/** Сбросить кэш — для тестов, где меняются окружение и файл сборки. */
+export function resetBuildConfigForTests(): void {
+  cached = null;
 }
 
 /** Канал обновлений сервера Cord: зеркало клиента на нём же (`/downloads/windows/desktop/`). */

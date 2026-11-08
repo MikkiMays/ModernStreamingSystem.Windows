@@ -1,7 +1,8 @@
 # Cord для Windows — установщик NSIS (ADR 0001 §6, T54, T15, П15).
 # Ссылок нет намеренно: ни `repository`/`homepage` в package.json (иначе electron-builder впишет их в
 # карточку «Установленных приложений»), ни uninstallUrl*. Канал обновлений — только зеркало Cord
-# (`publish: generic`): адрес — переменная сборки CORD_UPDATE_CHANNEL (CI выводит её из CORD_DEFAULT_SERVER).
+# (`publish: generic`): адрес — переменная сборки CORD_UPDATE_CHANNEL (CI выводит её из сервера сборки —
+# `defaultServer` в build/update-keys.json, продукт https://cordcam.ru/).
 appId: tech.cord.desktop
 productName: Cord
 copyright: © Cord

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideNavigation, isExternalWebLink, pickOrigin, ServerOrigin } from '../../src/main/origins';
+import { decideNavigation, isExternalWebLink, knownServers, pickOrigin, ServerOrigin } from '../../src/main/origins';
 
 describe('pickOrigin', () => {
   const own = ServerOrigin.parse('https://meet.example.com/');
@@ -23,6 +23,33 @@ describe('pickOrigin', () => {
   });
   it('сборка без сервера (разработка) сохранённое не трогает', () => {
     expect(pickOrigin(other, [], '', null)).toBe(other);
+  });
+});
+
+describe('knownServers — сервер окружения известен и без каталога (R200 §8.6)', () => {
+  const product = 'https://cordcam.ru/';
+  const stand = 'https://cord.nikg.tech/';
+  it('без каталога — только сервер сборки', () => {
+    expect(knownServers(null, product, false).map((o) => o.url)).toEqual([product]);
+    expect(knownServers(null, '', false)).toEqual([]);
+  });
+  it('с каталогом сборка знает ровно каталог: сервер прежней сборки, убранный из каталога, не известен', () => {
+    expect(knownServers([product], stand, false).map((o) => o.url)).toEqual([product]);
+  });
+  it('стенд из CORD_DEFAULT_SERVER (дымовой прогон CI, разработка) известен рядом с каталогом продукта', () => {
+    const known = knownServers([product], stand, true);
+    expect(known.map((o) => o.url)).toEqual([product, stand]);
+    // Клиент открывает стенд, а не умолчание каталога: pickOrigin видит сервер сборки среди известных.
+    expect(pickOrigin(null, known, stand, product).url).toBe(stand);
+    // А сборка продукта с тем же каталогом открывает продукт — без повторов в списке.
+    expect(knownServers([product], product, true).map((o) => o.url)).toEqual([product]);
+  });
+  it('старый клиент стенда с каталогом продукта уходит на продукт (сохранённый и сборочный серверы не известны)', () => {
+    const known = knownServers([product], stand, false);
+    expect(pickOrigin(ServerOrigin.parse(stand), known, stand, product).url).toBe(product);
+  });
+  it('мусор в каталоге отбрасывается', () => {
+    expect(knownServers(['not a url', product], '', false).map((o) => o.url)).toEqual([product]);
   });
 });
 
