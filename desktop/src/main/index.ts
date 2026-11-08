@@ -288,6 +288,8 @@ class Shell {
     // «Выйти» из трея, Cmd/Alt+F4 в заставке, завершение сеанса: дальше окно закрывается, а не прячется.
     app.on('before-quit', () => {
       this.quitting = true;
+      // Заставка ждала первого кадра интерфейса (R203) — ждать больше нечего.
+      this.appReadyWaiter?.();
       // Выход — мини-окна больше нет: ни показанного, пока страница выходит из встречи, ни нового.
       this.updateMini();
     });
@@ -334,8 +336,9 @@ class Shell {
     // а интерфейс ещё секунды грузил сессию и данные — человек видел пустое окно загрузки.
     splash.show({ stage: 'starting', progress: 1, problem: '' });
     const opened = await this.openMain(true);
-    if (opened) await this.untilAppReady(APP_READY_LIMIT_MS);
-    this.main?.reveal();
+    if (opened) await this.untilAppReady(APP_READY_LIMIT_MS, splash);
+    // Пока ждали, Cord начали закрывать (выход из трея, завершение сеанса) — окно не показывается посреди выхода.
+    if (!this.quitting) this.main?.reveal();
     splash.close();
   }
 
@@ -343,15 +346,20 @@ class Shell {
   private appReadySeen = false;
   private appReadyWaiter: (() => void) | null = null;
 
-  /** Дождаться первого кадра интерфейса, но не дольше `limitMs`: старт важнее, окно покажет свою загрузку. */
-  private untilAppReady(limitMs: number): Promise<void> {
-    if (this.appReadySeen || !this.main) return Promise.resolve();
+  /**
+   * Дождаться первого кадра интерфейса, но не дольше `limitMs`: старт важнее, окно покажет свою загрузку. Ждать
+   * перестаём и раньше: заставку закрыли (человек хочет Cord сейчас) или Cord выходит.
+   */
+  private untilAppReady(limitMs: number, splash: SplashWindow): Promise<void> {
+    if (this.appReadySeen || !this.main || this.quitting) return Promise.resolve();
     return new Promise((resolve) => {
       const done = () => {
         clearTimeout(timer);
+        splash.window.off('closed', done);
         this.appReadyWaiter = null;
         resolve();
       };
+      splash.window.once('closed', done);
       const timer = setTimeout(() => {
         log(`интерфейс не сказал app.ready за ${limitMs} мс — окно показано без него`);
         done();
