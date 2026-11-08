@@ -1,6 +1,8 @@
 // Копирует локальные страницы оболочки (`cord-app://shell/…`) в dist рядом с main и preload и пишет то,
-// что связывает сборку с конкретной установкой Cord. Адресов в репозитории нет: сервер по умолчанию —
-// переменная сборки CORD_DEFAULT_SERVER (в CI — переменная репозитория), канал обновлений —
+// что связывает сборку с конкретной установкой Cord. Сервер по умолчанию — продукт из
+// `build/update-keys.json` (`defaultServer`, https://cordcam.ru/ — R200, Р-110: продукт один, стенд
+// разработки людям не отдаётся); переменная сборки CORD_DEFAULT_SERVER перекрывает его (другая установка,
+// ветка deploy/<имя>, — через workflow из build/installations/<имя>.json). Канал обновлений —
 // CORD_UPDATE_CHANNEL или `<сервер>downloads/windows/desktop/`. Снимок каталога серверов для первого
 // запуска берётся с того же сервера (`/api/v1/catalog`); нет его — клиент обойдётся сервером из сборки.
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -26,17 +28,20 @@ function origin(raw, name) {
 }
 
 const keys = JSON.parse(readFileSync(join(root, 'build', 'update-keys.json'), 'utf8'));
-const server = (process.env.CORD_DEFAULT_SERVER ?? '').trim();
+const override = (process.env.CORD_DEFAULT_SERVER ?? '').trim();
+const server = override || (typeof keys.defaultServer === 'string' ? keys.defaultServer.trim() : '');
 if (server) {
-  keys.defaultServer = origin(server, 'CORD_DEFAULT_SERVER');
+  keys.defaultServer = origin(server, override ? 'CORD_DEFAULT_SERVER' : 'build/update-keys.json defaultServer');
   const channel = (process.env.CORD_UPDATE_CHANNEL ?? '').trim();
   keys.channel = channel || new URL('downloads/windows/desktop/', keys.defaultServer).toString();
   if (!keys.channel.startsWith('https://')) throw new Error(`CORD_UPDATE_CHANNEL: нужен https — ${keys.channel}`);
+  console.log(`copy-shell: сервер ${keys.defaultServer} (${override ? 'CORD_DEFAULT_SERVER' : 'build/update-keys.json'}), канал ${keys.channel}`);
 } else if (process.env.GITHUB_ACTIONS === 'true') {
-  console.error('copy-shell: не задан CORD_DEFAULT_SERVER — переменная репозитория (Settings → Variables), например https://meet.example.com/');
+  console.error('copy-shell: нет сервера — ни defaultServer в build/update-keys.json, ни CORD_DEFAULT_SERVER');
   process.exit(1);
 } else {
-  console.warn('copy-shell: CORD_DEFAULT_SERVER не задан — сборка без сервера по умолчанию (годится только для разработки)');
+  delete keys.defaultServer;
+  console.warn('copy-shell: сервера нет — сборка без сервера по умолчанию (годится только для разработки)');
 }
 writeFileSync(join(root, 'dist', 'update-keys.json'), `${JSON.stringify(keys, null, 2)}\n`);
 

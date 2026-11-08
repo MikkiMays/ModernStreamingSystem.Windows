@@ -8,7 +8,7 @@
 Разговор, две демонстрации экрана до 1440p·60, чат, файлы и музыка — в приложении, которое
 подключается к вашему собственному серверу.
 
-[![Скачать установщик](https://img.shields.io/badge/Скачать-установщик%20для%20Windows-3564f3?style=for-the-badge&logo=windows&logoColor=white)](https://cord.nikg.tech/download)
+[![Скачать установщик](https://img.shields.io/badge/Скачать-установщик%20для%20Windows-3564f3?style=for-the-badge&logo=windows&logoColor=white)](https://cordcam.ru/download)
 
 [![Последний выпуск](https://img.shields.io/github/v/release/MikkiMays/ModernStreamingSystem.Windows?label=выпуск&color=3564f3)](https://github.com/MikkiMays/ModernStreamingSystem.Windows/releases/latest)
 [![Сборка](https://github.com/MikkiMays/ModernStreamingSystem.Windows/actions/workflows/desktop.yml/badge.svg)](https://github.com/MikkiMays/ModernStreamingSystem.Windows/actions/workflows/desktop.yml)
@@ -49,7 +49,7 @@ Cord — приложение для встреч, которое не прин�
 ## Скачать
 
 Установщик берётся со страницы **`/download` того сервера Cord, которым вы пользуетесь** — например,
-[cord.nikg.tech/download](https://cord.nikg.tech/download). Один файл `Cord-Setup-<версия>.exe`
+[cordcam.ru/download](https://cordcam.ru/download). Один файл `Cord-Setup-<версия>.exe`
 (NSIS, ~110 МБ): установка для текущего пользователя, без прав администратора; Chromium и нативный
 модуль `cord-native` уже внутри, ни WebView2, ни .NET не нужны. Windows 10 x64 и новее.
 

@@ -22,16 +22,20 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      # Сервер установки — переменная репозитория CORD_DEFAULT_SERVER (Settings → Variables), не код:
-      # клиент знает его как сервер по умолчанию, канал обновлений — его зеркало (или CORD_UPDATE_CHANNEL).
-      # Другая установка со своим сервером и ключом обновлений (cordcam.ru) собирается веткой deploy/<имя>:
-      # в ней файл build/installation с именем, а сервер и ключи — в build/installations/<имя>.json.
+      # Сервер сборки — продукт https://cordcam.ru/ из build/update-keys.json (`defaultServer`; R200, Р-110:
+      # продукт один, стенд разработки людям не отдаётся): клиент знает его как сервер по умолчанию, канал
+      # обновлений — его зеркало (или переменная репозитория CORD_UPDATE_CHANNEL). Дымовой прогон идёт
+      # НЕ на продукт, а на стенд разработки из переменной CORD_SMOKE_SERVER (пока её нет — CORD_DEFAULT_SERVER,
+      # как раньше); на сервер сборки эти переменные не влияют. Другая установка со своим сервером и ключом
+      # обновлений собирается веткой deploy/<имя>: в ней файл build/installation с именем, а сервер и ключи —
+      # в build/installations/<имя>.json.
       - name: Server of this installation
         shell: bash
         env:
-          SERVER: ${{ vars.CORD_DEFAULT_SERVER }}
+          SMOKE: ${{ vars.CORD_SMOKE_SERVER || vars.CORD_DEFAULT_SERVER }}
           CHANNEL: ${{ vars.CORD_UPDATE_CHANNEL }}
         run: |
+          SERVER=$(node -p "require('./build/update-keys.json').defaultServer ?? ''")
           if [ -f build/installation ]; then
             INSTALLATION=$(tr -d '[:space:]' < build/installation)
             if [ "$GITHUB_REF" = refs/heads/main ]; then
@@ -48,14 +52,20 @@ jobs:
             echo "Установка: $INSTALLATION"
           fi
           if [ -z "$SERVER" ]; then
-            echo "::error::Не задана переменная репозитория CORD_DEFAULT_SERVER (например https://meet.example.com/)"
+            echo "::error::Нет сервера сборки: build/update-keys.json без defaultServer"
             exit 1
           fi
           case "$SERVER" in */) ;; *) SERVER="$SERVER/" ;; esac
           [ -n "$CHANNEL" ] || CHANNEL="${SERVER}downloads/windows/desktop/"
+          if [ -z "$SMOKE" ]; then
+            echo "::error::Не задана переменная репозитория CORD_SMOKE_SERVER — стенд для дымового прогона (например https://dev.example.com/); на продукт CI не ходит"
+            exit 1
+          fi
+          case "$SMOKE" in */) ;; *) SMOKE="$SMOKE/" ;; esac
           echo "CORD_DEFAULT_SERVER=$SERVER" >> "$GITHUB_ENV"
           echo "CORD_UPDATE_CHANNEL=$CHANNEL" >> "$GITHUB_ENV"
-          echo "Сервер: $SERVER, канал обновлений: $CHANNEL"
+          echo "CORD_SMOKE_SERVER=$SMOKE" >> "$GITHUB_ENV"
+          echo "Сервер сборки: $SERVER, канал обновлений: $CHANNEL, стенд дымового прогона: $SMOKE"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
@@ -92,9 +102,9 @@ jobs:
         run: npm run build
       - name: Check the native module is in dist
         run: node scripts/build-native.mjs --check
-      - name: Smoke test (Playwright _electron against the installation's server; loads cord-native in the utility process; overlay, Go Live card and mini call window with the native fake)
+      - name: Smoke test (Playwright _electron against the development stand CORD_SMOKE_SERVER, never the product; loads cord-native in the utility process; overlay, Go Live card and mini call window with the native fake)
         env:
-          CORD_SMOKE_SERVER: ${{ env.CORD_DEFAULT_SERVER }}
+          CORD_SMOKE_SERVER: ${{ env.CORD_SMOKE_SERVER }}
         run: npm run test:e2e
       - name: Package NSIS installer
         env:

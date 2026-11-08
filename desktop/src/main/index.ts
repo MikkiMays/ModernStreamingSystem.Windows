@@ -34,7 +34,7 @@ import { NATIVE_MODULE_FILE, type BoostResult, type HostEvent, type NativeBindin
 import { decideMini, displayChange, miniActionRoute, MINI_DELAY_MS, MINI_WATCH, spareMini } from './mini-policy';
 import { decideOverlay } from './overlay-policy';
 import { showNotification } from './notifications';
-import { pickOrigin, ServerOrigin } from './origins';
+import { knownServers, pickOrigin, ServerOrigin } from './origins';
 import { installShellProtocol, registerShellScheme, SHELL_SCHEME } from './protocol';
 import { SettingsStore } from './settings';
 import { bootstrapShared, SharedPreferences } from './shared-preferences';
@@ -1124,10 +1124,9 @@ class Shell {
 
   // ----- серверы и каталог -----
 
-  /** Серверы, которые знает эта сборка: подписанный каталог, а без него — сервер из сборки. */
+  /** Серверы, которые знает эта сборка: подписанный каталог, а без него — сервер из сборки (`knownServers`). */
   private knownOrigins(): ServerOrigin[] {
-    const urls = this.catalog ? this.catalog.servers.map((server) => server.url) : [this.config.defaultServer];
-    return urls.map((url) => ServerOrigin.tryParse(url)).filter((origin): origin is ServerOrigin => origin !== null);
+    return knownServers(this.catalog ? this.catalog.servers.map((server) => server.url) : null, this.config.defaultServer, this.config.devServer);
   }
 
   /** Сервер встреч (`pickOrigin`); записи о серверах, которых сборка не знает, при смене убираются. */
