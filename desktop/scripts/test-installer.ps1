@@ -97,8 +97,28 @@ $languageValue = (Get-ItemProperty 'HKCU:\Software\Cord' -ErrorAction SilentlyCo
 if ("$languageValue" -notmatch '^(1049|1033|3082|1036|1040|2052|1031|1046)$') { throw "Язык установщика в HKCU: '$languageValue'" }
 Write-Host "Язык установщика в HKCU: $languageValue"
 
+# Сервер встреч установленного Cord — стенд дымового прогона, никогда не продукт (ревью R200 §8.6). desktop.yml кладёт
+# в окружение всех шагов CORD_DEFAULT_SERVER = сервер сборки (https://cordcam.ru/ — его берёт copy-shell), а Cord читает
+# эту переменную и установленным: холодные старты, минута покоя и запуск после обновления открывали бы продукт.
+if ("$env:CORD_SMOKE_SERVER".Trim()) {
+  $env:CORD_DEFAULT_SERVER = "$env:CORD_SMOKE_SERVER".Trim()
+} elseif ($env:GITHUB_ACTIONS -eq 'true') {
+  throw 'Не задан CORD_SMOKE_SERVER — стенд для запусков установленного Cord; на продукт CI не ходит'
+} else {
+  Write-Warning "CORD_SMOKE_SERVER не задан: установленный Cord откроет $(if ($env:CORD_DEFAULT_SERVER) { $env:CORD_DEFAULT_SERVER } else { 'сервер сборки' })"
+}
 # Запуск: заставка открывается, зеркало недоступно — Cord открывается сам и живёт хотя бы 10 с.
 $env:CORD_UPDATE_CHANNEL = 'https://127.0.0.1:9/downloads/windows/desktop/'
+# После установки и обновления (--force-run, кнопка «Запустить» мастера) Cord запускает сам установщик через оболочку —
+# StdUtils.ExecShellAsUser, то есть от имени Проводника и с его окружением, а не с окружением этого скрипта. Поэтому на
+# раннере (машина одноразовая) те же переменные ложатся и в окружение пользователя; .NET рассылает WM_SETTINGCHANGE, и
+# Проводник их перечитывает. На машине разработчика окружение пользователя не трогается.
+if ($env:GITHUB_ACTIONS -eq 'true') {
+  foreach ($name in 'CORD_DEFAULT_SERVER', 'CORD_UPDATE_CHANNEL') {
+    [Environment]::SetEnvironmentVariable($name, [Environment]::GetEnvironmentVariable($name), 'User')
+  }
+}
+Write-Host "Сервер встреч установленного Cord: $(if ($env:CORD_DEFAULT_SERVER) { $env:CORD_DEFAULT_SERVER } else { 'сервер сборки' })"
 $log = Join-Path $env:LOCALAPPDATA 'Cord\desktop\desktop.log'
 $installedBytes = (Get-ChildItem $target -Recurse -File | Measure-Object Length -Sum).Sum
 $starts = @()
