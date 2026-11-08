@@ -4,10 +4,11 @@
  * Страница — `cord-app://shell/splash.html`, preload `shell.js`: наружу только `state` и две
  * кнопки, «Повторить» и «Открыть Cord».
  */
-import { BrowserWindow, ipcMain, type Display, type IpcMainEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, screen, type Display, type IpcMainEvent } from 'electron';
 import { join } from 'node:path';
 import { IPC } from '../../shared/bridge';
-import { shellUrl } from '../protocol';
+import { shellRoot, shellUrl } from '../protocol';
+import { releaseHolder, startHolder } from '../update/holder';
 import { runSplash, type SplashResult, type SplashState, type UpdateSteps } from '../update/splash-flow';
 
 export type SplashChoice = 'retry' | 'open';
@@ -44,7 +45,11 @@ export class SplashWindow {
       },
     });
     this.window.setMenuBarVisibility(false);
-    this.window.once('ready-to-show', () => this.window.show());
+    this.window.once('ready-to-show', () => {
+      this.window.show();
+      // Обновление ставилось при прошлом запуске: держатель на месте заставки уходит, как только встала эта (R203).
+      releaseHolder(app.getPath('userData'));
+    });
     void this.window.loadURL(shellUrl('splash'));
   }
 
@@ -80,7 +85,23 @@ export class SplashWindow {
    * Весь путь заставки: шаги обновления, при сбое — вопрос человеку, «Повторить» идёт по кругу.
    * Возвращает итог; null — заставку закрыли, приложению пора выйти.
    */
-  async run(steps: UpdateSteps): Promise<SplashResult | null> {
+  async run(updater: UpdateSteps): Promise<SplashResult | null> {
+    // Установка закрывает Cord вместе с заставкой: на её место встаёт держатель с той же картинкой (R203).
+    const steps: UpdateSteps = {
+      takeInstallFailure: () => updater.takeInstallFailure(),
+      check: (budget, signal) => updater.check(budget, signal),
+      download: (progress, signal) => updater.download(progress, signal),
+      discardPackage: () => updater.discardPackage(),
+      apply: async () => {
+        this.holdScreen();
+        try {
+          await updater.apply();
+        } catch (error) {
+          releaseHolder(app.getPath('userData'));
+          throw error;
+        }
+      },
+    };
     const controller = new AbortController();
     const onClosed = () => controller.abort();
     this.window.once('closed', onClosed);
@@ -99,6 +120,12 @@ export class SplashWindow {
     } finally {
       this.window.off('closed', onClosed);
     }
+  }
+
+  private holdScreen(): void {
+    if (this.window.isDestroyed()) return;
+    const bounds = process.platform === 'win32' ? screen.dipToScreenRect(this.window, this.window.getBounds()) : this.window.getBounds();
+    startHolder(bounds, 'Устанавливаем…', { shellDir: shellRoot(), dataDir: app.getPath('userData'), log: (line) => console.warn(line) });
   }
 
   close(): void {

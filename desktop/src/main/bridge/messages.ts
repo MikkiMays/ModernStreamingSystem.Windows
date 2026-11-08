@@ -113,6 +113,7 @@ export type Validated =
   | { type: 'favorites.changed' }
   | { type: 'preferences.changed'; showPing?: boolean; notificationSounds?: boolean; shared?: SharedEntries; seed?: true }
   | { type: 'close.ready' }
+  | { type: 'app.ready' }
   | { type: 'update.check' }
   | { type: 'update.apply' }
   | { type: 'overlay.state'; participants: { name: string; tier: number; speaking: boolean }[] }
@@ -334,6 +335,7 @@ export function readPageMessage(type: unknown, payload: unknown): Validated | nu
     }
     case 'favorites.changed':
     case 'close.ready':
+    case 'app.ready':
     case 'update.check':
     case 'update.apply':
     case 'attention':

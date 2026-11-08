@@ -15,6 +15,8 @@ const required = [
   'shell/tray.ico',
   'shell/icon-256.png',
   'shell/splash.html',
+  'shell/update-holder.ps1',
+  'shell/update-holder.gif',
   'shell/loading.html',
   'shell/offline.html',
   'shell/overlay.html',

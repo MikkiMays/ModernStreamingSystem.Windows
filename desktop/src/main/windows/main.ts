@@ -128,7 +128,20 @@ export class MainWindow {
   readonly window: BrowserWindow;
   private closing = false;
 
-  constructor(preloadDir: string, private readonly host: MainWindowHost, saved: Settings['window'], theme: Settings['theme'], start: StartMode = 'show') {
+  /** Первый кадр окна готов (`ready-to-show`). */
+  private painted = false;
+  /** Окно ждёт `reveal()` (R203): заставка держится, пока интерфейс не нарисован. */
+  private revealed: boolean;
+
+  constructor(
+    preloadDir: string,
+    private readonly host: MainWindowHost,
+    saved: Settings['window'],
+    theme: Settings['theme'],
+    private readonly start: StartMode = 'show',
+    holdUntilReveal = false,
+  ) {
+    this.revealed = !holdUntilReveal;
     nativeTheme.themeSource = theme;
     const dark = nativeTheme.shouldUseDarkColors;
     this.window = new BrowserWindow({
@@ -202,9 +215,25 @@ export class MainWindow {
     // Запуск вместе с Windows: в трей (hide) или свёрнутым в панель задач (minimize), без фокуса —
     // человек не просил окно прямо сейчас.
     this.window.once('ready-to-show', () => {
-      if (start === 'show') this.window.show();
-      else if (start === 'minimize') this.window.minimize();
+      this.painted = true;
+      if (this.revealed) this.applyStart();
     });
+  }
+
+  /**
+   * Показать окно, которое ждало (R203): интерфейс нарисован или ждать дольше нельзя. Режим запуска (в трей,
+   * свёрнутым) — тот же, что без ожидания. Первый кадр ещё не готов — окно покажется по `ready-to-show`.
+   */
+  reveal(): void {
+    if (this.revealed) return;
+    this.revealed = true;
+    if (this.painted) this.applyStart();
+  }
+
+  private applyStart(): void {
+    if (this.window.isDestroyed()) return;
+    if (this.start === 'show') this.window.show();
+    else if (this.start === 'minimize') this.window.minimize();
   }
 
   state(): WindowState {

@@ -20,7 +20,8 @@ export interface UpdateCheck {
   version?: string;
 }
 
-export type SplashStage = 'checking' | 'downloading' | 'installing' | 'failed';
+/** `starting` — всё проверено и поставлено, окно Cord грузит интерфейс; заставка держится до его первого кадра (R203). */
+export type SplashStage = 'checking' | 'downloading' | 'installing' | 'starting' | 'failed';
 export interface SplashState {
   stage: SplashStage;
   /** Доля скачанного, от 0 до 1. */
@@ -71,6 +72,8 @@ export function splashText(state: SplashState): string {
       return `Загружаем обновление… ${percent(state.progress)}%`;
     case 'installing':
       return 'Устанавливаем…';
+    case 'starting':
+      return 'Запускаем Cord…';
     default:
       return state.problem;
   }

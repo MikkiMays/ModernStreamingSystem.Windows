@@ -47,6 +47,9 @@ import { MiniWindow } from './windows/mini';
 import { displayFor, OverlayWindow, type OverlayConfig } from './windows/overlay';
 import { SplashWindow } from './windows/splash';
 
+/** Сколько заставка ждёт первого кадра интерфейса после загрузки страницы (R203). */
+const APP_READY_LIMIT_MS = 15_000;
+
 // ---------- пути и один экземпляр ----------
 
 if (process.platform === 'win32' && process.env.LOCALAPPDATA) app.setPath('userData', join(process.env.LOCALAPPDATA, 'Cord', 'desktop'));
@@ -326,8 +329,35 @@ class Shell {
       return;
     }
     this.scheduleCheck(result.verdict);
-    await this.openMain();
+    // Процентов дальше нет: заставка держит живой знак и «Запускаем Cord…», пока интерфейс не нарисует
+    // первый кадр, и уступает окну в тот же миг (R203). Раньше она закрывалась на событии `load` страницы,
+    // а интерфейс ещё секунды грузил сессию и данные — человек видел пустое окно загрузки.
+    splash.show({ stage: 'starting', progress: 1, problem: '' });
+    const opened = await this.openMain(true);
+    if (opened) await this.untilAppReady(APP_READY_LIMIT_MS);
+    this.main?.reveal();
     splash.close();
+  }
+
+  /** Интерфейс сказал `app.ready` в этом документе (R203). */
+  private appReadySeen = false;
+  private appReadyWaiter: (() => void) | null = null;
+
+  /** Дождаться первого кадра интерфейса, но не дольше `limitMs`: старт важнее, окно покажет свою загрузку. */
+  private untilAppReady(limitMs: number): Promise<void> {
+    if (this.appReadySeen || !this.main) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        this.appReadyWaiter = null;
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        log(`интерфейс не сказал app.ready за ${limitMs} мс — окно показано без него`);
+        done();
+      }, limitMs);
+      this.appReadyWaiter = done;
+    });
   }
 
   /**
@@ -343,11 +373,12 @@ class Shell {
     }
   }
 
-  private async openMain(): Promise<void> {
+  /** Открыть главное окно. `hold` — не показывать его до `reveal()` (R203). Возвращает, открылся ли сервер. */
+  private async openMain(hold = false): Promise<boolean> {
     const saved = this.settings.get();
     // Трей — до окна: от него зависит, куда уходит окно при `--hidden` и по крестику (R57).
     if (saved.tray) this.installTray();
-    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, startMode({ hiddenFlag: this.hiddenFlag, tray: this.taskbar.hasTray }));
+    const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, startMode({ hiddenFlag: this.hiddenFlag, tray: this.taskbar.hasTray }), hold);
     this.hiddenFlag = false;
     this.main = main;
     // Кнопок на миниатюре и значка поверх иконки больше нет (R138) — у окна их не должно остаться.
@@ -357,6 +388,8 @@ class Shell {
       if (!details.isMainFrame) return;
       this.stopCaptureAudio(false);
       if (details.isSameDocument) return;
+      // Новый документ скажет о своём первом кадре сам.
+      this.appReadySeen = false;
       // Состав и мини-окно новый документ пришлёт сам — если умеет (R63, R93).
       this.rosterSeen = false;
       this.miniState = null;
@@ -373,12 +406,13 @@ class Shell {
     await this.native.whenReady(3000);
     await this.router.prepareBootstrap(origin);
     this.router.attach(main.window.webContents, origin);
-    await main.open(origin);
+    const opened = await main.open(origin);
     if (this.pendingLink) {
       const link = this.pendingLink;
       this.pendingLink = null;
       this.handleDeepLink(link);
     }
+    return opened;
   }
 
   private readonly windowHost = {
@@ -1268,6 +1302,10 @@ class Shell {
         return;
       case 'close.ready':
         return; // обрабатывается в requestClose
+      case 'app.ready':
+        this.appReadySeen = true;
+        this.appReadyWaiter?.();
+        return;
       case 'update.check':
         void this.backgroundCheck(true);
         return;

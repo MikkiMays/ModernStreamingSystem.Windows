@@ -76,6 +76,7 @@ export const PAGE_MESSAGES = [
   'overlay.roster', // {participants: [{id, name, avatar, muted}]} — кто в звонке для виджета в игре и мини-окна (R63, R93), ≤ 128 КиБ
   'mini.state', // {room, mic, camera, screen, unread, count, self, status, remaining, seq?, deafened?} — что показывать в мини-окне звонка (R93, R137); deafened — «звук встречи» выключен (R156)
   'mini.ack', // {seq, result: 'ok' | 'ignored', reason?} — встреча исполнила нажатие мини-окна или нет (R137)
+  'app.ready', // без данных — интерфейс нарисовал первый кадр: заставка уступает окно (R203)
 ] as const;
 export type PageMessage = (typeof PAGE_MESSAGES)[number];
 

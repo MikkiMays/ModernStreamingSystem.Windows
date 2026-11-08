@@ -1,4 +1,4 @@
-// Заставка: одна строка и полоса; кнопки — только при сбое.
+// Заставка: живой знак Cord, одна строка, полоса — только при загрузке обновления; кнопки — только при сбое.
 (() => {
   const status = document.getElementById('status');
   const bar = document.getElementById('bar');
@@ -9,6 +9,7 @@
       case 'checking': return 'Проверяем обновления…';
       case 'downloading': return `Загружаем обновление… ${Math.min(100, Math.max(0, Math.floor(state.progress * 100)))}%`;
       case 'installing': return 'Устанавливаем…';
+      case 'starting': return 'Запускаем Cord…';
       default: return state.problem || 'Не удалось обновить Cord.';
     }
   };
@@ -17,7 +18,8 @@
     const failed = state.stage === 'failed';
     choice.classList.toggle('hidden', !failed);
     bar.classList.toggle('hidden', failed);
-    bar.classList.toggle('busy', state.stage !== 'downloading');
+    // Полоса — только у загрузки: дальше процентов нет, и живым остаётся только знак (R203).
+    bar.classList.toggle('off', state.stage !== 'downloading');
     if (state.stage === 'downloading') fill.style.width = `${Math.floor(state.progress * 100)}%`;
     if (failed) document.getElementById('retry').focus();
   });

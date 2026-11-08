@@ -85,6 +85,8 @@ describe('runSplash — порядок шагов заставки', () => {
   it('текст заставки без номера версии', () => {
     expect(splashText({ stage: 'downloading', progress: 0.999, problem: '' })).toBe('Загружаем обновление… 99%');
     expect(splashText({ stage: 'failed', progress: 0, problem: 'Причина' })).toBe('Причина');
+    // После процентов — только живой знак и строка, до окна Cord (R203).
+    expect(splashText({ stage: 'starting', progress: 1, problem: '' })).toBe('Запускаем Cord…');
   });
 });
 
