@@ -127,6 +127,8 @@ function openExternal(url: string, host: Pick<MainWindowHost, 'log'>): void {
 export class MainWindow {
   readonly window: BrowserWindow;
   private closing = false;
+  /** Номер последнего `open`: прерванная им прежняя загрузка не показывает «нет связи». */
+  private opens = 0;
 
   /** Первый кадр окна готов (`ready-to-show`). */
   private painted = false;
@@ -259,14 +261,20 @@ export class MainWindow {
     await this.window.loadURL(shellUrl('offline') + '?server=' + encodeURIComponent(origin.url));
   }
 
-  /** Перейти на сервер. Ошибка загрузки — страница «нет связи». */
+  /**
+   * Перейти на сервер. Ошибка загрузки — страница «нет связи». Загрузку прервал следующий `open` (каталог
+   * увёл на другой сервер) — «нет связи» не показывается поверх нового сервера.
+   */
   async open(origin: ServerOrigin): Promise<boolean> {
+    const attempt = ++this.opens;
     try {
       await this.window.loadURL(origin.url);
       return true;
     } catch (error) {
+      if (attempt !== this.opens || this.window.isDestroyed()) return false;
       this.host.log(`сервер ${origin.url} не загрузился: ${(error as Error).message}`);
-      await this.showOffline(origin);
+      // И страницу «нет связи» может прервать следующий `open` — это не ошибка запуска.
+      await this.showOffline(origin).catch(() => {});
       return false;
     }
   }

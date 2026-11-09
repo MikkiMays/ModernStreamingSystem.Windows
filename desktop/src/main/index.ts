@@ -237,6 +237,10 @@ class Shell {
     log,
   });
   private main: MainWindow | null = null;
+  /** Сервер, который открыт (или не открылся) в главном окне, — `followCatalog` сверяет его с каталогом. */
+  private shown: ServerOrigin | null = null;
+  /** Последнее открытие сервера в главном окне (`openOrigin`). */
+  private opening: Promise<boolean> | null = null;
   private splash: SplashWindow | null = null;
   private catalog: Catalog | null = null;
   private page: string | null = null;
@@ -389,6 +393,9 @@ class Shell {
     const main = new MainWindow(this.preloadDir, this.windowHost, saved.window, saved.theme, startMode({ hiddenFlag: this.hiddenFlag, tray: this.taskbar.hasTray }), hold);
     this.hiddenFlag = false;
     this.main = main;
+    // Новое окно (и после перезапуска в заставку) — сервера в нём ещё нет: `followCatalog` ждёт `openOrigin`.
+    this.shown = null;
+    this.opening = null;
     // Кнопок на миниатюре и значка поверх иконки больше нет (R138) — у окна их не должно остаться.
     this.taskbar.clear(main.window);
     main.window.webContents.on('did-start-navigation', (details) => {
@@ -409,12 +416,10 @@ class Shell {
       this.pairLevels('mini', this.mini.contents);
     });
     await main.showLoading();
-    const origin = this.currentOrigin();
-    // Флаги моста зависят от модуля: ждём его ответ, но не дольше 3 с — старт важнее.
+    // Флаги моста зависят от модуля: ждём его ответ, но не дольше 3 с — старт важнее. Сервер — после
+    // ожидания: свежий каталог, пришедший за это время, уже учтён.
     await this.native.whenReady(3000);
-    await this.router.prepareBootstrap(origin);
-    this.router.attach(main.window.webContents, origin);
-    const opened = await main.open(origin);
+    const opened = await this.settleOpen(this.openOrigin(main, this.currentOrigin()));
     if (this.pendingLink) {
       const link = this.pendingLink;
       this.pendingLink = null;
@@ -1217,6 +1222,54 @@ class Shell {
       log(`каталог: не сохранён — ${(error as Error).message}`);
     }
     log(`каталог: из сети, seq ${fresh.catalog.seq}`);
+    this.followCatalog();
+  }
+
+  /**
+   * Свежий каталог убрал сервер, который открыт в окне (сервер прежней сборки — `cord.nikg.tech` у клиентов
+   * до 1.2.3): окно сразу переходит на сервер каталога, а не со следующим запуском. Иначе Cord стоит на «нет
+   * связи», а крестик лишь прячет его в трей — «открыть» снова показывает то же окно. Звонок и экран перед
+   * входом не прерываются: переход — со следующим запуском.
+   */
+  private followCatalog(): void {
+    const main = this.main;
+    const shown = this.shown;
+    if (!main || main.window.isDestroyed() || !shown) return;
+    if (this.knownOrigins().some((known) => known.equals(shown)) || !canInterrupt(this.call.inCall, this.page)) return;
+    const origin = this.currentOrigin();
+    if (origin.equals(shown)) return;
+    log(`каталог: сервера ${shown.url} больше нет — окно переходит на ${origin.url}`);
+    void this.openOrigin(main, origin);
+  }
+
+  /**
+   * Открыть сервер в главном окне: мост — этому origin, сервер окна запоминается до загрузки. Пока готовился
+   * мост, окно увели на другой сервер (`followCatalog`) — этот вызов уступает.
+   */
+  private openOrigin(main: MainWindow, origin: ServerOrigin): Promise<boolean> {
+    this.shown = origin;
+    const opening = (async () => {
+      await this.router.prepareBootstrap(origin);
+      if (this.shown !== origin || main.window.isDestroyed()) return false;
+      this.router.attach(main.window.webContents, origin);
+      return main.open(origin);
+    })();
+    this.opening = opening;
+    return opening;
+  }
+
+  /**
+   * Итог открытия с учётом переходов поверх него: открытие уступило `followCatalog` — ждём то, что его сменило.
+   * Так заставка ждёт первый кадр нового сервера, а ссылка `cord://` запуска уходит его странице.
+   */
+  private async settleOpen(first: Promise<boolean>): Promise<boolean> {
+    let current = first;
+    let opened = await current;
+    while (this.opening && this.opening !== current) {
+      current = this.opening;
+      opened = await current;
+    }
+    return opened;
   }
 
   // ----- мост -----
@@ -1446,6 +1499,8 @@ class Shell {
     this.updateMini();
     if (next.screen !== was.screen && this.miniState) this.mini.send('mini.state', { ...this.miniState, screen: next.screen });
     if (was.inCall && !next.inCall && this.pendingSplash) void this.restartIntoSplash();
+    // Каталог убрал сервер, пока шёл звонок (`followCatalog` его не прерывал), — переход после звонка.
+    else if (was.inCall && !next.inCall) this.followCatalog();
   }
 
   /**
@@ -1628,13 +1683,8 @@ class Shell {
       if (!event.senderFrame?.url.startsWith(`${SHELL_SCHEME}://`)) throw new Error('Недоступно.');
       const data = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
       switch (method) {
-        case 'offline.retry': {
-          if (!this.main) return false;
-          const origin = this.currentOrigin();
-          await this.router.prepareBootstrap(origin);
-          this.router.attach(this.main.window.webContents, origin);
-          return this.main.open(origin);
-        }
+        case 'offline.retry':
+          return this.main ? this.openOrigin(this.main, this.currentOrigin()) : false;
         case 'shell.features':
           return { features: this.features(), version: app.getVersion() };
         // Окно оверлея: смещение перетащенного виджета, «Показать игру» и крестик карточки (R63, R104).
