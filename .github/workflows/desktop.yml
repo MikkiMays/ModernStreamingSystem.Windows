@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      # Сервер сборки — продукт https://cordcam.ru/ из build/update-keys.json (`defaultServer`; R200, Р-110:
+      # Сервер сборки — продукт https://cord.online/ из build/update-keys.json (`defaultServer`; R200, Р-110:
       # продукт один, стенд разработки людям не отдаётся): клиент знает его как сервер по умолчанию, канал
       # обновлений — его зеркало (или переменная репозитория CORD_UPDATE_CHANNEL). Дымовой прогон идёт
       # НЕ на продукт, а на стенд разработки из переменной CORD_SMOKE_SERVER (пока её нет — CORD_DEFAULT_SERVER,

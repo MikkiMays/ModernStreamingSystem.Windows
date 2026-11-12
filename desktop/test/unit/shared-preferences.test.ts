@@ -35,7 +35,7 @@ afterEach(() => {
 
 const TOKEN = 'y0_AgAAAAB1secret-token';
 const cord = ServerOrigin.parse('https://cord.nikg.tech');
-const cam = ServerOrigin.parse('https://cordcam.ru');
+const cam = ServerOrigin.parse('https://cord.online');
 const stranger = ServerOrigin.parse('https://evil.example');
 
 describe('SharedPreferences — общее хранилище (R146)', () => {

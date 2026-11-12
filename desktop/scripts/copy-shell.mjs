@@ -1,6 +1,6 @@
 // Копирует локальные страницы оболочки (`cord-app://shell/…`) в dist рядом с main и preload и пишет то,
 // что связывает сборку с конкретной установкой Cord. Сервер по умолчанию — продукт из
-// `build/update-keys.json` (`defaultServer`, https://cordcam.ru/ — R200, Р-110: продукт один, стенд
+// `build/update-keys.json` (`defaultServer`, https://cord.online/ — R200, Р-110: продукт один, стенд
 // разработки людям не отдаётся); переменная сборки CORD_DEFAULT_SERVER перекрывает его (другая установка,
 // ветка deploy/<имя>, — через workflow из build/installations/<имя>.json). Канал обновлений —
 // CORD_UPDATE_CHANNEL или `<сервер>downloads/windows/desktop/`. Снимок каталога серверов для первого
@@ -51,7 +51,7 @@ writeFileSync(join(root, 'dist', 'update-keys.json'), `${JSON.stringify(keys, nu
 // продукта в репе): из годных — с бо́льшим seq. Годный — тот, что примет клиент (`verifyCatalog`): подпись EdDSA
 // ключом из `build/catalog-keys.json` над `protected.payload` и срок `expiresAt` не прошёл. Без снимка клиент,
 // обновлённый с прошлой сборки, верит её сохранённому каталогу и открывает её сервер — так 1.2.3 открывал убранный
-// cord.nikg.tech (CI тогда не достучался до cordcam.ru). Поэтому сборка продукта в CI без годного снимка не выходит.
+// cord.nikg.tech (CI тогда не достучался до cord.online). Поэтому сборка продукта в CI без годного снимка не выходит.
 const catalogKeys = JSON.parse(readFileSync(join(root, 'build', 'catalog-keys.json'), 'utf8')).keys.map((jwk) => createPublicKey({ key: jwk, format: 'jwk' }));
 /** seq снимка, который примет клиент; иначе −1. */
 const seqOf = (jws) => {

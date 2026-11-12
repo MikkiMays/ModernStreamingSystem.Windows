@@ -2,7 +2,7 @@
 # Ссылок нет намеренно: ни `repository`/`homepage` в package.json (иначе electron-builder впишет их в
 # карточку «Установленных приложений»), ни uninstallUrl*. Канал обновлений — только зеркало Cord
 # (`publish: generic`): адрес — переменная сборки CORD_UPDATE_CHANNEL (CI выводит её из сервера сборки —
-# `defaultServer` в build/update-keys.json, продукт https://cordcam.ru/).
+# `defaultServer` в build/update-keys.json, продукт https://cord.online/).
 appId: tech.cord.desktop
 productName: Cord
 copyright: © Cord

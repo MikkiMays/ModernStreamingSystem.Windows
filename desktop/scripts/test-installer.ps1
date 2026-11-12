@@ -98,7 +98,7 @@ if ("$languageValue" -notmatch '^(1049|1033|3082|1036|1040|2052|1031|1046)$') { 
 Write-Host "Язык установщика в HKCU: $languageValue"
 
 # Сервер встреч установленного Cord — стенд дымового прогона, никогда не продукт (ревью R200 §8.6). desktop.yml кладёт
-# в окружение всех шагов CORD_DEFAULT_SERVER = сервер сборки (https://cordcam.ru/ — его берёт copy-shell), а Cord читает
+# в окружение всех шагов CORD_DEFAULT_SERVER = сервер сборки (https://cord.online/ — его берёт copy-shell), а Cord читает
 # эту переменную и установленным: холодные старты, минута покоя и запуск после обновления открывали бы продукт.
 if ("$env:CORD_SMOKE_SERVER".Trim()) {
   $env:CORD_DEFAULT_SERVER = "$env:CORD_SMOKE_SERVER".Trim()

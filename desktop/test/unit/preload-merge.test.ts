@@ -45,7 +45,7 @@ describe('mergeBootstrap — preload страницы сервера', () => {
     const storage = new Memory();
     storage.setItem('cord:preferences:v1', JSON.stringify({ outputVolume: 20, layout: 'grid', watchVolume: 33, devices: { microphone: 'local-id' } }));
     storage.setItem('cord:name', 'Старое имя');
-    mergeBootstrap(storage, { ...base, shared: { outputVolume: 80, layout: 'speaker', name: 'Ника', pokerHints: true, language: 'de' } }, 'https://cordcam.ru');
+    mergeBootstrap(storage, { ...base, shared: { outputVolume: 80, layout: 'speaker', name: 'Ника', pokerHints: true, language: 'de' } }, 'https://cord.online');
     expect(storage.json('cord:preferences:v1')).toEqual({
       outputVolume: 80,
       layout: 'speaker',
@@ -63,18 +63,18 @@ describe('mergeBootstrap — preload страницы сервера', () => {
   it('устройства не переносятся: названия в общем, свой deviceId у origin не трогается и чужой не появляется', () => {
     const storage = new Memory();
     storage.setItem('cord:preferences:v1', JSON.stringify({ devices: { camera: 'cam-id-of-this-origin' } }));
-    mergeBootstrap(storage, { ...base, shared: { devices: { camera: 'HD Webcam', microphone: 'USB Mic' } } }, 'https://cordcam.ru');
+    mergeBootstrap(storage, { ...base, shared: { devices: { camera: 'HD Webcam', microphone: 'USB Mic' } } }, 'https://cord.online');
     expect(storage.json('cord:preferences:v1').devices).toEqual({ camera: 'cam-id-of-this-origin' });
   });
 
   it('токен Яндекс Музыки (R157): строка — кладётся (и пустая — «отключён»), null — свой у origin остаётся', () => {
     const storage = new Memory();
     storage.setItem('cord:preferences:v1', JSON.stringify({ yandexMusicToken: 'local' }));
-    mergeBootstrap(storage, base, 'https://cordcam.ru');
+    mergeBootstrap(storage, base, 'https://cord.online');
     expect(storage.json('cord:preferences:v1').yandexMusicToken).toBe('local');
-    mergeBootstrap(storage, { ...base, yandexMusicToken: 'y0_shared' }, 'https://cordcam.ru');
+    mergeBootstrap(storage, { ...base, yandexMusicToken: 'y0_shared' }, 'https://cord.online');
     expect(storage.json('cord:preferences:v1').yandexMusicToken).toBe('y0_shared');
-    mergeBootstrap(storage, { ...base, yandexMusicToken: '' }, 'https://cordcam.ru');
+    mergeBootstrap(storage, { ...base, yandexMusicToken: '' }, 'https://cord.online');
     expect(storage.json('cord:preferences:v1').yandexMusicToken).toBe('');
   });
 
@@ -84,7 +84,7 @@ describe('mergeBootstrap — preload страницы сервера', () => {
     expect(fresh.json('cord:preferences:v1').language).toBe('fr');
     // Человек на другом сервере выбрал «как в системе» (null) — это выбор, установщик его не перебивает.
     const chosen = new Memory();
-    mergeBootstrap(chosen, { ...base, language: 'fr', shared: { language: null } }, 'https://cordcam.ru');
+    mergeBootstrap(chosen, { ...base, language: 'fr', shared: { language: null } }, 'https://cord.online');
     expect(chosen.json('cord:preferences:v1').language).toBeNull();
     expect(chosen.getItem('cord:installer-language')).toBe('fr');
   });

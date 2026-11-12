@@ -27,7 +27,7 @@ describe('pickOrigin', () => {
 });
 
 describe('knownServers — сервер окружения известен и без каталога (R200 §8.6)', () => {
-  const product = 'https://cordcam.ru/';
+  const product = 'https://cord.online/';
   const stand = 'https://cord.nikg.tech/';
   it('без каталога — только сервер сборки', () => {
     expect(knownServers(null, product, false).map((o) => o.url)).toEqual([product]);

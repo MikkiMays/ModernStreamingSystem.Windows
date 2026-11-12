@@ -1,6 +1,6 @@
 {
-  "_comment": "Публичные ключи Ed25519 [текущий, следующий] для подписи latest.yml (ADR 0001 §5). Закрытый ключ — только у владельца (секрет CI CORD_UPDATE_SIGN_KEY). defaultServer — адрес продукта: с R200 (Р-110) он один, https://cordcam.ru/, и живёт здесь, а не в переменной репозитория; канал обновлений — <сервер>downloads/windows/desktop/ или CORD_UPDATE_CHANNEL (scripts/copy-shell.mjs → dist/update-keys.json). Переменная окружения CORD_DEFAULT_SERVER перекрывает адрес только при запуске из исходников и в дымовом прогоне CI (стенд разработки); другая установка — ветка deploy/<имя> с build/installations/<имя>.json.",
-  "defaultServer": "https://cordcam.ru/",
+  "_comment": "Публичные ключи Ed25519 [текущий, следующий] для подписи latest.yml (ADR 0001 §5). Закрытый ключ — только у владельца (секрет CI CORD_UPDATE_SIGN_KEY). defaultServer — адрес продукта: с R200 (Р-110) он один, https://cord.online/, и живёт здесь, а не в переменной репозитория; канал обновлений — <сервер>downloads/windows/desktop/ или CORD_UPDATE_CHANNEL (scripts/copy-shell.mjs → dist/update-keys.json). Переменная окружения CORD_DEFAULT_SERVER перекрывает адрес только при запуске из исходников и в дымовом прогоне CI (стенд разработки); другая установка — ветка deploy/<имя> с build/installations/<имя>.json.",
+  "defaultServer": "https://cord.online/",
   "keys": [
     "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAuCWUDwTotcQYs61qhLVagiJbnVa3UBcqKxEbQiCGSCI=\n-----END PUBLIC KEY-----\n"
   ]

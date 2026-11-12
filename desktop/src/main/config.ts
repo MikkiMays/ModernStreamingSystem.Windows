@@ -3,7 +3,7 @@
  * НЕ следует за выбранным сервером встреч (правило `CordDefaults.cs`): вход в чужую комнату
  * не должен решать, какой исполняемый файл поставится на эту машину.
  *
- * Сервер по умолчанию — продукт `https://cordcam.ru/` из `build/update-keys.json` (R200, Р-110: продукт
+ * Сервер по умолчанию — продукт `https://cord.online/` из `build/update-keys.json` (R200, Р-110: продукт
  * один); канал обновлений — `<сервер>downloads/windows/desktop/` или `CORD_UPDATE_CHANNEL`
  * (`scripts/copy-shell.mjs` пишет оба в `dist/update-keys.json`). При запуске из исходников и в дымовом
  * прогоне CI переменные окружения `CORD_DEFAULT_SERVER` и `CORD_UPDATE_CHANNEL` перекрывают файл: так

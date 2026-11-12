@@ -17,7 +17,7 @@ describe('APP_ID — один идентификатор приложения д
   });
 });
 
-describe('сервер сборки — продукт cordcam.ru из build/update-keys.json (R200 §8.6, Р-110)', () => {
+describe('сервер сборки — продукт cord.online из build/update-keys.json (R200 §8.6, Р-110)', () => {
   const build = JSON.parse(readFileSync(join(__dirname, '..', '..', 'build', 'update-keys.json'), 'utf8')) as { defaultServer?: unknown; keys?: unknown };
   const saved = { server: process.env.CORD_DEFAULT_SERVER, channel: process.env.CORD_UPDATE_CHANNEL };
   const dirs: string[] = [];
@@ -40,7 +40,7 @@ describe('сервер сборки — продукт cordcam.ru из build/upd
   }
 
   it('в репозитории записан продукт, а не стенд разработки', () => {
-    expect(build.defaultServer).toBe('https://cordcam.ru/');
+    expect(build.defaultServer).toBe('https://cord.online/');
     expect(Array.isArray(build.keys) && build.keys.length > 0).toBe(true);
   });
 
@@ -49,8 +49,8 @@ describe('сервер сборки — продукт cordcam.ru из build/upd
     delete process.env.CORD_UPDATE_CHANNEL;
     resetBuildConfigForTests();
     const config = buildConfig(appPath());
-    expect(config.defaultServer).toBe('https://cordcam.ru/');
-    expect(config.updateChannel).toBe('https://cordcam.ru/downloads/windows/desktop/');
+    expect(config.defaultServer).toBe('https://cord.online/');
+    expect(config.updateChannel).toBe('https://cord.online/downloads/windows/desktop/');
     expect(config.devServer).toBe(false);
   });
 
@@ -62,6 +62,6 @@ describe('сервер сборки — продукт cordcam.ru из build/upd
     expect(config.defaultServer).toBe('https://cord.nikg.tech/');
     expect(config.devServer).toBe(true);
     // Канал из файла сборки остаётся: обновления не следуют за сервером встреч (правило CordDefaults.cs).
-    expect(config.updateChannel).toBe('https://cordcam.ru/downloads/windows/desktop/');
+    expect(config.updateChannel).toBe('https://cord.online/downloads/windows/desktop/');
   });
 });
